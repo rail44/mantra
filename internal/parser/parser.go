@@ -126,7 +126,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 	for _, commentGroup := range node.Comments {
 		var glyphInstruction strings.Builder
 		foundGlyph := false
-		
+
 		for _, comment := range commentGroup.List {
 			text := strings.TrimSpace(comment.Text)
 			if strings.HasPrefix(text, "// glyph:") {
@@ -142,7 +142,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 				}
 			}
 		}
-		
+
 		if foundGlyph {
 			// Store comment with its end position
 			glyphComments[commentGroup.End()] = glyphInstruction.String()
@@ -267,7 +267,6 @@ func containsNotImplementedPanic(body *ast.BlockStmt) bool {
 
 	return found
 }
-
 
 // GetFunctionSignature returns a string representation of the function signature
 func (t *Target) GetFunctionSignature() string {

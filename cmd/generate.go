@@ -17,10 +17,10 @@ import (
 )
 
 var (
-	debugTiming  bool
-	noStream     bool
-	outputDir    string
-	packageName  string
+	debugTiming bool
+	noStream    bool
+	outputDir   string
+	packageName string
 )
 
 var generateCmd = &cobra.Command{
@@ -92,7 +92,6 @@ func runGeneration(filePath string) error {
 		Model: GetModel(),
 		Host:  GetHost(),
 	}
-
 	fmt.Printf("Creating AI client (model: %s)...\n", config.Model)
 	aiClient, err := ai.NewClient(config)
 	if err != nil {
@@ -142,12 +141,8 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 		return fmt.Errorf("failed to parse file info: %w", err)
 	}
 
-	// Update generator config with source package
-	if gen != nil {
-		// Get the config from generator and update source package
-		// This is a bit hacky, but we need to set the source package after we know it
-		fmt.Printf("Source package: %s\n", fileInfo.PackageName)
-	}
+	// Log source package information
+	fmt.Printf("Source package: %s\n", fileInfo.PackageName)
 
 	if len(targets) == 0 {
 		fmt.Println("No generation targets found (functions with // glyph comments)")
@@ -256,9 +251,7 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 	fmt.Printf("\nGenerating output file...")
 	generateStart := time.Now()
 
-	// Update source package in generator config
-	// This is a workaround since we can't easily modify the config after creation
-	// In a real implementation, we'd restructure this
+	// Create new generator with correct source package
 	genConfig := &generator.Config{
 		OutputDir:     outputDir,
 		PackageName:   packageName,

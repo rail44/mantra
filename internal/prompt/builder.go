@@ -8,9 +8,10 @@ import (
 	"github.com/rail44/glyph/internal/parser"
 )
 
-type Builder struct {
-}
+// Builder creates prompts for code generation
+type Builder struct{}
 
+// NewBuilder creates a new prompt builder
 func NewBuilder() *Builder {
 	return &Builder{}
 }
@@ -75,19 +76,6 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 	prompt.WriteString("Generate the function body code (what goes inside the braces):\n")
 
 	return prompt.String()
-}
-
-// isSimpleFunction determines if a function is simple enough for a minimal prompt
-func (b *Builder) isSimpleFunction(target *parser.Target) bool {
-	// Simple criteria:
-	// - No receiver (not a method)
-	// - Less than 3 parameters
-	// - Less than 3 return values
-	// - Short instruction (less than 100 chars)
-	return target.Receiver == nil &&
-		len(target.Params) < 3 &&
-		len(target.Returns) < 3 &&
-		len(target.Instruction) < 100
 }
 
 // buildBasicPrompt creates a simple prompt when context extraction fails

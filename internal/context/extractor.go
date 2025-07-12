@@ -111,7 +111,7 @@ func extractTypeNames(typeStr string, types map[string]bool) {
 	typeStr = strings.TrimPrefix(typeStr, "[]")
 	typeStr = strings.TrimPrefix(typeStr, "*")
 	typeStr = strings.TrimPrefix(typeStr, "chan ")
-	
+
 	// Handle maps
 	if strings.HasPrefix(typeStr, "map[") {
 		// Extract both key and value types

@@ -44,8 +44,8 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 		return fmt.Errorf("failed to generate file content: %w", err)
 	}
 
-	// Format the Go code with more aggressive formatting
-	formatted, err := g.formatCodeRobust(content)
+	// Format the Go code
+	formatted, err := format.Source([]byte(content))
 	if err != nil {
 		// If formatting fails, use the original code but log the error
 		fmt.Fprintf(os.Stderr, "Warning: failed to format generated code: %v\n", err)
@@ -106,7 +106,7 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 		implImports := imports.AnalyzeRequiredImports(impl)
 		requiredImports = imports.MergeImports(requiredImports, implImports)
 	}
-	
+
 	// Add required imports to the generated file
 	if len(requiredImports) > 0 {
 		content = g.addImports(content, requiredImports)
@@ -115,7 +115,9 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	return content, nil
 }
 
-// replaceFunctionBody replaces a function body with generated implementation using AST
+// replaceFunctionBody replaces a function body with generated implementation using AST manipulation.
+// It parses both the original content and the implementation with the same FileSet to ensure
+// consistent position information and avoid formatting issues.
 func (g *Generator) replaceFunctionBody(content string, target *parser.Target, implementation string) (string, error) {
 	// Parse the original content as AST
 	fset := token.NewFileSet()
@@ -179,8 +181,8 @@ func (g *Generator) replaceFunctionBody(content string, target *parser.Target, i
 	return buf.String(), nil
 }
 
-
-// parseImplementationAsBlockWithFileSet parses implementation code as a block statement using the provided FileSet
+// parseImplementationAsBlockWithFileSet parses implementation code as a block statement.
+// It uses the provided FileSet to maintain position consistency with the original file.
 func (g *Generator) parseImplementationAsBlockWithFileSet(implementation string, fset *token.FileSet) (*ast.BlockStmt, error) {
 	// Wrap implementation in a function to parse as valid Go code
 	testFunc := fmt.Sprintf("package main\nfunc test() {\n%s\n}", implementation)
@@ -237,8 +239,8 @@ func (g *Generator) convertMethodToFunctionAST(funcDecl *ast.FuncDecl, target *p
 	funcDecl.Recv = nil
 }
 
-
-// cleanCode performs basic cleanup and validates the generated function
+// cleanCode removes markdown formatting and extracts function body from AI responses.
+// It handles cases where the AI includes function signatures or markdown code blocks.
 func cleanCode(response string) string {
 	response = strings.TrimSpace(response)
 
@@ -247,7 +249,7 @@ func cleanCode(response string) string {
 		lines := strings.Split(response, "\n")
 		var cleaned []string
 		inCodeBlock := false
-		
+
 		for _, line := range lines {
 			if strings.HasPrefix(strings.TrimSpace(line), "```") {
 				inCodeBlock = !inCodeBlock
@@ -276,166 +278,4 @@ func cleanCode(response string) string {
 
 	response = strings.TrimSpace(response)
 	return response
-}
-
-// validateGeneratedFunction checks if the generated code is valid as a function body
-func validateGeneratedFunction(code string) error {
-	// Create a test function with the generated body
-	testCode := fmt.Sprintf(`package main
-
-func testFunc() {
-%s
-}`, code)
-
-	// Try to parse as Go code
-	fset := token.NewFileSet()
-	_, err := goparser.ParseFile(fset, "<validation-check>", testCode, goparser.ParseComments)
-	if err != nil {
-		return fmt.Errorf("generated code is not valid Go: %w", err)
-	}
-
-	return nil
-}
-
-// formatCodeRobust applies robust formatting to ensure clean output
-func (g *Generator) formatCodeRobust(content string) ([]byte, error) {
-	// Simply use format.Source - it follows go fmt standards
-	return format.Source([]byte(content))
-}
-
-// collectNecessaryImports analyzes generated code to determine which imports are actually needed
-func (g *Generator) collectNecessaryImports(fileInfo *parser.FileInfo, implementations map[string]string) []string {
-	importSet := make(map[string]bool)
-
-	// Analyze all generated implementations and function signatures to find used imports
-	allGeneratedCode := strings.Builder{}
-	for _, impl := range implementations {
-		allGeneratedCode.WriteString(impl)
-		allGeneratedCode.WriteString("\n")
-	}
-
-	// Also include function signatures to check for type references
-	for _, target := range fileInfo.Targets {
-		if target.Receiver != nil {
-			allGeneratedCode.WriteString(target.Receiver.Type)
-			allGeneratedCode.WriteString("\n")
-		}
-		for _, param := range target.Params {
-			allGeneratedCode.WriteString(param.Type)
-			allGeneratedCode.WriteString("\n")
-		}
-		for _, ret := range target.Returns {
-			allGeneratedCode.WriteString(ret.Type)
-			allGeneratedCode.WriteString("\n")
-		}
-	}
-
-	generatedText := allGeneratedCode.String()
-
-	// Check which of the original imports are actually used in generated code
-	for _, imp := range fileInfo.Imports {
-		if g.isImportUsed(generatedText, imp.Path) {
-			importSet[imp.Path] = true
-		}
-	}
-
-	// Check if source package is actually used in the generated functions
-	if g.config.SourcePackage != "" && g.config.SourcePackage != g.config.PackageName && g.config.SourcePackage != "main" {
-		if g.isImportUsed(generatedText, g.config.SourcePackage) {
-			importSet[g.config.SourcePackage] = true
-		}
-	}
-
-	// Convert set to sorted slice
-	var imports []string
-	for imp := range importSet {
-		imports = append(imports, imp)
-	}
-
-	// Sort for consistent output
-	sort.Strings(imports)
-
-	return imports
-}
-
-// isImportUsed checks if an import is used in the generated code
-func (g *Generator) isImportUsed(code, importPath string) bool {
-	// Extract package name from import path
-	parts := strings.Split(importPath, "/")
-	packageName := parts[len(parts)-1]
-
-	// Handle special package names
-	switch packageName {
-	case "context":
-		return strings.Contains(code, "context.") || strings.Contains(code, "Context")
-	case "fmt":
-		return strings.Contains(code, "fmt.") || strings.Contains(code, "Sprintf") || strings.Contains(code, "Printf") || strings.Contains(code, "Errorf")
-	case "strings":
-		return strings.Contains(code, "strings.")
-	case "time":
-		return strings.Contains(code, "time.") || strings.Contains(code, "Time")
-	case "errors":
-		return strings.Contains(code, "errors.")
-	default:
-		// For other packages, check if package name is used
-		return strings.Contains(code, packageName+".")
-	}
-}
-
-// UpdateImports adds necessary imports to the file
-func (g *Generator) UpdateImports(filePath string, additionalImports []string) error {
-	fset := token.NewFileSet()
-	node, err := goparser.ParseFile(fset, filePath, nil, goparser.ParseComments)
-	if err != nil {
-		return fmt.Errorf("failed to parse file: %w", err)
-	}
-
-	// Track existing imports
-	existingImports := make(map[string]bool)
-	var importDecl *ast.GenDecl
-
-	// Find import declaration
-	for _, decl := range node.Decls {
-		if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
-			importDecl = genDecl
-			for _, spec := range genDecl.Specs {
-				if importSpec, ok := spec.(*ast.ImportSpec); ok {
-					path := strings.Trim(importSpec.Path.Value, `"`)
-					existingImports[path] = true
-				}
-			}
-			break
-		}
-	}
-
-	// Add new imports if needed
-	needsUpdate := false
-	for _, imp := range additionalImports {
-		if !existingImports[imp] {
-			needsUpdate = true
-			if importDecl != nil {
-				// Add to existing import block
-				importDecl.Specs = append(importDecl.Specs, &ast.ImportSpec{
-					Path: &ast.BasicLit{
-						Kind:  token.STRING,
-						Value: fmt.Sprintf(`"%s"`, imp),
-					},
-				})
-			}
-		}
-	}
-
-	if needsUpdate {
-		// Format and write back
-		var buf strings.Builder
-		if err := format.Node(&buf, fset, node); err != nil {
-			return fmt.Errorf("failed to format AST: %w", err)
-		}
-
-		if err := os.WriteFile(filePath, []byte(buf.String()), 0644); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
-		}
-	}
-
-	return nil
 }

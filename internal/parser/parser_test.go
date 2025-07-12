@@ -99,7 +99,7 @@ func CalculateDiscount(price float64) float64 {
 		{
 			name:           "ListActiveUsers",
 			expectedName:   "ListActiveUsers",
-			expectedInstr:  "複数のユーザーを取得",
+			expectedInstr:  "複数のユーザーを取得\nstatusがactiveのユーザーのみ\ncreated_atの降順でソート",
 			expectedParams: 2,
 			expectedRets:   2,
 			hasReceiver:    false,

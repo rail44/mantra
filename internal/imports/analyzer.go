@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"sort"
 	"strings"
 )
 
@@ -49,7 +50,7 @@ func temp() {
 	}
 
 	requiredImports := make(map[string]bool)
-	
+
 	// Walk the AST to find package references
 	ast.Inspect(node, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -75,46 +76,46 @@ func temp() {
 	for imp := range requiredImports {
 		imports = append(imports, imp)
 	}
-	
+
 	return imports
 }
 
 // analyzeByStringMatching uses simple string matching when AST parsing fails
 func analyzeByStringMatching(code string) []string {
 	requiredImports := make(map[string]bool)
-	
+
 	// Check for package.Function patterns
 	for pkgName, importPath := range StandardPackages {
 		if strings.Contains(code, pkgName+".") {
 			requiredImports[importPath] = true
 		}
 	}
-	
+
 	// Check for specific functions that indicate package usage
 	functionIndicators := map[string]string{
 		"Sprintf":    "fmt",
 		"Printf":     "fmt",
 		"Println":    "fmt",
 		"Errorf":     "fmt",
-		"New":        "errors", // errors.New
-		"Now":        "time",   // time.Now
-		"Sleep":      "time",   // time.Sleep
+		"New":        "errors",  // errors.New
+		"Now":        "time",    // time.Now
+		"Sleep":      "time",    // time.Sleep
 		"Background": "context", // context.Background
 		"TODO":       "context", // context.TODO
 	}
-	
+
 	for fn, importPath := range functionIndicators {
 		if strings.Contains(code, fn+"(") {
 			requiredImports[importPath] = true
 		}
 	}
-	
+
 	// Convert map to slice
 	var imports []string
 	for imp := range requiredImports {
 		imports = append(imports, imp)
 	}
-	
+
 	return imports
 }
 
@@ -133,7 +134,7 @@ func checkFunctionImport(funcName string, requiredImports map[string]bool) {
 		"MarshalJSON":   "encoding/json",
 		"UnmarshalJSON": "encoding/json",
 	}
-	
+
 	if importPath, exists := functionImports[funcName]; exists {
 		requiredImports[importPath] = true
 	}
@@ -142,38 +143,25 @@ func checkFunctionImport(funcName string, requiredImports map[string]bool) {
 // MergeImports merges new imports with existing imports, avoiding duplicates
 func MergeImports(existingImports []string, newImports []string) []string {
 	importSet := make(map[string]bool)
-	
+
 	// Add existing imports
 	for _, imp := range existingImports {
 		importSet[imp] = true
 	}
-	
+
 	// Add new imports
 	for _, imp := range newImports {
 		importSet[imp] = true
 	}
-	
+
 	// Convert back to slice
 	var merged []string
 	for imp := range importSet {
 		merged = append(merged, imp)
 	}
-	
-	// Sort for consistency
-	sortImports(merged)
-	
-	return merged
-}
 
-// sortImports sorts imports according to Go conventions
-func sortImports(imports []string) {
-	// Simple alphabetical sort for now
-	// In a real implementation, we'd group standard library, external, and local imports
-	for i := 0; i < len(imports); i++ {
-		for j := i + 1; j < len(imports); j++ {
-			if imports[i] > imports[j] {
-				imports[i], imports[j] = imports[j], imports[i]
-			}
-		}
-	}
+	// Sort for consistency
+	sort.Strings(merged)
+
+	return merged
 }

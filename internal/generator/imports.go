@@ -96,18 +96,18 @@ func (g *Generator) addImportsSimple(content string, requiredImports []string) s
 	// Find package declaration
 	lines := strings.Split(content, "\n")
 	packageLineIdx := -1
-	
+
 	for i, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "package ") {
 			packageLineIdx = i
 			break
 		}
 	}
-	
+
 	if packageLineIdx < 0 {
 		return content // No package declaration found
 	}
-	
+
 	// Build import block
 	var importBlock []string
 	importBlock = append(importBlock, "")
@@ -116,12 +116,12 @@ func (g *Generator) addImportsSimple(content string, requiredImports []string) s
 		importBlock = append(importBlock, fmt.Sprintf("\t\"%s\"", imp))
 	}
 	importBlock = append(importBlock, ")")
-	
+
 	// Insert after package declaration
 	result := make([]string, 0, len(lines)+len(importBlock))
 	result = append(result, lines[:packageLineIdx+1]...)
 	result = append(result, importBlock...)
 	result = append(result, lines[packageLineIdx+1:]...)
-	
+
 	return strings.Join(result, "\n")
 }
