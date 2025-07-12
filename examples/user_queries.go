@@ -3,7 +3,7 @@ package examples
 import "time"
 
 // GetUserRequest represents a request to fetch user information
-// @description Retrieve user details by their unique ID from Spanner
+// @description Retrieve user details by their unique ID from Spanner users table
 type GetUserRequest struct {
 	UserID string `json:"user_id"` // The unique identifier of the user
 }
