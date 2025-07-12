@@ -19,10 +19,29 @@ func DefaultConfig() *Config {
 		Host:        getEnvOrDefault("OLLAMA_HOST", "http://localhost:11434"),
 		Timeout:     5 * time.Minute,
 		Temperature: 0.7,
-		SystemPrompt: `You are an expert Go developer.
-Generate clean, idiomatic Go code that follows best practices.
-Focus on creating efficient, maintainable implementations.
-Always include proper error handling and context usage.`,
+		SystemPrompt: `You are an expert Go developer generating function implementations.
+CRITICAL: You must generate ONLY the code that goes INSIDE the function body braces.
+Do NOT include:
+- Function signature (func name(params) returns)
+- Opening or closing braces of the function
+- Package declaration
+- Import statements
+- Comments outside the function body
+
+Example correct response for "add two numbers":
+return a + b
+
+Example INCORRECT response (DO NOT DO THIS):
+func Add(a, b int) int {
+    return a + b
+}
+
+Requirements:
+- Follow Go best practices and idioms
+- Handle edge cases appropriately
+- When the instruction is in Japanese, understand and implement according to the full specification
+- For functions that return errors, use proper error handling
+- For string operations, handle Unicode correctly`,
 	}
 }
 

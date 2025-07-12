@@ -124,13 +124,28 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 
 	// First pass: collect all // glyph: comments
 	for _, commentGroup := range node.Comments {
+		var glyphInstruction strings.Builder
+		foundGlyph := false
+		
 		for _, comment := range commentGroup.List {
 			text := strings.TrimSpace(comment.Text)
 			if strings.HasPrefix(text, "// glyph:") {
+				foundGlyph = true
 				instruction := strings.TrimSpace(strings.TrimPrefix(text, "// glyph:"))
-				// Store comment with its end position
-				glyphComments[commentGroup.End()] = instruction
+				glyphInstruction.WriteString(instruction)
+			} else if foundGlyph && strings.HasPrefix(text, "//") {
+				// Continuation of glyph comment
+				additionalText := strings.TrimSpace(strings.TrimPrefix(text, "//"))
+				if additionalText != "" {
+					glyphInstruction.WriteString("\n")
+					glyphInstruction.WriteString(additionalText)
+				}
 			}
+		}
+		
+		if foundGlyph {
+			// Store comment with its end position
+			glyphComments[commentGroup.End()] = glyphInstruction.String()
 		}
 	}
 

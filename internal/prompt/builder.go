@@ -2,9 +2,9 @@ package prompt
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
+	"github.com/rail44/glyph/internal/context"
 	"github.com/rail44/glyph/internal/parser"
 )
 
@@ -19,80 +19,60 @@ func NewBuilder() *Builder {
 func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) string {
 	var prompt strings.Builder
 
-	// For simple functions, use a minimal prompt
-	if b.isSimpleFunction(target) {
-		prompt.WriteString(fmt.Sprintf("Implement this Go function: %s\n", target.GetFunctionSignature()))
-		prompt.WriteString(fmt.Sprintf("Task: %s\n", target.Instruction))
-		prompt.WriteString("Return only the function body code (the code inside the braces), without the function signature.\n")
-		return prompt.String()
+	// Extract relevant context
+	ctx, err := context.ExtractRelevantContext(fileContent, target)
+	if err != nil {
+		// Fallback to basic prompt if context extraction fails
+		return b.buildBasicPrompt(target)
 	}
 
-	// For complex functions, use detailed prompt
-	// Add context about the task
-	prompt.WriteString("Generate a Go implementation based on the following:\n\n")
+	// Build the prompt with rich context
+	prompt.WriteString("## Task\n")
+	prompt.WriteString(fmt.Sprintf("Implement the body of this Go function: `%s`\n\n", target.GetFunctionSignature()))
+	prompt.WriteString(fmt.Sprintf("Instruction: %s\n\n", target.Instruction))
 
-	// Add file context
-	prompt.WriteString("## Source File\n")
-	prompt.WriteString(fmt.Sprintf("File: %s\n", filepath.Base(target.FilePath)))
-	prompt.WriteString(fmt.Sprintf("Function: %s\n\n", target.GetFunctionSignature()))
-
-	// Add the natural language instruction
-	prompt.WriteString("## Task Description\n")
-	prompt.WriteString(target.Instruction)
-	prompt.WriteString("\n\n")
-
-	// Add function signature details
-	prompt.WriteString("## Function Details\n")
-	prompt.WriteString(fmt.Sprintf("- Name: %s\n", target.Name))
-
-	if target.Receiver != nil {
-		prompt.WriteString(fmt.Sprintf("- Method of: %s\n", target.Receiver.Type))
-	}
-
-	if len(target.Params) > 0 {
-		prompt.WriteString("- Parameters:\n")
-		for _, param := range target.Params {
-			if param.Name != "" {
-				prompt.WriteString(fmt.Sprintf("  - %s: %s\n", param.Name, param.Type))
-			} else {
-				prompt.WriteString(fmt.Sprintf("  - %s\n", param.Type))
-			}
+	// Add relevant type definitions
+	if len(ctx.Types) > 0 {
+		prompt.WriteString("## Relevant Types\n")
+		prompt.WriteString("```go\n")
+		for _, typeDef := range ctx.Types {
+			prompt.WriteString(typeDef)
+			prompt.WriteString("\n\n")
 		}
+		prompt.WriteString("```\n\n")
 	}
 
-	if len(target.Returns) > 0 {
-		prompt.WriteString("- Returns:\n")
-		for _, ret := range target.Returns {
-			prompt.WriteString(fmt.Sprintf("  - %s\n", ret.Type))
+	// Add imports if they might be needed
+	if len(ctx.Imports) > 0 {
+		prompt.WriteString("## Available Imports\n")
+		prompt.WriteString("```go\n")
+		for _, imp := range ctx.Imports {
+			prompt.WriteString(fmt.Sprintf("import %s\n", imp))
 		}
+		prompt.WriteString("```\n\n")
 	}
 
-	prompt.WriteString("\n")
-
-	// Add relevant code context from the file
-	prompt.WriteString("## File Context\n")
-	prompt.WriteString("```go\n")
-	// Include first 100 lines or up to function start for context
-	lines := strings.Split(fileContent, "\n")
-	startLine := target.TokenSet.Position(target.FuncDecl.Pos()).Line
-	contextEnd := min(100, startLine-1)
-	if contextEnd > 0 {
-		prompt.WriteString(strings.Join(lines[:contextEnd], "\n"))
+	// Add relevant constants
+	if len(ctx.Constants) > 0 {
+		prompt.WriteString("## Constants\n")
+		prompt.WriteString("```go\n")
+		for _, constDef := range ctx.Constants {
+			prompt.WriteString(constDef)
+			prompt.WriteString("\n")
+		}
+		prompt.WriteString("```\n\n")
 	}
-	prompt.WriteString("\n```\n\n")
 
-	// Add generation instructions
-	prompt.WriteString("## Instructions\n")
-	prompt.WriteString("1. Generate ONLY the function body (the code that goes inside the function braces)\n")
-	prompt.WriteString("2. Do NOT include the function signature, package declaration, or imports\n")
-	prompt.WriteString("3. Do NOT generate multiple functions or any other functions\n")
-	prompt.WriteString("4. Do NOT include any comments or explanations\n")
-	prompt.WriteString("5. Replace the panic(\"not implemented\") with actual implementation\n")
-	prompt.WriteString("6. Use proper error handling and Go idioms\n")
-	prompt.WriteString("7. Return code that can be directly placed inside the function braces\n")
-	prompt.WriteString("\n")
+	// Add key instructions
+	prompt.WriteString("## Requirements\n")
+	prompt.WriteString("- Generate ONLY the code that goes INSIDE the function braces\n")
+	prompt.WriteString("- Do NOT include the function signature or braces\n")
+	prompt.WriteString("- Start directly with the implementation code\n")
+	prompt.WriteString("- Implement the complete specification from the instruction\n")
+	prompt.WriteString("- Handle all edge cases mentioned\n")
+	prompt.WriteString("- Use the available types and imports as needed\n\n")
 
-	prompt.WriteString("Generate ONLY the function body code (no signatures, no extra functions):\n")
+	prompt.WriteString("Generate the function body code (what goes inside the braces):\n")
 
 	return prompt.String()
 }
@@ -110,9 +90,11 @@ func (b *Builder) isSimpleFunction(target *parser.Target) bool {
 		len(target.Instruction) < 100
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+// buildBasicPrompt creates a simple prompt when context extraction fails
+func (b *Builder) buildBasicPrompt(target *parser.Target) string {
+	var prompt strings.Builder
+	prompt.WriteString(fmt.Sprintf("Implement this Go function: %s\n", target.GetFunctionSignature()))
+	prompt.WriteString(fmt.Sprintf("Task: %s\n", target.Instruction))
+	prompt.WriteString("Return only the function body code (the code inside the braces).\n")
+	return prompt.String()
 }

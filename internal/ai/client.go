@@ -56,6 +56,10 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	buildStart := time.Now()
 	messages := []api.Message{
 		{
+			Role:    "system",
+			Content: c.config.SystemPrompt,
+		},
+		{
 			Role:    "user",
 			Content: prompt,
 		},
@@ -112,6 +116,10 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan string, <-chan error) {
 	// Build messages
 	messages := []api.Message{
+		{
+			Role:    "system",
+			Content: c.config.SystemPrompt,
+		},
 		{
 			Role:    "user",
 			Content: prompt,

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	astutils "github.com/rail44/glyph/internal/ast"
+	"github.com/rail44/glyph/internal/imports"
 	"github.com/rail44/glyph/internal/parser"
 )
 
@@ -97,6 +98,18 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 			return "", fmt.Errorf("failed to replace function %s: %w", target.Name, err)
 		}
 		content = newContent
+	}
+
+	// Analyze required imports from all implementations
+	var requiredImports []string
+	for _, impl := range implementations {
+		implImports := imports.AnalyzeRequiredImports(impl)
+		requiredImports = imports.MergeImports(requiredImports, implImports)
+	}
+	
+	// Add required imports to the generated file
+	if len(requiredImports) > 0 {
+		content = g.addImports(content, requiredImports)
 	}
 
 	return content, nil
@@ -229,12 +242,39 @@ func (g *Generator) convertMethodToFunctionAST(funcDecl *ast.FuncDecl, target *p
 func cleanCode(response string) string {
 	response = strings.TrimSpace(response)
 
-	// Remove basic markdown if present
-	response = strings.TrimPrefix(response, "```go")
-	response = strings.TrimPrefix(response, "```")
-	response = strings.TrimSuffix(response, "```")
-	response = strings.TrimSpace(response)
+	// Remove markdown code blocks
+	if strings.HasPrefix(response, "```") {
+		lines := strings.Split(response, "\n")
+		var cleaned []string
+		inCodeBlock := false
+		
+		for _, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "```") {
+				inCodeBlock = !inCodeBlock
+				continue
+			}
+			if inCodeBlock || (!strings.HasPrefix(line, "```") && len(cleaned) > 0) {
+				cleaned = append(cleaned, line)
+			}
+		}
+		response = strings.Join(cleaned, "\n")
+	}
 
+	// Check if response contains function signature and extract body
+	if strings.Contains(response, "func ") && strings.Contains(response, "{") {
+		// Find the first opening brace
+		braceIdx := strings.Index(response, "{")
+		if braceIdx != -1 {
+			// Find the last closing brace
+			lastBrace := strings.LastIndex(response, "}")
+			if lastBrace > braceIdx {
+				// Extract only the body between braces
+				response = response[braceIdx+1 : lastBrace]
+			}
+		}
+	}
+
+	response = strings.TrimSpace(response)
 	return response
 }
 
