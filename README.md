@@ -72,16 +72,19 @@ glyph generate main.go
 
 ## Configuration
 
-Create `.glyph.yaml` in your home directory:
+Configuration is handled via command-line flags:
 
-```yaml
-model: devstral
-host: http://localhost:11434
+```bash
+# Use different model
+glyph generate --model qwen2.5-coder main.go
+
+# Use different Ollama host
+glyph generate --host http://192.168.1.100:11434 main.go
 ```
 
-Or use environment variables:
-- `OLLAMA_HOST`: Ollama server URL
-- `GLYPH_MODEL`: AI model to use
+Defaults:
+- Model: `devstral`
+- Host: `http://localhost:11434`
 
 ## Commands
 
@@ -93,9 +96,9 @@ glyph generate <file> [flags]
 Generates implementations for all functions with `// glyph:` comments.
 
 **Flags:**
-- `--mode string`: Generation mode (`spanner` or `generic`)
-- `--model string`: Override AI model
-- `--host string`: Override Ollama host
+- `--mode string`: Generation mode (`spanner` or `generic`, default: `generic`)
+- `--model string`: AI model to use (default: `devstral`)
+- `--host string`: Ollama host URL (default: `http://localhost:11434`)
 - `--no-stream`: Disable streaming output (faster for scripting)
 - `--debug-timing`: Show detailed timing information
 
@@ -111,13 +114,6 @@ glyph generate main.go --no-stream
 # Debug performance issues
 glyph generate main.go --debug-timing
 ```
-
-### Watch (Coming Soon)
-```bash
-glyph watch <file> [flags]
-```
-
-Watches for file changes and regenerates automatically.
 
 ## Writing Effective Instructions
 

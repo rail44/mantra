@@ -5,10 +5,12 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
-var cfgFile string
+var (
+	modelName string
+	ollamaHost string
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "glyph",
@@ -28,31 +30,16 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
-
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.glyph.yaml)")
-	rootCmd.PersistentFlags().String("model", "devstral", "AI model to use for generation")
-	rootCmd.PersistentFlags().String("host", "", "Ollama host (default from OLLAMA_HOST env)")
-
-	viper.BindPFlag("model", rootCmd.PersistentFlags().Lookup("model"))
-	viper.BindPFlag("host", rootCmd.PersistentFlags().Lookup("host"))
+	rootCmd.PersistentFlags().StringVar(&modelName, "model", "devstral", "AI model to use for generation")
+	rootCmd.PersistentFlags().StringVar(&ollamaHost, "host", "http://localhost:11434", "Ollama host URL")
 }
 
-func initConfig() {
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
+// GetModel returns the configured model name
+func GetModel() string {
+	return modelName
+}
 
-		viper.AddConfigPath(home)
-		viper.SetConfigType("yaml")
-		viper.SetConfigName(".glyph")
-	}
-
-	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
-	}
+// GetHost returns the configured Ollama host
+func GetHost() string {
+	return ollamaHost
 }

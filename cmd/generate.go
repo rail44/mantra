@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	
 	"github.com/rail44/glyph/internal/ai"
 	"github.com/rail44/glyph/internal/generator"
@@ -59,10 +58,9 @@ their implementations based on the natural language instructions provided.`,
 func init() {
 	rootCmd.AddCommand(generateCmd)
 	
-	generateCmd.Flags().StringVar(&generateMode, "mode", "", "Generation mode (spanner, generic, etc.)")
+	generateCmd.Flags().StringVar(&generateMode, "mode", "generic", "Generation mode (spanner, generic, etc.)")
 	generateCmd.Flags().BoolVar(&debugTiming, "debug-timing", false, "Show timing information for each step")
 	generateCmd.Flags().BoolVar(&noStream, "no-stream", false, "Disable streaming output")
-	viper.BindPFlag("mode", generateCmd.Flags().Lookup("mode"))
 }
 
 func runGeneration(filePath string) error {
@@ -98,21 +96,14 @@ func runGeneration(filePath string) error {
 		fmt.Printf("  [Timing] File read took: %v\n", time.Since(readStart))
 	}
 	
-	// Determine mode
-	mode := viper.GetString("mode")
-	if mode == "" {
-		if generateMode != "" {
-			mode = generateMode
-		} else {
-			mode = "generic" // Default mode for new system
-		}
-	}
+	// Use the mode from flag
+	mode := generateMode
 	
 	// Create AI client
 	clientStart := time.Now()
 	config := &ai.Config{
-		Model: viper.GetString("model"),
-		Host:  viper.GetString("host"),
+		Model: GetModel(),
+		Host:  GetHost(),
 		Mode:  mode,
 	}
 	
