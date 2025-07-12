@@ -75,6 +75,11 @@ func (g *Generator) GenerateForTarget(target *parser.Target, implementation stri
 	// Clean the implementation
 	implementation = cleanCode(implementation)
 
+	// Validate the generated function
+	if err := validateGeneratedFunction(implementation); err != nil {
+		return fmt.Errorf("generated code validation failed: %w", err)
+	}
+
 	// Replace the panic statement with the implementation
 	newContent, err := replacePanicWithImplementation(string(content), target, implementation)
 	if err != nil {
@@ -246,7 +251,7 @@ func (g *Generator) convertTypeReference(typeStr string) string {
 	return typeStr
 }
 
-// replacePanicWithImplementation replaces panic("not implemented") with actual implementation
+// replacePanicWithImplementation replaces the entire function with the AI-generated implementation
 func replacePanicWithImplementation(content string, target *parser.Target, implementation string) (string, error) {
 	lines := strings.Split(content, "\n")
 	
@@ -352,103 +357,37 @@ func indentCode(code, indent string) string {
 	return strings.Join(lines, "\n")
 }
 
-// cleanCode removes markdown formatting from AI response
+// cleanCode performs basic cleanup and validates the generated function
 func cleanCode(response string) string {
 	response = strings.TrimSpace(response)
 	
-	// Remove all markdown code blocks by splitting and cleaning
-	parts := strings.Split(response, "```")
-	var cleanParts []string
-	
-	for i, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		
-		// Skip language specifiers like "go"
-		if i%2 == 1 && (part == "go" || part == "golang") {
-			continue
-		}
-		
-		// For odd indices (inside code blocks), include the content
-		// For even indices (outside code blocks), only include if it's not a language specifier
-		if i%2 == 1 || (i%2 == 0 && !strings.HasPrefix(part, "go\n") && part != "go" && part != "golang") {
-			cleanParts = append(cleanParts, part)
-		}
-	}
-	
-	response = strings.Join(cleanParts, "\n")
+	// Remove basic markdown if present
+	response = strings.TrimPrefix(response, "```go")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
 	response = strings.TrimSpace(response)
 	
-	// Remove any function signatures or extra function definitions
-	lines := strings.Split(response, "\n")
-	var cleanedLines []string
-	insideFunction := false
-	braceCount := 0
+	return response
+}
+
+// validateGeneratedFunction checks if the generated code is a valid Go function
+func validateGeneratedFunction(code string) error {
+	// Add temporary package declaration for parsing
+	testCode := "package main\n\n" + code
 	
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		
-		// Skip empty lines at the beginning
-		if len(cleanedLines) == 0 && line == "" {
-			continue
-		}
-		
-		// Skip markdown markers that might remain
-		if line == "```" || line == "```go" || line == "```golang" || line == "go" || line == "golang" {
-			continue
-		}
-		
-		// Skip function signature lines (lines starting with "func ")
-		if strings.HasPrefix(line, "func ") {
-			insideFunction = true
-			continue
-		}
-		
-		// Skip package and import lines
-		if strings.HasPrefix(line, "package ") || strings.HasPrefix(line, "import ") {
-			continue
-		}
-		
-		// If we're inside a function definition, look for the opening brace
-		if insideFunction {
-			if strings.Contains(line, "{") {
-				insideFunction = false
-				// Don't include the line with just the opening brace
-				if line != "{" {
-					// If there's code after the brace, include it
-					afterBrace := strings.Split(line, "{")
-					if len(afterBrace) > 1 && strings.TrimSpace(afterBrace[1]) != "" {
-						cleanedLines = append(cleanedLines, strings.TrimSpace(afterBrace[1]))
-					}
-				}
-				continue
-			} else {
-				// Skip lines that are part of the function signature
-				continue
-			}
-		}
-		
-		// Count braces to avoid including extra function definitions
-		openBraces := strings.Count(line, "{")
-		closeBraces := strings.Count(line, "}")
-		braceCount += openBraces - closeBraces
-		
-		// If we hit negative brace count, we've reached the end of the function
-		if braceCount < 0 {
-			break
-		}
-		
-		// Skip closing brace of the function itself
-		if line == "}" && braceCount == -1 {
-			break
-		}
-		
-		cleanedLines = append(cleanedLines, line)
+	// Try to parse as Go code
+	fset := token.NewFileSet()
+	_, err := goparser.ParseFile(fset, "test.go", testCode, goparser.ParseComments)
+	if err != nil {
+		return fmt.Errorf("generated code is not valid Go: %w", err)
 	}
 	
-	return strings.Join(cleanedLines, "\n")
+	// Check if it contains at least one function
+	if !strings.Contains(code, "func ") {
+		return fmt.Errorf("generated code does not contain a function")
+	}
+	
+	return nil
 }
 
 // UpdateImports adds necessary imports to the file
