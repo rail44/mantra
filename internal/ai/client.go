@@ -24,7 +24,7 @@ func NewClient(config *Config) (*Client, error) {
 
 	// Create Ollama client
 	var ollamaClient *api.Client
-	
+
 	if config.Host != "" {
 		hostURL, err := url.Parse(config.Host)
 		if err != nil {
@@ -51,7 +51,7 @@ func (c *Client) SetDebugTiming(enabled bool) {
 // Generate sends a prompt to the AI and returns the response
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	totalStart := time.Now()
-	
+
 	// Build messages based on mode
 	buildStart := time.Now()
 	messages := []api.Message{
@@ -76,7 +76,7 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	var response strings.Builder
 	firstTokenTime := time.Duration(0)
 	tokenCount := 0
-	
+
 	// Make the API call
 	apiCallStart := time.Now()
 	err := c.ollama.Chat(ctx, &api.ChatRequest{
@@ -98,7 +98,7 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	})
 
 	totalTime := time.Since(totalStart)
-	
+
 	if c.debugTiming {
 		fmt.Printf("    [AI Timing] Total API call: %v\n", time.Since(apiCallStart))
 		fmt.Printf("    [AI Timing] Tokens received: %d\n", tokenCount)
@@ -167,15 +167,15 @@ func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan stri
 // CheckModel verifies if the specified model is available
 func (c *Client) CheckModel(ctx context.Context) error {
 	checkStart := time.Now()
-	
+
 	_, err := c.ollama.Show(ctx, &api.ShowRequest{
 		Model: c.config.Model,
 	})
-	
+
 	if c.debugTiming {
 		fmt.Printf("    [AI Timing] Model check: %v\n", time.Since(checkStart))
 	}
-	
+
 	if err != nil {
 		return fmt.Errorf("model %s not found: %w", c.config.Model, err)
 	}

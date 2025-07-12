@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	modelName string
+	modelName  string
 	ollamaHost string
 )
 

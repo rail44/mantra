@@ -47,11 +47,11 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 	// Add function signature details
 	prompt.WriteString("## Function Details\n")
 	prompt.WriteString(fmt.Sprintf("- Name: %s\n", target.Name))
-	
+
 	if target.Receiver != nil {
 		prompt.WriteString(fmt.Sprintf("- Method of: %s\n", target.Receiver.Type))
 	}
-	
+
 	if len(target.Params) > 0 {
 		prompt.WriteString("- Parameters:\n")
 		for _, param := range target.Params {
@@ -62,14 +62,14 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 			}
 		}
 	}
-	
+
 	if len(target.Returns) > 0 {
 		prompt.WriteString("- Returns:\n")
 		for _, ret := range target.Returns {
 			prompt.WriteString(fmt.Sprintf("  - %s\n", ret.Type))
 		}
 	}
-	
+
 	prompt.WriteString("\n")
 
 	// Add mode-specific context

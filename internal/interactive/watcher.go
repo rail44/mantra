@@ -64,7 +64,7 @@ func (fw *FileWatcher) Start(ctx context.Context) {
 					if debounceTimer != nil {
 						debounceTimer.Stop()
 					}
-					
+
 					// Set new timer
 					debounceTimer = time.AfterFunc(debounceDelay, fw.onChange)
 				}

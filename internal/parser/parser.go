@@ -11,12 +11,12 @@ import (
 
 // FileInfo contains information about the parsed file
 type FileInfo struct {
-	PackageName   string       // Package name from package declaration
-	Imports       []Import     // All import statements
-	Targets       []*Target    // Generation targets
-	FilePath      string       // Source file path
-	SourceContent string       // Full source file content
-	SourceLines   []string     // Source content split by lines
+	PackageName   string    // Package name from package declaration
+	Imports       []Import  // All import statements
+	Targets       []*Target // Generation targets
+	FilePath      string    // Source file path
+	SourceContent string    // Full source file content
+	SourceLines   []string  // Source content split by lines
 }
 
 // Import represents an import statement
@@ -27,16 +27,16 @@ type Import struct {
 
 // Target represents a function or method to generate
 type Target struct {
-	Name           string           // Function or method name
-	Receiver       *Receiver        // Receiver for methods (nil for functions)
-	Params         []Param          // Function parameters
-	Returns        []Return         // Return values
-	Instruction    string           // Content from // glyph: comment
-	FilePath       string           // Source file path
-	HasPanic       bool             // Whether function contains panic("not implemented")
-	Implementation string           // Generated implementation (temporary storage)
-	FuncDecl       *ast.FuncDecl    // AST node for the function declaration
-	TokenSet       *token.FileSet   // Token file set for position information
+	Name           string         // Function or method name
+	Receiver       *Receiver      // Receiver for methods (nil for functions)
+	Params         []Param        // Function parameters
+	Returns        []Return       // Return values
+	Instruction    string         // Content from // glyph: comment
+	FilePath       string         // Source file path
+	HasPanic       bool           // Whether function contains panic("not implemented")
+	Implementation string         // Generated implementation (temporary storage)
+	FuncDecl       *ast.FuncDecl  // AST node for the function declaration
+	TokenSet       *token.FileSet // Token file set for position information
 }
 
 // Receiver represents method receiver
@@ -110,10 +110,10 @@ func ParseFile(filePath string) ([]*Target, error) {
 // parseTargetsFromNode extracts targets from parsed AST node
 func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) ([]*Target, error) {
 	var targets []*Target
-	
+
 	// Map to store glyph comments by position
 	glyphComments := make(map[token.Pos]string)
-	
+
 	// First pass: collect all // glyph: comments
 	for _, commentGroup := range node.Comments {
 		for _, comment := range commentGroup.List {
@@ -125,7 +125,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			}
 		}
 	}
-	
+
 	// Second pass: find functions with glyph comments
 	ast.Inspect(node, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -133,7 +133,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			// Check if there's a glyph comment immediately before this function
 			var instruction string
 			var found bool
-			
+
 			// Look for glyph comment right before function
 			for pos, instr := range glyphComments {
 				if pos < x.Pos() && x.Pos()-pos < 50 { // Allow small gap
@@ -142,14 +142,14 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 					break
 				}
 			}
-			
+
 			if !found {
 				return true
 			}
-			
+
 			// Check if function contains panic("not implemented")
 			hasPanic := containsNotImplementedPanic(x.Body)
-			
+
 			target := &Target{
 				Name:        x.Name.Name,
 				Instruction: instruction,
@@ -158,7 +158,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 				FuncDecl:    x,
 				TokenSet:    fset,
 			}
-			
+
 			// Parse receiver for methods
 			if x.Recv != nil && len(x.Recv.List) > 0 {
 				recv := x.Recv.List[0]
@@ -169,7 +169,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 					target.Receiver.Name = recv.Names[0].Name
 				}
 			}
-			
+
 			// Parse parameters
 			if x.Type.Params != nil {
 				for _, field := range x.Type.Params.List {
@@ -190,7 +190,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 					}
 				}
 			}
-			
+
 			// Parse return values
 			if x.Type.Results != nil {
 				for _, field := range x.Type.Results.List {
@@ -210,7 +210,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 					}
 				}
 			}
-			
+
 			targets = append(targets, target)
 		}
 		return true
@@ -224,7 +224,7 @@ func containsNotImplementedPanic(body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
-	
+
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if callExpr, ok := n.(*ast.CallExpr); ok {
@@ -241,7 +241,7 @@ func containsNotImplementedPanic(body *ast.BlockStmt) bool {
 		}
 		return true
 	})
-	
+
 	return found
 }
 
@@ -271,9 +271,9 @@ func getTypeString(expr ast.Expr) string {
 // GetFunctionSignature returns a string representation of the function signature
 func (t *Target) GetFunctionSignature() string {
 	var sig strings.Builder
-	
+
 	sig.WriteString("func ")
-	
+
 	// Add receiver if it's a method
 	if t.Receiver != nil {
 		sig.WriteString("(")
@@ -284,10 +284,10 @@ func (t *Target) GetFunctionSignature() string {
 		sig.WriteString(t.Receiver.Type)
 		sig.WriteString(") ")
 	}
-	
+
 	sig.WriteString(t.Name)
 	sig.WriteString("(")
-	
+
 	// Add parameters
 	for i, param := range t.Params {
 		if i > 0 {
@@ -299,9 +299,9 @@ func (t *Target) GetFunctionSignature() string {
 		}
 		sig.WriteString(param.Type)
 	}
-	
+
 	sig.WriteString(")")
-	
+
 	// Add return values
 	if len(t.Returns) > 0 {
 		sig.WriteString(" ")
@@ -318,7 +318,6 @@ func (t *Target) GetFunctionSignature() string {
 			sig.WriteString(")")
 		}
 	}
-	
+
 	return sig.String()
 }
-

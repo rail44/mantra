@@ -10,7 +10,7 @@ func TestParseFile(t *testing.T) {
 	// Create a temporary test file
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
+
 	testContent := `package test
 
 import (
@@ -65,18 +65,18 @@ func CalculateDiscount(price float64) float64 {
 	if err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
-	
+
 	// Parse the file
 	targets, err := ParseFile(testFile)
 	if err != nil {
 		t.Fatalf("ParseFile failed: %v", err)
 	}
-	
+
 	// Check number of targets
 	if len(targets) != 5 {
 		t.Errorf("Expected 5 targets, got %d", len(targets))
 	}
-	
+
 	// Test cases
 	tests := []struct {
 		name           string
@@ -133,7 +133,7 @@ func CalculateDiscount(price float64) float64 {
 			hasPanic:       true,
 		},
 	}
-	
+
 	// Find and verify each target
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,27 +144,27 @@ func CalculateDiscount(price float64) float64 {
 					break
 				}
 			}
-			
+
 			if target == nil {
 				t.Fatalf("Target %s not found", tt.expectedName)
 			}
-			
+
 			if target.Instruction != tt.expectedInstr {
 				t.Errorf("Expected instruction %q, got %q", tt.expectedInstr, target.Instruction)
 			}
-			
+
 			if len(target.Params) != tt.expectedParams {
 				t.Errorf("Expected %d params, got %d", tt.expectedParams, len(target.Params))
 			}
-			
+
 			if len(target.Returns) != tt.expectedRets {
 				t.Errorf("Expected %d returns, got %d", tt.expectedRets, len(target.Returns))
 			}
-			
+
 			if (target.Receiver != nil) != tt.hasReceiver {
 				t.Errorf("Expected hasReceiver=%v, got %v", tt.hasReceiver, target.Receiver != nil)
 			}
-			
+
 			if target.HasPanic != tt.hasPanic {
 				t.Errorf("Expected hasPanic=%v, got %v", tt.hasPanic, target.HasPanic)
 			}
@@ -229,7 +229,7 @@ func TestGetFunctionSignature(t *testing.T) {
 			expected: "func LogMessage(msg string)",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sig := tt.target.GetFunctionSignature()

@@ -32,11 +32,11 @@ type model struct {
 	error      error
 	aiClient   *ai.Client
 	generator  *generator.Generator
-	
+
 	// UI state
-	spinner    int
-	width      int
-	height     int
+	spinner int
+	width   int
+	height  int
 }
 
 type fileChangedMsg struct{}
@@ -109,7 +109,7 @@ func (m model) View() string {
 		Bold(true).
 		Foreground(lipgloss.Color("12")).
 		MarginBottom(1)
-	
+
 	s.WriteString(headerStyle.Render("🔮 Glyph - AI Code Generator"))
 	s.WriteString("\n\n")
 
@@ -156,7 +156,7 @@ func (m model) View() string {
 func (m model) regenerate() tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		
+
 		// Parse the declaration
 		decl, err := parser.ParseFile(m.filePath)
 		if err != nil {
