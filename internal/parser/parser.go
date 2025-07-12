@@ -7,6 +7,14 @@ import (
 	"go/token"
 	"os"
 	"strings"
+
+	astutils "github.com/rail44/glyph/internal/ast"
+)
+
+const (
+	// maxCommentGap is the maximum allowed gap between a glyph comment and its target function
+	// This prevents associating comments that are too far from the function
+	maxCommentGap = 50
 )
 
 // FileInfo contains information about the parsed file
@@ -65,7 +73,7 @@ func ParseFileInfo(filePath string) (*FileInfo, error) {
 	}
 
 	fset := token.NewFileSet()
-	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+	node, err := parser.ParseFile(fset, filePath, sourceContent, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse file: %w", err)
 	}
@@ -136,7 +144,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 
 			// Look for glyph comment right before function
 			for pos, instr := range glyphComments {
-				if pos < x.Pos() && x.Pos()-pos < 50 { // Allow small gap
+				if pos < x.Pos() && x.Pos()-pos < maxCommentGap {
 					instruction = instr
 					found = true
 					break
@@ -163,7 +171,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			if x.Recv != nil && len(x.Recv.List) > 0 {
 				recv := x.Recv.List[0]
 				target.Receiver = &Receiver{
-					Type: getTypeString(recv.Type),
+					Type: astutils.GetTypeString(recv.Type),
 				}
 				if len(recv.Names) > 0 {
 					target.Receiver.Name = recv.Names[0].Name
@@ -173,7 +181,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			// Parse parameters
 			if x.Type.Params != nil {
 				for _, field := range x.Type.Params.List {
-					paramType := getTypeString(field.Type)
+					paramType := astutils.GetTypeString(field.Type)
 					if len(field.Names) == 0 {
 						// Unnamed parameter
 						target.Params = append(target.Params, Param{
@@ -194,7 +202,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			// Parse return values
 			if x.Type.Results != nil {
 				for _, field := range x.Type.Results.List {
-					retType := getTypeString(field.Type)
+					retType := astutils.GetTypeString(field.Type)
 					// Return values can have multiple types in one field
 					if len(field.Names) == 0 {
 						target.Returns = append(target.Returns, Return{
@@ -245,28 +253,6 @@ func containsNotImplementedPanic(body *ast.BlockStmt) bool {
 	return found
 }
 
-func getTypeString(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		return t.Name
-	case *ast.ArrayType:
-		return "[]" + getTypeString(t.Elt)
-	case *ast.StarExpr:
-		return "*" + getTypeString(t.X)
-	case *ast.SelectorExpr:
-		return getTypeString(t.X) + "." + t.Sel.Name
-	case *ast.FuncType:
-		return "func" // Simplified for now
-	case *ast.InterfaceType:
-		return "interface{}"
-	case *ast.MapType:
-		return "map[" + getTypeString(t.Key) + "]" + getTypeString(t.Value)
-	case *ast.ChanType:
-		return "chan " + getTypeString(t.Value)
-	default:
-		return "unknown"
-	}
-}
 
 // GetFunctionSignature returns a string representation of the function signature
 func (t *Target) GetFunctionSignature() string {

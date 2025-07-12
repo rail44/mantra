@@ -8,8 +8,10 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	astutils "github.com/rail44/glyph/internal/ast"
 	"github.com/rail44/glyph/internal/parser"
 )
 
@@ -81,15 +83,11 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	}
 
 	// Sort by start line in descending order (process from bottom to top)
-	for i := 0; i < len(targetsToProcess); i++ {
-		for j := i + 1; j < len(targetsToProcess); j++ {
-			iStartLine := targetsToProcess[i].TokenSet.Position(targetsToProcess[i].FuncDecl.Pos()).Line
-			jStartLine := targetsToProcess[j].TokenSet.Position(targetsToProcess[j].FuncDecl.Pos()).Line
-			if iStartLine < jStartLine {
-				targetsToProcess[i], targetsToProcess[j] = targetsToProcess[j], targetsToProcess[i]
-			}
-		}
-	}
+	sort.Slice(targetsToProcess, func(i, j int) bool {
+		iStartLine := targetsToProcess[i].TokenSet.Position(targetsToProcess[i].FuncDecl.Pos()).Line
+		jStartLine := targetsToProcess[j].TokenSet.Position(targetsToProcess[j].FuncDecl.Pos()).Line
+		return iStartLine > jStartLine // Descending order
+	})
 
 	// Replace each glyph function with its implementation (from bottom to top)
 	for _, target := range targetsToProcess {
@@ -129,7 +127,7 @@ func (g *Generator) replaceFunctionBody(content string, target *parser.Target, i
 				// For methods, also check receiver type matches
 				if target.Receiver != nil && funcDecl.Recv != nil {
 					if len(funcDecl.Recv.List) > 0 {
-						receiverType := g.getTypeString(funcDecl.Recv.List[0].Type)
+						receiverType := astutils.GetTypeString(funcDecl.Recv.List[0].Type)
 						if receiverType == target.Receiver.Type {
 							targetFound = true
 						}
@@ -168,29 +166,6 @@ func (g *Generator) replaceFunctionBody(content string, target *parser.Target, i
 	return buf.String(), nil
 }
 
-// parseImplementationAsBlock parses implementation code as a block statement
-func (g *Generator) parseImplementationAsBlock(implementation string) (*ast.BlockStmt, error) {
-	// Wrap implementation in a function to parse as valid Go code
-	testFunc := fmt.Sprintf("package main\nfunc test() {\n%s\n}", implementation)
-
-	fset := token.NewFileSet()
-	node, err := goparser.ParseFile(fset, "<generated-implementation>", testFunc, 0)
-	if err != nil {
-		return nil, fmt.Errorf("implementation is not valid Go code: %w", err)
-	}
-
-	// Extract the function body
-	if len(node.Decls) == 0 {
-		return &ast.BlockStmt{}, nil
-	}
-
-	funcDecl, ok := node.Decls[0].(*ast.FuncDecl)
-	if !ok || funcDecl.Body == nil {
-		return &ast.BlockStmt{}, nil
-	}
-
-	return funcDecl.Body, nil
-}
 
 // parseImplementationAsBlockWithFileSet parses implementation code as a block statement using the provided FileSet
 func (g *Generator) parseImplementationAsBlockWithFileSet(implementation string, fset *token.FileSet) (*ast.BlockStmt, error) {
@@ -249,29 +224,6 @@ func (g *Generator) convertMethodToFunctionAST(funcDecl *ast.FuncDecl, target *p
 	funcDecl.Recv = nil
 }
 
-// getTypeString returns a string representation of an AST type expression
-func (g *Generator) getTypeString(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		return t.Name
-	case *ast.ArrayType:
-		return "[]" + g.getTypeString(t.Elt)
-	case *ast.StarExpr:
-		return "*" + g.getTypeString(t.X)
-	case *ast.SelectorExpr:
-		return g.getTypeString(t.X) + "." + t.Sel.Name
-	case *ast.FuncType:
-		return "func" // Simplified for now
-	case *ast.InterfaceType:
-		return "interface{}"
-	case *ast.MapType:
-		return "map[" + g.getTypeString(t.Key) + "]" + g.getTypeString(t.Value)
-	case *ast.ChanType:
-		return "chan " + g.getTypeString(t.Value)
-	default:
-		return "unknown"
-	}
-}
 
 // cleanCode performs basic cleanup and validates the generated function
 func cleanCode(response string) string {
@@ -361,13 +313,7 @@ func (g *Generator) collectNecessaryImports(fileInfo *parser.FileInfo, implement
 	}
 
 	// Sort for consistent output
-	for i := 0; i < len(imports); i++ {
-		for j := i + 1; j < len(imports); j++ {
-			if imports[i] > imports[j] {
-				imports[i], imports[j] = imports[j], imports[i]
-			}
-		}
-	}
+	sort.Strings(imports)
 
 	return imports
 }
