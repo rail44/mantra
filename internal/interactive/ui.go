@@ -174,7 +174,7 @@ func (m model) regenerate() tea.Cmd {
 		fullPrompt := builder.Build(decl)
 
 		// Generate implementation
-		response, err := m.aiClient.Generate(ctx, fullPrompt)
+		response, err := m.aiClient.GenerateWithDeclaration(ctx, fullPrompt, decl)
 		if err != nil {
 			return generationCompleteMsg{err: fmt.Errorf("generation error: %w", err)}
 		}

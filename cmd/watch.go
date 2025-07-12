@@ -14,6 +14,10 @@ import (
 	"github.com/rail44/glyph/internal/interactive"
 )
 
+var (
+	watchMode string
+)
+
 var watchCmd = &cobra.Command{
 	Use:   "watch <file>",
 	Short: "Watch a declaration file and generate implementation in real-time",
@@ -46,13 +50,22 @@ regenerates the implementation using AI whenever the file is saved.`,
 
 func init() {
 	rootCmd.AddCommand(watchCmd)
+	
+	watchCmd.Flags().StringVar(&watchMode, "mode", "", "Generation mode (spanner, generic, etc.)")
+	viper.BindPFlag("mode", watchCmd.Flags().Lookup("mode"))
 }
 
 func runInteractiveMode(filePath string) error {
 	// Create AI client with config
+	mode := viper.GetString("mode")
+	if mode == "" {
+		mode = "spanner" // Default mode
+	}
+	
 	config := &ai.Config{
 		Model:   viper.GetString("model"),
 		Host:    viper.GetString("host"),
+		Mode:    mode,
 	}
 	
 	aiClient, err := ai.NewClient(config)

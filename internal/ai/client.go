@@ -5,14 +5,19 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/ollama/ollama/api"
+	"github.com/rail44/glyph/internal/modelfile"
+	"github.com/rail44/glyph/internal/parser"
 )
 
 type Client struct {
-	ollama *api.Client
-	config *Config
+	ollama   *api.Client
+	config   *Config
+	renderer *modelfile.Renderer
 }
 
 func NewClient(config *Config) (*Client, error) {
@@ -35,9 +40,17 @@ func NewClient(config *Config) (*Client, error) {
 		ollamaClient = api.NewClient(defaultURL, http.DefaultClient)
 	}
 
+	// Create modelfile renderer
+	mode := config.Mode
+	if mode == "" {
+		mode = "spanner" // Default mode
+	}
+	renderer := modelfile.NewRenderer(mode)
+
 	return &Client{
-		ollama: ollamaClient,
-		config: config,
+		ollama:   ollamaClient,
+		config:   config,
+		renderer: renderer,
 	}, nil
 }
 
@@ -115,6 +128,63 @@ func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan stri
 	}()
 
 	return outputCh, errorCh
+}
+
+// GenerateWithDeclaration generates code using mode-specific Modelfile
+func (c *Client) GenerateWithDeclaration(ctx context.Context, prompt string, decl *parser.Declaration) (string, error) {
+	// Create temporary Modelfile
+	modelfilePath, err := c.renderer.CreateTempModelfile(decl)
+	if err != nil {
+		return "", fmt.Errorf("failed to create modelfile: %w", err)
+	}
+	defer os.Remove(modelfilePath)
+
+	// Create a unique model name for this session
+	modelName := fmt.Sprintf("glyph-temp-%d", os.Getpid())
+	
+	// Create the model using ollama
+	if err := c.createModel(modelName, modelfilePath); err != nil {
+		return "", fmt.Errorf("failed to create model: %w", err)
+	}
+	defer c.deleteModel(modelName)
+
+	// Generate using the custom model
+	return c.generateWithModel(ctx, modelName, prompt)
+}
+
+func (c *Client) createModel(name, modelfilePath string) error {
+	cmd := exec.Command("ollama", "create", name, "-f", modelfilePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ollama create failed: %w\nOutput: %s", err, string(output))
+	}
+	return nil
+}
+
+func (c *Client) deleteModel(name string) error {
+	cmd := exec.Command("ollama", "rm", name)
+	// Ignore errors as this is cleanup
+	cmd.Run()
+	return nil
+}
+
+func (c *Client) generateWithModel(ctx context.Context, modelName, prompt string) (string, error) {
+	var response strings.Builder
+	
+	err := c.ollama.Generate(ctx, &api.GenerateRequest{
+		Model:  modelName,
+		Prompt: prompt,
+		Stream: new(bool), // Disable streaming for simplicity
+	}, func(resp api.GenerateResponse) error {
+		response.WriteString(resp.Response)
+		return nil
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("generation failed: %w", err)
+	}
+
+	return response.String(), nil
 }
 
 // CheckModel verifies if the specified model is available

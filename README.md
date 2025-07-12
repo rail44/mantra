@@ -8,7 +8,8 @@ Glyph is a local-first interactive development tool that generates AI-powered Sp
 - **Real-time Generation**: Watch mode automatically regenerates code on file changes
 - **Human-in-the-Loop**: Preserves manual edits and optimizations
 - **Local-First**: Everything runs on your machine with Ollama
-- **Spanner Optimized**: Built-in best practices for Google Cloud Spanner
+- **Multiple Modes**: Spanner-optimized or generic Go code generation
+- **Dynamic Prompts**: Mode-specific examples and best practices
 
 ## Installation
 
@@ -105,8 +106,14 @@ Watches for file changes and regenerates automatically. Ideal for interactive de
   --config string   config file (default is $HOME/.glyph.yaml)
   --host string     Ollama host (default from OLLAMA_HOST env)
   --model string    AI model to use (default "devstral")
+  --mode string     Generation mode: "spanner" (default) or "generic"
   -h, --help        help for glyph
 ```
+
+### Generation Modes
+
+- **spanner**: Optimized for Google Cloud Spanner with best practices for distributed databases
+- **generic**: General-purpose Go code generation for any use case
 
 ## How It Works
 

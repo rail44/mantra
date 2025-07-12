@@ -8,6 +8,7 @@ import (
 type Config struct {
 	Model        string
 	Host         string
+	Mode         string        // Generation mode (spanner, generic, etc.)
 	Timeout      time.Duration
 	Temperature  float32
 	SystemPrompt string

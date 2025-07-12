@@ -15,6 +15,10 @@ import (
 	"github.com/rail44/glyph/internal/prompt"
 )
 
+var (
+	generateMode string
+)
+
 var generateCmd = &cobra.Command{
 	Use:   "generate <file>",
 	Short: "Generate implementation once without watching",
@@ -48,6 +52,9 @@ integration with other tools.`,
 
 func init() {
 	rootCmd.AddCommand(generateCmd)
+	
+	generateCmd.Flags().StringVar(&generateMode, "mode", "", "Generation mode (spanner, generic, etc.)")
+	viper.BindPFlag("mode", generateCmd.Flags().Lookup("mode"))
 }
 
 func runGeneration(filePath string) error {
@@ -73,12 +80,22 @@ func runGeneration(filePath string) error {
 	fullPrompt := builder.Build(decl)
 
 	// Create AI client
+	mode := viper.GetString("mode")
+	if mode == "" {
+		if generateMode != "" {
+			mode = generateMode
+		} else {
+			mode = "spanner" // Default mode
+		}
+	}
+	
 	config := &ai.Config{
 		Model: viper.GetString("model"),
 		Host:  viper.GetString("host"),
+		Mode:  mode,
 	}
 	
-	fmt.Printf("Creating AI client (model: %s)...\n", config.Model)
+	fmt.Printf("Creating AI client (model: %s, mode: %s)...\n", config.Model, config.Mode)
 	aiClient, err := ai.NewClient(config)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
@@ -87,7 +104,7 @@ func runGeneration(filePath string) error {
 	// Generate implementation
 	fmt.Println("Generating implementation...")
 	ctx := context.Background()
-	response, err := aiClient.Generate(ctx, fullPrompt)
+	response, err := aiClient.GenerateWithDeclaration(ctx, fullPrompt, decl)
 	if err != nil {
 		return fmt.Errorf("generation error: %w", err)
 	}
