@@ -5,7 +5,7 @@ Glyph is a local-first AI-powered Go code generation tool that transforms natura
 ## Features
 
 - **Natural Language Programming**: Describe what you want in plain language
-- **In-Place Generation**: Replaces `panic("not implemented")` with actual code
+- **Safe Generation**: Generates implementations to separate files, preserving original source
 - **Context-Aware**: Understands your function signatures and surrounding code
 - **Local-First**: Everything runs on your machine with Ollama
 - **Real-time Streaming**: See generation progress as it happens
@@ -73,18 +73,15 @@ glyph generate main.go
 
 ### Output Modes
 
-#### In-Place Generation (Default)
-- Replaces `panic("not implemented")` statements directly in source files
-- Keeps original file structure and package
-
-#### Separate File Generation (`--separate`)
+#### Safe Separate File Generation (Default)
 - Preserves original source files unchanged
 - Generates implementations in separate package
 - Methods become functions with receiver as first parameter
-- Useful for:
-  - Code review and validation
-  - Gradual integration
-  - Backup and comparison
+- Benefits:
+  - Source code protection
+  - Easy code review and validation
+  - Gradual integration workflow
+  - Version control friendly
 
 ## Configuration
 
@@ -117,21 +114,17 @@ Generates implementations for all functions with `// glyph:` comments.
 - `--host string`: Ollama host URL (default: `http://localhost:11434`)
 - `--no-stream`: Disable streaming output (faster for scripting)
 - `--debug-timing`: Show detailed timing information
-- `--separate`: Generate to separate files instead of modifying source
 - `--output-dir string`: Directory for generated files (default: `./generated`)
 - `--package-name string`: Package name for generated files (default: `generated`)
 
 ### Output Options
 
 ```bash
-# Default: replace panic statements in source files
+# Default: generate to separate files (preserves original source)
 glyph generate main.go
 
-# Generate to separate files (preserves original source)
-glyph generate main.go --separate
-
 # Generate to custom directory and package
-glyph generate main.go --separate --output-dir ./impl --package-name impl
+glyph generate main.go --output-dir ./impl --package-name impl
 ```
 
 ### Performance Options

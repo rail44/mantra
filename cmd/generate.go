@@ -17,12 +17,11 @@ import (
 )
 
 var (
-	generateMode   string
-	debugTiming    bool
-	noStream       bool
-	outputDir      string
-	packageName    string
-	separateOutput bool
+	generateMode string
+	debugTiming  bool
+	noStream     bool
+	outputDir    string
+	packageName  string
 )
 
 var generateCmd = &cobra.Command{
@@ -66,12 +65,9 @@ func init() {
 	generateCmd.Flags().BoolVar(&noStream, "no-stream", false, "Disable streaming output")
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "./generated", "Directory for generated files")
 	generateCmd.Flags().StringVar(&packageName, "package-name", "generated", "Package name for generated files")
-	generateCmd.Flags().BoolVar(&separateOutput, "separate", false, "Generate to separate files instead of modifying source")
 }
 
 func runGeneration(filePath string) error {
-	totalStart := time.Now()
-	
 	fmt.Printf("Generating implementation for: %s\n", filePath)
 	
 	// Parse the file to find generation targets
@@ -91,16 +87,6 @@ func runGeneration(filePath string) error {
 	}
 	
 	fmt.Printf("Found %d generation targets\n", len(targets))
-	
-	// Read file content for context
-	readStart := time.Now()
-	fileContent, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-	if debugTiming {
-		fmt.Printf("  [Timing] File read took: %v\n", time.Since(readStart))
-	}
 	
 	// Use the mode from flag
 	mode := generateMode
@@ -137,138 +123,19 @@ func runGeneration(filePath string) error {
 		fmt.Printf("  [Timing] Model check took: %v\n", time.Since(modelCheckStart))
 	}
 	
-	// Create generator with appropriate configuration
-	var gen *generator.Generator
-	if separateOutput {
-		// Use new separate output approach
-		genConfig := &generator.Config{
-			OutputDir:     outputDir,
-			PackageName:   packageName,
-			SourcePackage: "", // Will be determined from file
-		}
-		gen = generator.New(genConfig)
-	} else {
-		// Use backwards compatible approach
-		gen = generator.New(nil)
+	// Always use separate output approach
+	genConfig := &generator.Config{
+		OutputDir:     outputDir,
+		PackageName:   packageName,
+		SourcePackage: "", // Will be determined from file
 	}
+	gen := generator.New(genConfig)
 	
 	// Create prompt builder
 	promptBuilder := prompt.NewBuilder(mode)
 	
-	// If using separate output, handle differently
-	if separateOutput {
-		return runSeparateGeneration(filePath, gen, promptBuilder, aiClient, targets, debugTiming, noStream)
-	}
-	
-	// Process each target (existing approach)
-	for i, target := range targets {
-		targetStart := time.Now()
-		fmt.Printf("\n[%d/%d] Generating: %s\n", i+1, len(targets), target.Name)
-		fmt.Printf("  Instruction: %s\n", target.Instruction)
-		
-		// Skip if no panic("not implemented")
-		if !target.HasPanic {
-			fmt.Println("  Skipping: no panic(\"not implemented\") found")
-			continue
-		}
-		
-		// Build prompt
-		promptStart := time.Now()
-		fullPrompt := promptBuilder.BuildForTarget(target, string(fileContent))
-		if debugTiming {
-			fmt.Printf("  [Timing] Prompt building took: %v\n", time.Since(promptStart))
-			fmt.Printf("  [Timing] Prompt length: %d chars\n", len(fullPrompt))
-		}
-		
-		// Generate implementation
-		genStart := time.Now()
-		var response string
-		
-		if noStream {
-			// Non-streaming mode
-			fmt.Println("  Generating implementation...")
-			response, err = aiClient.Generate(ctx, fullPrompt)
-			if err != nil {
-				return fmt.Errorf("generation error for %s: %w", target.Name, err)
-			}
-		} else {
-			// Streaming mode
-			fmt.Print("  Generating implementation: ")
-			
-			outputCh, errorCh := aiClient.GenerateStream(ctx, fullPrompt)
-			var responseBuilder strings.Builder
-			
-			// Track if we've shown any output
-			firstOutput := true
-			charCount := 0
-			
-			// Process streaming output
-			for {
-				select {
-				case chunk, ok := <-outputCh:
-					if !ok {
-						// Channel closed, we're done
-						response = responseBuilder.String()
-						fmt.Println() // New line after streaming
-						goto streamDone
-					}
-					responseBuilder.WriteString(chunk)
-					
-					// Show progress dots instead of the actual code
-					if firstOutput {
-						firstOutput = false
-					}
-					charCount += len(chunk)
-					// Print a dot for every 10 characters received
-					for i := 0; i < len(chunk)/10; i++ {
-						fmt.Print(".")
-					}
-					
-				case err := <-errorCh:
-					if err != nil {
-						fmt.Println() // New line before error
-						return fmt.Errorf("generation error for %s: %w", target.Name, err)
-					}
-				}
-			}
-			streamDone:
-		}
-		
-		if debugTiming {
-			fmt.Printf("  [Timing] AI generation took: %v\n", time.Since(genStart))
-		}
-		
-		// Apply the generated code
-		applyStart := time.Now()
-		fmt.Println("  Applying generated code...")
-		err = gen.GenerateForTarget(target, response)
-		if err != nil {
-			return fmt.Errorf("failed to apply generated code for %s: %w", target.Name, err)
-		}
-		if debugTiming {
-			fmt.Printf("  [Timing] Code application took: %v\n", time.Since(applyStart))
-		}
-		
-		fmt.Println("  ✓ Successfully generated")
-		if debugTiming {
-			fmt.Printf("  [Timing] Total for %s: %v\n", target.Name, time.Since(targetStart))
-		}
-		
-		// Reload file content for next target (since file was modified)
-		fileContent, err = os.ReadFile(filePath)
-		if err != nil {
-			return fmt.Errorf("failed to reload file: %w", err)
-		}
-	}
-	
-	totalTime := time.Since(totalStart)
-	fmt.Printf("\n✓ All implementations generated successfully!")
-	if debugTiming {
-		fmt.Printf("\n  [Timing] Total execution time: %v\n", totalTime)
-	} else {
-		fmt.Printf(" (took %v)\n", totalTime)
-	}
-	return nil
+	// Use separate generation approach
+	return runSeparateGeneration(filePath, gen, promptBuilder, aiClient, targets, debugTiming, noStream)
 }
 
 // runSeparateGeneration handles generation with separate output files

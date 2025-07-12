@@ -109,23 +109,17 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	// Package declaration
 	content.WriteString(fmt.Sprintf("package %s\n\n", g.config.PackageName))
 	
-	// Imports
-	content.WriteString("import (\n")
+	// Collect necessary imports
+	necessaryImports := g.collectNecessaryImports(fileInfo, implementations)
 	
-	// Add source package import if needed (only if it's not "main" and not the same as current package)
-	if g.config.SourcePackage != "" && g.config.SourcePackage != g.config.PackageName && g.config.SourcePackage != "main" {
-		content.WriteString(fmt.Sprintf("\t\"%s\"\n", g.config.SourcePackage))
+	// Only add import section if we have imports
+	if len(necessaryImports) > 0 {
+		content.WriteString("import (\n")
+		for _, imp := range necessaryImports {
+			content.WriteString(fmt.Sprintf("\t\"%s\"\n", imp))
+		}
+		content.WriteString(")\n\n")
 	}
-	
-	// Add original imports that might be needed
-	for _, imp := range fileInfo.Imports {
-		content.WriteString(fmt.Sprintf("\t\"%s\"\n", imp.Path))
-	}
-	
-	// Add fmt import since it's commonly needed for error messages
-	content.WriteString("\t\"fmt\"\n")
-	
-	content.WriteString(")\n\n")
 	
 	// Generate functions for each target
 	for _, target := range fileInfo.Targets {
@@ -370,10 +364,14 @@ func cleanCode(response string) string {
 	return response
 }
 
-// validateGeneratedFunction checks if the generated code is a valid Go function
+// validateGeneratedFunction checks if the generated code is valid as a function body
 func validateGeneratedFunction(code string) error {
-	// Add temporary package declaration for parsing
-	testCode := "package main\n\n" + code
+	// Create a test function with the generated body
+	testCode := fmt.Sprintf(`package main
+
+func testFunc() {
+%s
+}`, code)
 	
 	// Try to parse as Go code
 	fset := token.NewFileSet()
@@ -382,12 +380,92 @@ func validateGeneratedFunction(code string) error {
 		return fmt.Errorf("generated code is not valid Go: %w", err)
 	}
 	
-	// Check if it contains at least one function
-	if !strings.Contains(code, "func ") {
-		return fmt.Errorf("generated code does not contain a function")
+	return nil
+}
+
+// collectNecessaryImports analyzes generated code to determine which imports are actually needed
+func (g *Generator) collectNecessaryImports(fileInfo *parser.FileInfo, implementations map[string]string) []string {
+	importSet := make(map[string]bool)
+	
+	// Analyze all generated implementations and function signatures to find used imports
+	allGeneratedCode := strings.Builder{}
+	for _, impl := range implementations {
+		allGeneratedCode.WriteString(impl)
+		allGeneratedCode.WriteString("\n")
 	}
 	
-	return nil
+	// Also include function signatures to check for type references
+	for _, target := range fileInfo.Targets {
+		if target.Receiver != nil {
+			allGeneratedCode.WriteString(target.Receiver.Type)
+			allGeneratedCode.WriteString("\n")
+		}
+		for _, param := range target.Params {
+			allGeneratedCode.WriteString(param.Type)
+			allGeneratedCode.WriteString("\n")
+		}
+		for _, ret := range target.Returns {
+			allGeneratedCode.WriteString(ret.Type)
+			allGeneratedCode.WriteString("\n")
+		}
+	}
+	
+	generatedText := allGeneratedCode.String()
+	
+	// Check which of the original imports are actually used in generated code
+	for _, imp := range fileInfo.Imports {
+		if g.isImportUsed(generatedText, imp.Path) {
+			importSet[imp.Path] = true
+		}
+	}
+	
+	// Check if source package is actually used in the generated functions
+	if g.config.SourcePackage != "" && g.config.SourcePackage != g.config.PackageName && g.config.SourcePackage != "main" {
+		if g.isImportUsed(generatedText, g.config.SourcePackage) {
+			importSet[g.config.SourcePackage] = true
+		}
+	}
+	
+	// Convert set to sorted slice
+	var imports []string
+	for imp := range importSet {
+		imports = append(imports, imp)
+	}
+	
+	// Sort for consistent output
+	for i := 0; i < len(imports); i++ {
+		for j := i + 1; j < len(imports); j++ {
+			if imports[i] > imports[j] {
+				imports[i], imports[j] = imports[j], imports[i]
+			}
+		}
+	}
+	
+	return imports
+}
+
+// isImportUsed checks if an import is used in the generated code
+func (g *Generator) isImportUsed(code, importPath string) bool {
+	// Extract package name from import path
+	parts := strings.Split(importPath, "/")
+	packageName := parts[len(parts)-1]
+	
+	// Handle special package names
+	switch packageName {
+	case "context":
+		return strings.Contains(code, "context.") || strings.Contains(code, "Context")
+	case "fmt":
+		return strings.Contains(code, "fmt.") || strings.Contains(code, "Sprintf") || strings.Contains(code, "Printf") || strings.Contains(code, "Errorf")
+	case "strings":
+		return strings.Contains(code, "strings.")
+	case "time":
+		return strings.Contains(code, "time.") || strings.Contains(code, "Time")
+	case "errors":
+		return strings.Contains(code, "errors.")
+	default:
+		// For other packages, check if package name is used
+		return strings.Contains(code, packageName+".")
+	}
 }
 
 // UpdateImports adds necessary imports to the file

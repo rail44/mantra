@@ -22,18 +22,11 @@ func NewBuilder(mode string) *Builder {
 func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) string {
 	var prompt strings.Builder
 
-	// For simple functions, use a minimal prompt with complete function template
+	// For simple functions, use a minimal prompt
 	if b.isSimpleFunction(target) {
-		prompt.WriteString("Replace the panic statement with proper implementation:\n\n")
-		prompt.WriteString("```go\n")
-		prompt.WriteString(target.GetFunctionSignature())
-		prompt.WriteString(" {\n")
-		prompt.WriteString("\t// Task: ")
-		prompt.WriteString(target.Instruction)
-		prompt.WriteString("\n\tpanic(\"not implemented\")\n")
-		prompt.WriteString("}\n")
-		prompt.WriteString("```\n\n")
-		prompt.WriteString("Return the complete implemented function:\n")
+		prompt.WriteString(fmt.Sprintf("Implement this Go function: %s\n", target.GetFunctionSignature()))
+		prompt.WriteString(fmt.Sprintf("Task: %s\n", target.Instruction))
+		prompt.WriteString("Return only the function body code (the code inside the braces), without the function signature.\n")
 		return prompt.String()
 	}
 
@@ -101,29 +94,18 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 	}
 	prompt.WriteString("\n```\n\n")
 
-	// Add the complete function template for fill-in-the-blank approach
-	prompt.WriteString("## Function to Implement\n")
-	prompt.WriteString("Replace the panic statement in this function with proper implementation:\n\n")
-	prompt.WriteString("```go\n")
-	prompt.WriteString(target.GetFunctionSignature())
-	prompt.WriteString(" {\n")
-	prompt.WriteString("\t// Task: ")
-	prompt.WriteString(target.Instruction)
-	prompt.WriteString("\n\tpanic(\"not implemented\")\n")
-	prompt.WriteString("}\n")
-	prompt.WriteString("```\n\n")
-
 	// Add generation instructions
 	prompt.WriteString("## Instructions\n")
-	prompt.WriteString("1. Return the COMPLETE function with implementation\n")
-	prompt.WriteString("2. Replace panic(\"not implemented\") with working code\n")
-	prompt.WriteString("3. Keep the exact same function signature\n")
-	prompt.WriteString("4. Use proper error handling and Go idioms\n")
-	prompt.WriteString("5. Do NOT include package declaration or imports\n")
-	prompt.WriteString("6. Return only this single function, no additional functions\n")
+	prompt.WriteString("1. Generate ONLY the function body (the code that goes inside the function braces)\n")
+	prompt.WriteString("2. Do NOT include the function signature, package declaration, or imports\n")
+	prompt.WriteString("3. Do NOT generate multiple functions or any other functions\n")
+	prompt.WriteString("4. Do NOT include any comments or explanations\n")
+	prompt.WriteString("5. Replace the panic(\"not implemented\") with actual implementation\n")
+	prompt.WriteString("6. Use proper error handling and Go idioms\n")
+	prompt.WriteString("7. Return code that can be directly placed inside the function braces\n")
 	prompt.WriteString("\n")
 
-	prompt.WriteString("Provide the complete implemented function:\n")
+	prompt.WriteString("Generate ONLY the function body code (no signatures, no extra functions):\n")
 
 	return prompt.String()
 }
