@@ -21,14 +21,30 @@ func New(declarationPath string) *Generator {
 // Generate processes the AI response and creates the implementation file
 func (g *Generator) Generate(aiResponse string) error {
 	// Clean the response (remove any markdown formatting if present)
-	code := cleanCode(aiResponse)
+	functionCode := cleanCode(aiResponse)
+
+	// Read the existing implementation file if it exists
+	existingContent := ""
+	if data, err := os.ReadFile(g.outputPath); err == nil {
+		existingContent = string(data)
+	}
+
+	// Build the complete file content
+	var fullCode string
+	if existingContent != "" {
+		// If file exists, append the new function
+		fullCode = existingContent + "\n" + functionCode
+	} else {
+		// If file doesn't exist, create a new one with imports
+		fullCode = g.buildNewFile(functionCode)
+	}
 
 	// Format the Go code
-	formatted, err := format.Source([]byte(code))
+	formatted, err := format.Source([]byte(fullCode))
 	if err != nil {
 		// If formatting fails, use the original code but log the error
 		fmt.Fprintf(os.Stderr, "Warning: failed to format generated code: %v\n", err)
-		formatted = []byte(code)
+		formatted = []byte(fullCode)
 	}
 
 	// Ensure directory exists
@@ -56,6 +72,29 @@ func getOutputPath(declarationPath string) string {
 	ext := filepath.Ext(base)
 	name := strings.TrimSuffix(base, ext)
 	return filepath.Join(dir, name+"_impl"+ext)
+}
+
+func (g *Generator) buildNewFile(functionCode string) string {
+	// Extract package name from the output path
+	dir := filepath.Base(filepath.Dir(g.outputPath))
+	if dir == "." || dir == "/" {
+		dir = "main"
+	}
+
+	// Build a new file with standard imports
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("package %s\n\n", dir))
+	sb.WriteString("import (\n")
+	sb.WriteString("\t\"context\"\n")
+	sb.WriteString("\t\"fmt\"\n")
+	sb.WriteString("\t\"time\"\n")
+	sb.WriteString("\n")
+	sb.WriteString("\t\"cloud.google.com/go/spanner\"\n")
+	sb.WriteString("\t\"google.golang.org/api/iterator\"\n")
+	sb.WriteString(")\n\n")
+	sb.WriteString(functionCode)
+	
+	return sb.String()
 }
 
 func cleanCode(response string) string {

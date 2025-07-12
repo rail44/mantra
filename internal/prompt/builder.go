@@ -75,16 +75,17 @@ func (b *Builder) Build(decl *parser.Declaration) string {
 
 	// Add generation instructions
 	prompt.WriteString("## Requirements\n")
-	prompt.WriteString("1. Generate a complete implementation file\n")
-	prompt.WriteString("2. Include all necessary imports\n")
-	prompt.WriteString("3. Implement a function that accepts context.Context and *spanner.Client\n")
-	prompt.WriteString("4. Use proper error handling with wrapped errors\n")
-	prompt.WriteString("5. Follow Go idioms and best practices\n")
-	prompt.WriteString("6. Optimize queries for Spanner's distributed architecture\n")
-	prompt.WriteString("7. Include helpful comments explaining complex logic\n")
+	prompt.WriteString("1. Generate ONLY the function implementation\n")
+	prompt.WriteString("2. DO NOT include package declaration, imports, or type definitions\n")
+	prompt.WriteString("3. Function name should be Execute<RequestTypeName>\n")
+	prompt.WriteString("4. Function signature: func Execute<RequestTypeName>(ctx context.Context, client *spanner.Client, req *<RequestTypeName>) (*<ResponseTypeName>, error)\n")
+	prompt.WriteString("5. Use proper error handling with fmt.Errorf\n")
+	prompt.WriteString("6. Follow Go idioms and best practices\n")
+	prompt.WriteString("7. Optimize queries for Spanner's distributed architecture\n")
+	prompt.WriteString("8. Use read-only transactions when appropriate\n")
 	prompt.WriteString("\n")
 
-	prompt.WriteString("Generate only the Go code without any explanation or markdown formatting.\n")
+	prompt.WriteString("Generate only the function implementation without any package declaration, imports, type definitions, or markdown formatting.\n")
 
 	return prompt.String()
 }
