@@ -5,19 +5,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/ollama/ollama/api"
-	"github.com/rail44/glyph/internal/modelfile"
-	"github.com/rail44/glyph/internal/parser"
 )
 
 type Client struct {
-	ollama   *api.Client
-	config   *Config
-	renderer *modelfile.Renderer
+	ollama      *api.Client
+	config      *Config
+	debugTiming bool
 }
 
 func NewClient(config *Config) (*Client, error) {
@@ -40,35 +37,48 @@ func NewClient(config *Config) (*Client, error) {
 		ollamaClient = api.NewClient(defaultURL, http.DefaultClient)
 	}
 
-	// Create modelfile renderer
-	mode := config.Mode
-	if mode == "" {
-		mode = "spanner" // Default mode
-	}
-	renderer := modelfile.NewRenderer(mode)
-
 	return &Client{
-		ollama:   ollamaClient,
-		config:   config,
-		renderer: renderer,
+		ollama: ollamaClient,
+		config: config,
 	}, nil
+}
+
+// SetDebugTiming enables detailed timing information
+func (c *Client) SetDebugTiming(enabled bool) {
+	c.debugTiming = enabled
 }
 
 // Generate sends a prompt to the AI and returns the response
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
+	totalStart := time.Now()
+	
+	// Build messages based on mode
+	buildStart := time.Now()
 	messages := []api.Message{
-		{
-			Role:    "system",
-			Content: c.config.SystemPrompt,
-		},
 		{
 			Role:    "user",
 			Content: prompt,
 		},
 	}
 
+	// Add system prompt if mode is set
+	if c.config.Mode == "spanner" {
+		messages = append([]api.Message{{
+			Role:    "system",
+			Content: spannerSystemPrompt,
+		}}, messages...)
+	}
+	if c.debugTiming {
+		fmt.Printf("    [AI Timing] Message building: %v\n", time.Since(buildStart))
+		fmt.Printf("    [AI Timing] Prompt size: %d chars\n", len(prompt))
+	}
+
 	var response strings.Builder
+	firstTokenTime := time.Duration(0)
+	tokenCount := 0
 	
+	// Make the API call
+	apiCallStart := time.Now()
 	err := c.ollama.Chat(ctx, &api.ChatRequest{
 		Model:    c.config.Model,
 		Messages: messages,
@@ -76,9 +86,28 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 			"temperature": c.config.Temperature,
 		},
 	}, func(resp api.ChatResponse) error {
+		if firstTokenTime == 0 {
+			firstTokenTime = time.Since(apiCallStart)
+			if c.debugTiming {
+				fmt.Printf("    [AI Timing] First token received: %v\n", firstTokenTime)
+			}
+		}
+		tokenCount++
 		response.WriteString(resp.Message.Content)
 		return nil
 	})
+
+	totalTime := time.Since(totalStart)
+	
+	if c.debugTiming {
+		fmt.Printf("    [AI Timing] Total API call: %v\n", time.Since(apiCallStart))
+		fmt.Printf("    [AI Timing] Tokens received: %d\n", tokenCount)
+		fmt.Printf("    [AI Timing] Response size: %d chars\n", response.Len())
+		if tokenCount > 0 && totalTime > 0 {
+			tokensPerSecond := float64(tokenCount) / totalTime.Seconds()
+			fmt.Printf("    [AI Timing] Throughput: %.1f tokens/sec\n", tokensPerSecond)
+		}
+	}
 
 	if err != nil {
 		return "", fmt.Errorf("chat failed: %w", err)
@@ -89,15 +118,20 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 
 // GenerateStream sends a prompt and returns a channel for streaming responses
 func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan string, <-chan error) {
+	// Build messages based on mode
 	messages := []api.Message{
-		{
-			Role:    "system",
-			Content: c.config.SystemPrompt,
-		},
 		{
 			Role:    "user",
 			Content: prompt,
 		},
+	}
+
+	// Add system prompt if mode is set
+	if c.config.Mode == "spanner" {
+		messages = append([]api.Message{{
+			Role:    "system",
+			Content: spannerSystemPrompt,
+		}}, messages...)
 	}
 
 	outputCh := make(chan string, 100)
@@ -130,68 +164,17 @@ func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan stri
 	return outputCh, errorCh
 }
 
-// GenerateWithDeclaration generates code using mode-specific Modelfile
-func (c *Client) GenerateWithDeclaration(ctx context.Context, prompt string, decl *parser.Declaration) (string, error) {
-	// Create temporary Modelfile
-	modelfilePath, err := c.renderer.CreateTempModelfile(decl)
-	if err != nil {
-		return "", fmt.Errorf("failed to create modelfile: %w", err)
-	}
-	defer os.Remove(modelfilePath)
-
-	// Create a unique model name for this session
-	modelName := fmt.Sprintf("glyph-temp-%d", os.Getpid())
-	
-	// Create the model using ollama
-	if err := c.createModel(modelName, modelfilePath); err != nil {
-		return "", fmt.Errorf("failed to create model: %w", err)
-	}
-	defer c.deleteModel(modelName)
-
-	// Generate using the custom model
-	return c.generateWithModel(ctx, modelName, prompt)
-}
-
-func (c *Client) createModel(name, modelfilePath string) error {
-	cmd := exec.Command("ollama", "create", name, "-f", modelfilePath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ollama create failed: %w\nOutput: %s", err, string(output))
-	}
-	return nil
-}
-
-func (c *Client) deleteModel(name string) error {
-	cmd := exec.Command("ollama", "rm", name)
-	// Ignore errors as this is cleanup
-	cmd.Run()
-	return nil
-}
-
-func (c *Client) generateWithModel(ctx context.Context, modelName, prompt string) (string, error) {
-	var response strings.Builder
-	
-	err := c.ollama.Generate(ctx, &api.GenerateRequest{
-		Model:  modelName,
-		Prompt: prompt,
-		Stream: new(bool), // Disable streaming for simplicity
-	}, func(resp api.GenerateResponse) error {
-		response.WriteString(resp.Response)
-		return nil
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("generation failed: %w", err)
-	}
-
-	return response.String(), nil
-}
-
 // CheckModel verifies if the specified model is available
 func (c *Client) CheckModel(ctx context.Context) error {
+	checkStart := time.Now()
+	
 	_, err := c.ollama.Show(ctx, &api.ShowRequest{
 		Model: c.config.Model,
 	})
+	
+	if c.debugTiming {
+		fmt.Printf("    [AI Timing] Model check: %v\n", time.Since(checkStart))
+	}
 	
 	if err != nil {
 		return fmt.Errorf("model %s not found: %w", c.config.Model, err)
@@ -199,3 +182,11 @@ func (c *Client) CheckModel(ctx context.Context) error {
 
 	return nil
 }
+
+const spannerSystemPrompt = `You are an expert Go developer specializing in Google Cloud Spanner. 
+When generating code:
+- Use parameterized queries to prevent SQL injection
+- Consider using read-only transactions for queries when appropriate
+- Use proper error handling with context
+- Follow Go idioms and best practices
+- Optimize for Spanner's distributed architecture`

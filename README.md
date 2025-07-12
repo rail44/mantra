@@ -1,15 +1,15 @@
 # 🔮 Glyph
 
-Glyph is a local-first interactive development tool that generates AI-powered Spanner-optimized Go data access layer code from declarative specifications.
+Glyph is a local-first AI-powered Go code generation tool that transforms natural language instructions into working implementations.
 
 ## Features
 
-- **Declarative Programming**: Focus on *what* you want, not *how* to implement it
-- **Real-time Generation**: Watch mode automatically regenerates code on file changes
-- **Human-in-the-Loop**: Preserves manual edits and optimizations
+- **Natural Language Programming**: Describe what you want in plain language
+- **In-Place Generation**: Replaces `panic("not implemented")` with actual code
+- **Context-Aware**: Understands your function signatures and surrounding code
 - **Local-First**: Everything runs on your machine with Ollama
-- **Multiple Modes**: Spanner-optimized or generic Go code generation
-- **Dynamic Prompts**: Mode-specific examples and best practices
+- **Real-time Streaming**: See generation progress as it happens
+- **Multiple Modes**: Specialized modes for different use cases (Spanner, generic Go)
 
 ## Installation
 
@@ -33,46 +33,42 @@ go build -o glyph .
 
 ## Quick Start
 
-1. Create a declaration file (e.g., `user_queries.go`):
+1. Write your Go code with `// glyph:` comments:
 
 ```go
-package queries
+package main
 
-import "time"
+import "context"
 
-// GetUserRequest represents a request to fetch user information
-// @description Retrieve user details by their unique ID from Spanner
-type GetUserRequest struct {
-    UserID string `json:"user_id"` // The unique identifier of the user
+// glyph: emailでユーザーを検索
+func GetUserByEmail(ctx context.Context, email string) (*User, error) {
+    panic("not implemented")
 }
 
-// GetUserResponse contains the user information
-type GetUserResponse struct {
-    ID        string    `json:"id"`
-    Email     string    `json:"email"`
-    Name      string    `json:"name"`
-    CreatedAt time.Time `json:"created_at"`
-    UpdatedAt time.Time `json:"updated_at"`
+// glyph: 割引率を計算する
+// 購入金額が10000円以上で10%割引
+// 会員ランクがGoldなら追加5%割引
+func CalculateDiscount(amount float64, memberRank string) float64 {
+    panic("not implemented")
 }
 ```
 
-2. Generate implementation:
+2. Generate implementations:
 
 ```bash
-# One-time generation
-glyph generate user_queries.go
-
-# Or watch mode for continuous development
-glyph watch user_queries.go
+glyph generate main.go
 ```
 
-3. Glyph will generate `user_queries_impl.go` with the implementation:
-   - Spanner-optimized SQL queries
-   - Proper error handling
-   - Context support
-   - Best practices applied
+3. Watch the streaming progress as code is generated in real-time!
 
-4. Edit the declaration file and save - the implementation updates automatically!
+## How It Works
+
+1. **Comment Detection**: Glyph finds functions marked with `// glyph:` comments
+2. **Context Analysis**: Analyzes function signatures and surrounding code
+3. **AI Generation**: Sends context and instructions to your local AI model
+4. **Real-time Streaming**: Shows generation progress with live feedback
+5. **Code Replacement**: Replaces panic statements with generated implementations
+6. **Format & Save**: Formats the code and saves it back to the file
 
 ## Configuration
 
@@ -89,47 +85,140 @@ Or use environment variables:
 
 ## Commands
 
-### Generate (One-time)
+### Generate
 ```bash
 glyph generate <file> [flags]
 ```
-Generates implementation once without watching. Perfect for CI/CD or integration with other tools.
 
-### Watch (Interactive)
+Generates implementations for all functions with `// glyph:` comments.
+
+**Flags:**
+- `--mode string`: Generation mode (`spanner` or `generic`)
+- `--model string`: Override AI model
+- `--host string`: Override Ollama host
+- `--no-stream`: Disable streaming output (faster for scripting)
+- `--debug-timing`: Show detailed timing information
+
+### Performance Options
+
+```bash
+# Default: streaming with progress indication
+glyph generate main.go
+
+# Non-streaming for scripting/CI
+glyph generate main.go --no-stream
+
+# Debug performance issues
+glyph generate main.go --debug-timing
+```
+
+### Watch (Coming Soon)
 ```bash
 glyph watch <file> [flags]
 ```
-Watches for file changes and regenerates automatically. Ideal for interactive development.
 
-### Common Flags
-```bash
-  --config string   config file (default is $HOME/.glyph.yaml)
-  --host string     Ollama host (default from OLLAMA_HOST env)
-  --model string    AI model to use (default "devstral")
-  --mode string     Generation mode: "spanner" (default) or "generic"
-  -h, --help        help for glyph
+Watches for file changes and regenerates automatically.
+
+## Writing Effective Instructions
+
+### Basic Instructions
+```go
+// glyph: IDでユーザーを取得
+func GetUser(id string) (*User, error) {
+    panic("not implemented")
+}
 ```
 
-### Generation Modes
+### Detailed Instructions
+```go
+// glyph: ユーザー認証を実行
+// - パスワードをbcryptで検証
+// - 成功時はJWTトークンを生成
+// - 失敗回数をRedisでカウント
+func AuthenticateUser(email, password string) (*Token, error) {
+    panic("not implemented")
+}
+```
 
-- **spanner**: Optimized for Google Cloud Spanner with best practices for distributed databases
-- **generic**: General-purpose Go code generation for any use case
+### Method Generation
+```go
+type UserService struct {
+    db *sql.DB
+}
 
-## How It Works
+// glyph: データベースから全ユーザーを取得
+func (s *UserService) GetAllUsers(ctx context.Context) ([]*User, error) {
+    panic("not implemented")
+}
+```
 
-1. **Declaration Parser**: Analyzes your Go structs using AST
-2. **Context Builder**: Gathers declaration, existing code, and manual edits
-3. **AI Generation**: Sends context to Ollama for implementation
-4. **Code Generator**: Formats and writes the generated code
-5. **File Watcher**: Monitors changes and triggers regeneration
+## Modes
 
-## Development Workflow
+### Generic Mode (Default)
+General-purpose Go code generation for any use case.
 
-1. Write declarative specifications in `*_queries.go` files
-2. Let Glyph generate initial implementations
-3. Manually optimize critical sections if needed
-4. Your optimizations are preserved in future generations
-5. Commit both declaration and implementation files
+### Spanner Mode
+Optimized for Google Cloud Spanner with:
+- Parameterized queries
+- Read-only transactions
+- Proper error handling
+- Index optimization
+
+```bash
+glyph generate --mode spanner user_service.go
+```
+
+## Performance Features
+
+### Streaming Output
+By default, Glyph shows real-time progress as AI generates your code:
+- See dots appear as tokens are generated
+- Get immediate feedback that generation is working
+- Cancel if generation seems to be going wrong
+
+### Optimized Prompts
+Glyph automatically chooses the right prompt complexity:
+- **Simple functions**: Minimal prompts for faster generation
+- **Complex functions**: Detailed prompts with full context
+
+### Timing Analysis
+Use `--debug-timing` to identify performance bottlenecks:
+```bash
+glyph generate main.go --debug-timing
+```
+
+This shows:
+- Time spent parsing
+- AI model loading time
+- First token latency
+- Total generation time
+- Tokens per second
+
+## Best Practices
+
+1. **Clear Instructions**: Be specific about what you want
+2. **Context Matters**: Include relevant types and imports in your file
+3. **One Thing at a Time**: Focus each function on a single responsibility
+4. **Review Generated Code**: Always review and test generated implementations
+5. **Use Streaming**: Watch progress to catch issues early
+
+## Examples
+
+See the `examples/` directory for more usage examples:
+- `user_service.go`: Database operations with Spanner
+- `calculator.go`: General computation functions
+
+## Troubleshooting
+
+### Slow Generation
+- Use `--debug-timing` to identify bottlenecks
+- Try simpler, more focused instructions
+- Consider using a smaller/faster model
+
+### Generation Stuck
+- The streaming output shows if generation is progressing
+- Cancel with Ctrl+C if needed
+- Check that Ollama is running: `ollama list`
 
 ## License
 
