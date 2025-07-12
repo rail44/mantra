@@ -102,46 +102,228 @@ func (g *Generator) GenerateForTarget(target *parser.Target, implementation stri
 	return nil
 }
 
-// generateFileContent creates the content for the generated file
+// generateFileContent creates the content for the generated file by replacing glyph functions
 func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementations map[string]string) (string, error) {
-	var content strings.Builder
+	// Start with the original source content
+	content := fileInfo.SourceContent
 	
-	// Package declaration
-	content.WriteString(fmt.Sprintf("package %s\n\n", g.config.PackageName))
+	// Change package name
+	content = strings.Replace(content, fmt.Sprintf("package %s", fileInfo.PackageName), fmt.Sprintf("package %s", g.config.PackageName), 1)
 	
-	// Collect necessary imports
-	necessaryImports := g.collectNecessaryImports(fileInfo, implementations)
-	
-	// Only add import section if we have imports
-	if len(necessaryImports) > 0 {
-		content.WriteString("import (\n")
-		for _, imp := range necessaryImports {
-			content.WriteString(fmt.Sprintf("\t\"%s\"\n", imp))
-		}
-		content.WriteString(")\n\n")
-	}
-	
-	// Generate functions for each target
+	// Sort targets by line number in reverse order to avoid line number shifts
+	var targetsToProcess []*parser.Target
 	for _, target := range fileInfo.Targets {
-		if !target.HasPanic {
-			continue // Skip targets without panic statements
+		if target.HasPanic {
+			if implementation, exists := implementations[target.Name]; exists {
+				target.Implementation = implementation // Store implementation in target
+				targetsToProcess = append(targetsToProcess, target)
+			}
 		}
-		
-		implementation, exists := implementations[target.Name]
-		if !exists {
-			continue // Skip if no implementation provided
-		}
-		
-		functionCode, err := g.generateFunction(target, implementation)
-		if err != nil {
-			return "", fmt.Errorf("failed to generate function %s: %w", target.Name, err)
-		}
-		
-		content.WriteString(functionCode)
-		content.WriteString("\n\n")
 	}
 	
-	return content.String(), nil
+	// Sort by start line in descending order (process from bottom to top)
+	for i := 0; i < len(targetsToProcess); i++ {
+		for j := i + 1; j < len(targetsToProcess); j++ {
+			iStartLine := targetsToProcess[i].TokenSet.Position(targetsToProcess[i].FuncDecl.Pos()).Line
+			jStartLine := targetsToProcess[j].TokenSet.Position(targetsToProcess[j].FuncDecl.Pos()).Line
+			if iStartLine < jStartLine {
+				targetsToProcess[i], targetsToProcess[j] = targetsToProcess[j], targetsToProcess[i]
+			}
+		}
+	}
+	
+	// Replace each glyph function with its implementation (from bottom to top)
+	for _, target := range targetsToProcess {
+		// Always use original file content and line numbers for each replacement
+		newContent, err := g.replaceFunctionBody(content, target, target.Implementation)
+		if err != nil {
+			return "", fmt.Errorf("failed to replace function %s: %w", target.Name, err)
+		}
+		content = newContent
+	}
+	
+	return content, nil
+}
+
+// replaceFunctionBody replaces a function body with generated implementation
+func (g *Generator) replaceFunctionBody(content string, target *parser.Target, implementation string) (string, error) {
+	lines := strings.Split(content, "\n")
+	
+	// Get function boundaries from AST
+	startLine := target.TokenSet.Position(target.FuncDecl.Pos()).Line - 1 // Convert to 0-indexed
+	endLine := target.TokenSet.Position(target.FuncDecl.End()).Line - 1   // Convert to 0-indexed
+	
+	if startLine < 0 || endLine >= len(lines) || startLine > endLine {
+		return "", fmt.Errorf("invalid function boundaries for %s", target.Name)
+	}
+	
+	// For methods, convert to function by adding receiver as first parameter
+	if target.Receiver != nil {
+		// Find the function signature line and modify it
+		for i := startLine; i <= endLine; i++ {
+			line := lines[i]
+			if strings.Contains(line, "func") && strings.Contains(line, target.Name) {
+				// Convert method to function
+				newSignature := g.convertMethodToFunction(line, target)
+				lines[i] = newSignature
+				break
+			}
+		}
+	}
+	
+	// Find the opening brace and replace function body
+	openBraceIndex := -1
+	closeBraceIndex := -1
+	braceCount := 0
+	
+	for i := startLine; i <= endLine; i++ {
+		line := lines[i]
+		
+		// Look for opening brace
+		if openBraceIndex == -1 && strings.Contains(line, "{") {
+			openBraceIndex = i
+		}
+		
+		// Count braces to find the matching closing brace
+		if openBraceIndex != -1 {
+			for _, ch := range line {
+				if ch == '{' {
+					braceCount++
+				} else if ch == '}' {
+					braceCount--
+					if braceCount == 0 {
+						closeBraceIndex = i
+						break
+					}
+				}
+			}
+		}
+		
+		if closeBraceIndex != -1 {
+			break
+		}
+	}
+	
+	if openBraceIndex == -1 || closeBraceIndex == -1 {
+		startLineNum := target.TokenSet.Position(target.FuncDecl.Pos()).Line
+		endLineNum := target.TokenSet.Position(target.FuncDecl.End()).Line
+		return "", fmt.Errorf("could not find function body boundaries for %s (lines %d-%d, open: %d, close: %d)", 
+			target.Name, startLineNum, endLineNum, openBraceIndex, closeBraceIndex)
+	}
+	
+	// Clean the implementation and add proper indentation
+	cleanedImpl := cleanCode(implementation)
+	baseIndent := getIndentation(lines[openBraceIndex+1])
+	indentedImpl := indentCode(cleanedImpl, baseIndent)
+	
+	// Build new content
+	var newLines []string
+	
+	// Add lines before function body
+	newLines = append(newLines, lines[:openBraceIndex+1]...)
+	
+	// Add generated implementation
+	if strings.TrimSpace(indentedImpl) != "" {
+		implLines := strings.Split(indentedImpl, "\n")
+		newLines = append(newLines, implLines...)
+	}
+	
+	// Add closing brace and lines after
+	newLines = append(newLines, lines[closeBraceIndex:]...)
+	
+	return strings.Join(newLines, "\n"), nil
+}
+
+// convertMethodToFunction converts a method signature to a function signature
+func (g *Generator) convertMethodToFunction(line string, target *parser.Target) string {
+	// Example: func (c *Calculator) Add(a, b float64) float64 {
+	// Becomes: func Add(c *Calculator, a, b float64) float64 {
+	
+	// Find the receiver part
+	receiverStart := strings.Index(line, "(")
+	receiverEnd := strings.Index(line, ")") + 1
+	funcStart := strings.Index(line[receiverEnd:], "func")
+	if funcStart == -1 {
+		funcStart = strings.Index(line, "func")
+	} else {
+		funcStart += receiverEnd
+	}
+	
+	if receiverStart == -1 || receiverEnd == -1 || funcStart == -1 {
+		return line // Can't parse, return original
+	}
+	
+	// Extract receiver
+	receiverType := target.Receiver.Type
+	receiverName := target.Receiver.Name
+	if receiverName == "" {
+		receiverName = strings.ToLower(string(receiverType[0]))
+	}
+	
+	// Handle package prefix for receiver type
+	if g.config.SourcePackage != "main" && g.config.SourcePackage != "" {
+		if strings.HasPrefix(receiverType, "*") {
+			receiverType = "*" + g.config.SourcePackage + "." + strings.TrimPrefix(receiverType, "*")
+		} else {
+			receiverType = g.config.SourcePackage + "." + receiverType
+		}
+	}
+	
+	// Find function name and parameters
+	funcNameStart := strings.Index(line[funcStart:], target.Name)
+	if funcNameStart == -1 {
+		return line // Can't find function name
+	}
+	funcNameStart += funcStart
+	
+	paramStart := strings.Index(line[funcNameStart:], "(")
+	if paramStart == -1 {
+		return line // Can't find parameters
+	}
+	paramStart += funcNameStart
+	
+	// Build new signature
+	before := line[:funcStart]
+	funcKeyword := "func "
+	funcName := target.Name
+	
+	// Get the parameter part and add receiver as first parameter
+	afterParams := line[paramStart:]
+	if strings.HasPrefix(afterParams, "()") {
+		// No parameters, add receiver only
+		newParams := fmt.Sprintf("(%s %s)", receiverName, receiverType)
+		afterParams = strings.Replace(afterParams, "()", newParams, 1)
+	} else {
+		// Has parameters, add receiver as first parameter
+		closeParenIndex := findMatchingParen(afterParams)
+		if closeParenIndex != -1 {
+			existingParams := afterParams[1:closeParenIndex]
+			newParams := fmt.Sprintf("(%s %s, %s)", receiverName, receiverType, existingParams)
+			afterParams = newParams + afterParams[closeParenIndex+1:]
+		}
+	}
+	
+	return before + funcKeyword + funcName + afterParams
+}
+
+// findMatchingParen finds the matching closing parenthesis
+func findMatchingParen(s string) int {
+	if len(s) == 0 || s[0] != '(' {
+		return -1
+	}
+	
+	count := 0
+	for i, ch := range s {
+		if ch == '(' {
+			count++
+		} else if ch == ')' {
+			count--
+			if count == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // generateFunction creates a function from a target and implementation
@@ -259,7 +441,8 @@ func replacePanicWithImplementation(content string, target *parser.Target, imple
 		lineNum := i + 1
 		
 		// Check if we're at the start of our target function
-		if lineNum == target.StartLine {
+		targetStartLine := target.TokenSet.Position(target.FuncDecl.Pos()).Line
+		if lineNum == targetStartLine {
 			functionStart = i
 			inFunction = true
 		}

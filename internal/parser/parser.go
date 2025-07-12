@@ -5,15 +5,18 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strings"
 )
 
 // FileInfo contains information about the parsed file
 type FileInfo struct {
-	PackageName string            // Package name from package declaration
-	Imports     []Import          // All import statements
-	Targets     []*Target         // Generation targets
-	FilePath    string            // Source file path
+	PackageName   string       // Package name from package declaration
+	Imports       []Import     // All import statements
+	Targets       []*Target    // Generation targets
+	FilePath      string       // Source file path
+	SourceContent string       // Full source file content
+	SourceLines   []string     // Source content split by lines
 }
 
 // Import represents an import statement
@@ -24,15 +27,16 @@ type Import struct {
 
 // Target represents a function or method to generate
 type Target struct {
-	Name        string      // Function or method name
-	Receiver    *Receiver   // Receiver for methods (nil for functions)
-	Params      []Param     // Function parameters
-	Returns     []Return    // Return values
-	Instruction string      // Content from // glyph: comment
-	FilePath    string      // Source file path
-	StartLine   int         // Line number where function starts
-	EndLine     int         // Line number where function ends
-	HasPanic    bool        // Whether function contains panic("not implemented")
+	Name           string           // Function or method name
+	Receiver       *Receiver        // Receiver for methods (nil for functions)
+	Params         []Param          // Function parameters
+	Returns        []Return         // Return values
+	Instruction    string           // Content from // glyph: comment
+	FilePath       string           // Source file path
+	HasPanic       bool             // Whether function contains panic("not implemented")
+	Implementation string           // Generated implementation (temporary storage)
+	FuncDecl       *ast.FuncDecl    // AST node for the function declaration
+	TokenSet       *token.FileSet   // Token file set for position information
 }
 
 // Receiver represents method receiver
@@ -54,6 +58,12 @@ type Return struct {
 
 // ParseFileInfo parses a Go file and returns comprehensive file information
 func ParseFileInfo(filePath string) (*FileInfo, error) {
+	// Read source file content
+	sourceContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
@@ -61,8 +71,10 @@ func ParseFileInfo(filePath string) (*FileInfo, error) {
 	}
 
 	fileInfo := &FileInfo{
-		PackageName: node.Name.Name,
-		FilePath:    filePath,
+		PackageName:   node.Name.Name,
+		FilePath:      filePath,
+		SourceContent: string(sourceContent),
+		SourceLines:   strings.Split(string(sourceContent), "\n"),
 	}
 
 	// Parse imports
@@ -142,9 +154,9 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 				Name:        x.Name.Name,
 				Instruction: instruction,
 				FilePath:    filePath,
-				StartLine:   fset.Position(x.Pos()).Line,
-				EndLine:     fset.Position(x.End()).Line,
 				HasPanic:    hasPanic,
+				FuncDecl:    x,
+				TokenSet:    fset,
 			}
 			
 			// Parse receiver for methods
@@ -309,3 +321,4 @@ func (t *Target) GetFunctionSignature() string {
 	
 	return sig.String()
 }
+

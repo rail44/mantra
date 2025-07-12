@@ -88,7 +88,8 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 	prompt.WriteString("```go\n")
 	// Include first 100 lines or up to function start for context
 	lines := strings.Split(fileContent, "\n")
-	contextEnd := min(100, target.StartLine-1)
+	startLine := target.TokenSet.Position(target.FuncDecl.Pos()).Line
+	contextEnd := min(100, startLine-1)
 	if contextEnd > 0 {
 		prompt.WriteString(strings.Join(lines[:contextEnd], "\n"))
 	}
