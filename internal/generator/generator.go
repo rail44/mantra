@@ -61,46 +61,6 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 	return nil
 }
 
-// GenerateForTarget generates implementation for a specific target (backwards compatibility)
-func (g *Generator) GenerateForTarget(target *parser.Target, implementation string) error {
-	// This method is kept for backwards compatibility but will use the old approach
-	// It should be replaced with GenerateFile in the command layer
-	
-	// Read the original file
-	content, err := os.ReadFile(target.FilePath)
-	if err != nil {
-		return fmt.Errorf("failed to read source file: %w", err)
-	}
-
-	// Clean the implementation
-	implementation = cleanCode(implementation)
-
-	// Validate the generated function
-	if err := validateGeneratedFunction(implementation); err != nil {
-		return fmt.Errorf("generated code validation failed: %w", err)
-	}
-
-	// Replace the panic statement with the implementation
-	newContent, err := replacePanicWithImplementation(string(content), target, implementation)
-	if err != nil {
-		return fmt.Errorf("failed to replace panic: %w", err)
-	}
-
-	// Format the Go code
-	formatted, err := format.Source([]byte(newContent))
-	if err != nil {
-		// If formatting fails, use the original code but log the error
-		fmt.Fprintf(os.Stderr, "Warning: failed to format generated code: %v\n", err)
-		formatted = []byte(newContent)
-	}
-
-	// Write the file back
-	if err := os.WriteFile(target.FilePath, formatted, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	return nil
-}
 
 // generateFileContent creates the content for the generated file by replacing glyph functions
 func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementations map[string]string) (string, error) {
@@ -145,388 +105,154 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	return content, nil
 }
 
-// replaceFunctionBody replaces a function body with generated implementation
+// replaceFunctionBody replaces a function body with generated implementation using AST
 func (g *Generator) replaceFunctionBody(content string, target *parser.Target, implementation string) (string, error) {
-	lines := strings.Split(content, "\n")
-	
-	// Get function boundaries from AST
-	startLine := target.TokenSet.Position(target.FuncDecl.Pos()).Line - 1 // Convert to 0-indexed
-	endLine := target.TokenSet.Position(target.FuncDecl.End()).Line - 1   // Convert to 0-indexed
-	
-	if startLine < 0 || endLine >= len(lines) || startLine > endLine {
-		return "", fmt.Errorf("invalid function boundaries for %s", target.Name)
+	// Parse the original content as AST
+	fset := token.NewFileSet()
+	node, err := goparser.ParseFile(fset, target.FilePath, content, goparser.ParseComments)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse file content: %w", err)
 	}
 	
-	// For methods, convert to function by adding receiver as first parameter
-	if target.Receiver != nil {
-		// Find the function signature line and modify it
-		for i := startLine; i <= endLine; i++ {
-			line := lines[i]
-			if strings.Contains(line, "func") && strings.Contains(line, target.Name) {
-				// Convert method to function
-				newSignature := g.convertMethodToFunction(line, target)
-				lines[i] = newSignature
-				break
-			}
-		}
+	// Parse the implementation as a function body
+	cleanedImpl := cleanCode(implementation)
+	implBody, err := g.parseImplementationAsBlock(cleanedImpl)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse implementation: %w", err)
 	}
 	
-	// Find the opening brace and replace function body
-	openBraceIndex := -1
-	closeBraceIndex := -1
-	braceCount := 0
-	
-	for i := startLine; i <= endLine; i++ {
-		line := lines[i]
-		
-		// Look for opening brace
-		if openBraceIndex == -1 && strings.Contains(line, "{") {
-			openBraceIndex = i
-		}
-		
-		// Count braces to find the matching closing brace
-		if openBraceIndex != -1 {
-			for _, ch := range line {
-				if ch == '{' {
-					braceCount++
-				} else if ch == '}' {
-					braceCount--
-					if braceCount == 0 {
-						closeBraceIndex = i
-						break
+	// Find and replace the target function in the AST
+	var targetFound bool
+	ast.Inspect(node, func(n ast.Node) bool {
+		if funcDecl, ok := n.(*ast.FuncDecl); ok {
+			// Check if this is our target function (compare by name and receiver)
+			if funcDecl.Name.Name == target.Name {
+				// For methods, also check receiver type matches
+				if target.Receiver != nil && funcDecl.Recv != nil {
+					if len(funcDecl.Recv.List) > 0 {
+						receiverType := g.getTypeString(funcDecl.Recv.List[0].Type)
+						if receiverType == target.Receiver.Type {
+							targetFound = true
+						}
 					}
+				} else if target.Receiver == nil && funcDecl.Recv == nil {
+					// Both are functions (no receiver)
+					targetFound = true
+				}
+				
+				if targetFound {
+					// For methods, convert to function by adding receiver as first parameter
+					if target.Receiver != nil {
+						g.convertMethodToFunctionAST(funcDecl, target)
+					}
+					
+					// Replace function body with the new implementation
+					funcDecl.Body = implBody
+					return false // Stop traversing this branch
 				}
 			}
 		}
-		
-		if closeBraceIndex != -1 {
-			break
-		}
+		return true
+	})
+	
+	if !targetFound {
+		return "", fmt.Errorf("target function %s not found in AST", target.Name)
 	}
 	
-	if openBraceIndex == -1 || closeBraceIndex == -1 {
-		startLineNum := target.TokenSet.Position(target.FuncDecl.Pos()).Line
-		endLineNum := target.TokenSet.Position(target.FuncDecl.End()).Line
-		return "", fmt.Errorf("could not find function body boundaries for %s (lines %d-%d, open: %d, close: %d)", 
-			target.Name, startLineNum, endLineNum, openBraceIndex, closeBraceIndex)
+	// Format the modified AST back to source code
+	var buf strings.Builder
+	if err := format.Node(&buf, fset, node); err != nil {
+		return "", fmt.Errorf("failed to format modified AST: %w", err)
 	}
 	
-	// Clean the implementation and add proper indentation
-	cleanedImpl := cleanCode(implementation)
-	baseIndent := getIndentation(lines[openBraceIndex+1])
-	indentedImpl := indentCode(cleanedImpl, baseIndent)
-	
-	// Build new content
-	var newLines []string
-	
-	// Add lines before function body
-	newLines = append(newLines, lines[:openBraceIndex+1]...)
-	
-	// Add generated implementation
-	if strings.TrimSpace(indentedImpl) != "" {
-		implLines := strings.Split(indentedImpl, "\n")
-		newLines = append(newLines, implLines...)
-	}
-	
-	// Add closing brace and lines after
-	newLines = append(newLines, lines[closeBraceIndex:]...)
-	
-	return strings.Join(newLines, "\n"), nil
+	return buf.String(), nil
 }
 
-// convertMethodToFunction converts a method signature to a function signature
-func (g *Generator) convertMethodToFunction(line string, target *parser.Target) string {
-	// Example: func (c *Calculator) Add(a, b float64) float64 {
-	// Becomes: func Add(c *Calculator, a, b float64) float64 {
+// parseImplementationAsBlock parses implementation code as a block statement
+func (g *Generator) parseImplementationAsBlock(implementation string) (*ast.BlockStmt, error) {
+	// Wrap implementation in a function to parse as valid Go code
+	testFunc := fmt.Sprintf("package main\nfunc test() {\n%s\n}", implementation)
 	
-	// Find the receiver part
-	receiverStart := strings.Index(line, "(")
-	receiverEnd := strings.Index(line, ")") + 1
-	funcStart := strings.Index(line[receiverEnd:], "func")
-	if funcStart == -1 {
-		funcStart = strings.Index(line, "func")
-	} else {
-		funcStart += receiverEnd
+	fset := token.NewFileSet()
+	node, err := goparser.ParseFile(fset, "temp.go", testFunc, 0)
+	if err != nil {
+		return nil, fmt.Errorf("implementation is not valid Go code: %w", err)
 	}
 	
-	if receiverStart == -1 || receiverEnd == -1 || funcStart == -1 {
-		return line // Can't parse, return original
+	// Extract the function body
+	if len(node.Decls) == 0 {
+		return &ast.BlockStmt{}, nil
 	}
 	
-	// Extract receiver
-	receiverType := target.Receiver.Type
-	receiverName := target.Receiver.Name
-	if receiverName == "" {
-		receiverName = strings.ToLower(string(receiverType[0]))
+	funcDecl, ok := node.Decls[0].(*ast.FuncDecl)
+	if !ok || funcDecl.Body == nil {
+		return &ast.BlockStmt{}, nil
 	}
 	
-	// Since we're including the original type definitions in the generated file,
-	// we don't need package prefixes for types that are defined in the same file
-	
-	// Find function name and parameters
-	funcNameStart := strings.Index(line[funcStart:], target.Name)
-	if funcNameStart == -1 {
-		return line // Can't find function name
-	}
-	funcNameStart += funcStart
-	
-	paramStart := strings.Index(line[funcNameStart:], "(")
-	if paramStart == -1 {
-		return line // Can't find parameters
-	}
-	paramStart += funcNameStart
-	
-	// Build new signature
-	before := line[:funcStart]
-	funcKeyword := "func "
-	funcName := target.Name
-	
-	// Get the parameter part and add receiver as first parameter
-	afterParams := line[paramStart:]
-	if strings.HasPrefix(afterParams, "()") {
-		// No parameters, add receiver only
-		newParams := fmt.Sprintf("(%s %s)", receiverName, receiverType)
-		afterParams = strings.Replace(afterParams, "()", newParams, 1)
-	} else {
-		// Has parameters, add receiver as first parameter
-		closeParenIndex := findMatchingParen(afterParams)
-		if closeParenIndex != -1 {
-			existingParams := afterParams[1:closeParenIndex]
-			newParams := fmt.Sprintf("(%s %s, %s)", receiverName, receiverType, existingParams)
-			afterParams = newParams + afterParams[closeParenIndex+1:]
-		}
-	}
-	
-	return before + funcKeyword + funcName + afterParams
+	return funcDecl.Body, nil
 }
 
-// findMatchingParen finds the matching closing parenthesis
-func findMatchingParen(s string) int {
-	if len(s) == 0 || s[0] != '(' {
-		return -1
+// convertMethodToFunctionAST converts a method AST node to a function by adding receiver as first parameter
+func (g *Generator) convertMethodToFunctionAST(funcDecl *ast.FuncDecl, target *parser.Target) {
+	if target.Receiver == nil || funcDecl.Recv == nil {
+		return
 	}
 	
-	count := 0
-	for i, ch := range s {
-		if ch == '(' {
-			count++
-		} else if ch == ')' {
-			count--
-			if count == 0 {
-				return i
-			}
-		}
+	// Get receiver information
+	receiverField := funcDecl.Recv.List[0]
+	receiverType := receiverField.Type
+	receiverName := "self" // Default name
+	if len(receiverField.Names) > 0 {
+		receiverName = receiverField.Names[0].Name
 	}
-	return -1
+	
+	// Create new parameter from receiver
+	receiverParam := &ast.Field{
+		Names: []*ast.Ident{ast.NewIdent(receiverName)},
+		Type:  receiverType,
+	}
+	
+	// Add receiver as first parameter
+	if funcDecl.Type.Params == nil {
+		funcDecl.Type.Params = &ast.FieldList{}
+	}
+	
+	// Prepend receiver to parameter list
+	newParams := []*ast.Field{receiverParam}
+	newParams = append(newParams, funcDecl.Type.Params.List...)
+	funcDecl.Type.Params.List = newParams
+	
+	// Remove receiver from function declaration
+	funcDecl.Recv = nil
 }
 
-// generateFunction creates a function from a target and implementation
-func (g *Generator) generateFunction(target *parser.Target, implementation string) (string, error) {
-	var function strings.Builder
-	
-	// Function signature
-	function.WriteString("func ")
-	function.WriteString(target.Name)
-	function.WriteString("(")
-	
-	// Add receiver as first parameter if it's a method
-	if target.Receiver != nil {
-		receiverType := target.Receiver.Type
-		// If source package is main, don't prefix types
-		if g.config.SourcePackage != "main" && g.config.SourcePackage != "" {
-			// Remove pointer prefix, add package prefix, then add pointer back if needed
-			if strings.HasPrefix(receiverType, "*") {
-				receiverType = "*" + g.config.SourcePackage + "." + strings.TrimPrefix(receiverType, "*")
-			} else {
-				receiverType = g.config.SourcePackage + "." + receiverType
-			}
-		}
-		function.WriteString(fmt.Sprintf("%s %s", target.Receiver.Name, receiverType))
-		if len(target.Params) > 0 {
-			function.WriteString(", ")
-		}
+// getTypeString returns a string representation of an AST type expression
+func (g *Generator) getTypeString(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.ArrayType:
+		return "[]" + g.getTypeString(t.Elt)
+	case *ast.StarExpr:
+		return "*" + g.getTypeString(t.X)
+	case *ast.SelectorExpr:
+		return g.getTypeString(t.X) + "." + t.Sel.Name
+	case *ast.FuncType:
+		return "func" // Simplified for now
+	case *ast.InterfaceType:
+		return "interface{}"
+	case *ast.MapType:
+		return "map[" + g.getTypeString(t.Key) + "]" + g.getTypeString(t.Value)
+	case *ast.ChanType:
+		return "chan " + g.getTypeString(t.Value)
+	default:
+		return "unknown"
 	}
-	
-	// Add parameters
-	for i, param := range target.Params {
-		if i > 0 {
-			function.WriteString(", ")
-		}
-		if param.Name != "" {
-			function.WriteString(param.Name + " ")
-		}
-		function.WriteString(g.convertTypeReference(param.Type))
-	}
-	
-	function.WriteString(")")
-	
-	// Add return values
-	if len(target.Returns) > 0 {
-		function.WriteString(" ")
-		if len(target.Returns) > 1 {
-			function.WriteString("(")
-		}
-		for i, ret := range target.Returns {
-			if i > 0 {
-				function.WriteString(", ")
-			}
-			function.WriteString(g.convertTypeReference(ret.Type))
-		}
-		if len(target.Returns) > 1 {
-			function.WriteString(")")
-		}
-	}
-	
-	function.WriteString(" {\n")
-	
-	// Clean and add implementation
-	cleanedImpl := cleanCode(implementation)
-	// Indent the implementation
-	for _, line := range strings.Split(cleanedImpl, "\n") {
-		if strings.TrimSpace(line) != "" {
-			function.WriteString("\t" + line + "\n")
-		} else {
-			function.WriteString("\n")
-		}
-	}
-	
-	function.WriteString("}")
-	
-	return function.String(), nil
 }
 
-// convertTypeReference converts type references to include source package prefix where needed
-func (g *Generator) convertTypeReference(typeStr string) string {
-	// Don't prefix types if source package is main
-	if g.config.SourcePackage == "main" {
-		return typeStr
-	}
-	
-	// Handle common types that need source package prefix
-	// This is a simplified implementation - more sophisticated type analysis would be needed for production
-	if g.config.SourcePackage != "" && !strings.Contains(typeStr, ".") {
-		// Check if this looks like a custom type (starts with uppercase)
-		if len(typeStr) > 0 && typeStr[0] >= 'A' && typeStr[0] <= 'Z' {
-			// Don't prefix built-in types
-			builtinTypes := map[string]bool{
-				"string": true, "int": true, "int32": true, "int64": true,
-				"float32": true, "float64": true, "bool": true,
-				"byte": true, "rune": true, "error": true,
-			}
-			if !builtinTypes[typeStr] {
-				return g.config.SourcePackage + "." + typeStr
-			}
-		}
-	}
-	return typeStr
-}
 
-// replacePanicWithImplementation replaces the entire function with the AI-generated implementation
-func replacePanicWithImplementation(content string, target *parser.Target, implementation string) (string, error) {
-	lines := strings.Split(content, "\n")
-	
-	// Find the function in the content
-	functionStart := -1
-	functionEnd := -1
-	braceCount := 0
-	inFunction := false
-	
-	for i, line := range lines {
-		lineNum := i + 1
-		
-		// Check if we're at the start of our target function
-		targetStartLine := target.TokenSet.Position(target.FuncDecl.Pos()).Line
-		if lineNum == targetStartLine {
-			functionStart = i
-			inFunction = true
-		}
-		
-		// Count braces if we're in the function
-		if inFunction {
-			for _, ch := range line {
-				if ch == '{' {
-					braceCount++
-				} else if ch == '}' {
-					braceCount--
-					if braceCount == 0 {
-						functionEnd = i
-						inFunction = false
-						break
-					}
-				}
-			}
-		}
-		
-		if functionEnd != -1 {
-			break
-		}
-	}
-	
-	if functionStart == -1 || functionEnd == -1 {
-		return "", fmt.Errorf("could not find function boundaries")
-	}
-	
-	// Find the opening brace of the function
-	openBraceIndex := -1
-	for i := functionStart; i <= functionEnd; i++ {
-		if strings.Contains(lines[i], "{") {
-			openBraceIndex = i
-			break
-		}
-	}
-	
-	if openBraceIndex == -1 {
-		return "", fmt.Errorf("could not find function opening brace")
-	}
-	
-	// Prepare the new implementation with proper indentation
-	baseIndent := getIndentation(lines[openBraceIndex+1])
-	indentedImpl := indentCode(implementation, baseIndent)
-	
-	// Build the new content
-	var newLines []string
-	
-	// Add lines before the function
-	newLines = append(newLines, lines[:openBraceIndex+1]...)
-	
-	// Add the new implementation
-	implLines := strings.Split(indentedImpl, "\n")
-	newLines = append(newLines, implLines...)
-	
-	// Add the closing brace
-	newLines = append(newLines, lines[functionEnd])
-	
-	// Add lines after the function
-	if functionEnd+1 < len(lines) {
-		newLines = append(newLines, lines[functionEnd+1:]...)
-	}
-	
-	return strings.Join(newLines, "\n"), nil
-}
 
-// getIndentation extracts the indentation from a line
-func getIndentation(line string) string {
-	indent := ""
-	for _, ch := range line {
-		if ch == ' ' || ch == '\t' {
-			indent += string(ch)
-		} else {
-			break
-		}
-	}
-	return indent
-}
 
-// indentCode adds indentation to each line of code
-func indentCode(code, indent string) string {
-	lines := strings.Split(strings.TrimSpace(code), "\n")
-	for i, line := range lines {
-		if line != "" {
-			lines[i] = indent + line
-		}
-	}
-	return strings.Join(lines, "\n")
-}
 
 // cleanCode performs basic cleanup and validates the generated function
 func cleanCode(response string) string {
