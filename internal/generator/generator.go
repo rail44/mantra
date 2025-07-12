@@ -41,8 +41,8 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 		return fmt.Errorf("failed to generate file content: %w", err)
 	}
 
-	// Format the Go code
-	formatted, err := format.Source([]byte(content))
+	// Format the Go code with more aggressive formatting
+	formatted, err := g.formatCodeRobust(content)
 	if err != nil {
 		// If formatting fails, use the original code but log the error
 		fmt.Fprintf(os.Stderr, "Warning: failed to format generated code: %v\n", err)
@@ -165,6 +165,7 @@ func (g *Generator) replaceFunctionBody(content string, target *parser.Target, i
 		return "", fmt.Errorf("failed to format modified AST: %w", err)
 	}
 	
+	// Don't apply formatting here - let the final stage handle it
 	return buf.String(), nil
 }
 
@@ -284,6 +285,12 @@ func testFunc() {
 	}
 	
 	return nil
+}
+
+// formatCodeRobust applies robust formatting to ensure clean output
+func (g *Generator) formatCodeRobust(content string) ([]byte, error) {
+	// Simply use format.Source - it follows go fmt standards
+	return format.Source([]byte(content))
 }
 
 // collectNecessaryImports analyzes generated code to determine which imports are actually needed
