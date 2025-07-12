@@ -260,14 +260,8 @@ func (g *Generator) convertMethodToFunction(line string, target *parser.Target) 
 		receiverName = strings.ToLower(string(receiverType[0]))
 	}
 	
-	// Handle package prefix for receiver type
-	if g.config.SourcePackage != "main" && g.config.SourcePackage != "" {
-		if strings.HasPrefix(receiverType, "*") {
-			receiverType = "*" + g.config.SourcePackage + "." + strings.TrimPrefix(receiverType, "*")
-		} else {
-			receiverType = g.config.SourcePackage + "." + receiverType
-		}
-	}
+	// Since we're including the original type definitions in the generated file,
+	// we don't need package prefixes for types that are defined in the same file
 	
 	// Find function name and parameters
 	funcNameStart := strings.Index(line[funcStart:], target.Name)
