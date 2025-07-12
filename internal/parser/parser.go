@@ -8,6 +8,20 @@ import (
 	"strings"
 )
 
+// FileInfo contains information about the parsed file
+type FileInfo struct {
+	PackageName string            // Package name from package declaration
+	Imports     []Import          // All import statements
+	Targets     []*Target         // Generation targets
+	FilePath    string            // Source file path
+}
+
+// Import represents an import statement
+type Import struct {
+	Path  string // Import path (e.g., "context", "cloud.google.com/go/spanner")
+	Alias string // Import alias (empty if no alias)
+}
+
 // Target represents a function or method to generate
 type Target struct {
 	Name        string      // Function or method name
@@ -38,14 +52,51 @@ type Return struct {
 	Type string // Return type
 }
 
-// ParseFile parses a Go file and returns all generation targets
-func ParseFile(filePath string) ([]*Target, error) {
+// ParseFileInfo parses a Go file and returns comprehensive file information
+func ParseFileInfo(filePath string) (*FileInfo, error) {
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse file: %w", err)
 	}
 
+	fileInfo := &FileInfo{
+		PackageName: node.Name.Name,
+		FilePath:    filePath,
+	}
+
+	// Parse imports
+	for _, imp := range node.Imports {
+		importInfo := Import{
+			Path: strings.Trim(imp.Path.Value, `"`),
+		}
+		if imp.Name != nil {
+			importInfo.Alias = imp.Name.Name
+		}
+		fileInfo.Imports = append(fileInfo.Imports, importInfo)
+	}
+
+	// Parse targets using existing logic
+	targets, err := parseTargetsFromNode(node, fset, filePath)
+	if err != nil {
+		return nil, err
+	}
+	fileInfo.Targets = targets
+
+	return fileInfo, nil
+}
+
+// ParseFile parses a Go file and returns all generation targets (backwards compatibility)
+func ParseFile(filePath string) ([]*Target, error) {
+	fileInfo, err := ParseFileInfo(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return fileInfo.Targets, nil
+}
+
+// parseTargetsFromNode extracts targets from parsed AST node
+func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) ([]*Target, error) {
 	var targets []*Target
 	
 	// Map to store glyph comments by position

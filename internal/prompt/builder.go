@@ -97,15 +97,15 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 	// Add generation instructions
 	prompt.WriteString("## Instructions\n")
 	prompt.WriteString("1. Generate ONLY the function body (the code that goes inside the function)\n")
-	prompt.WriteString("2. Do NOT include the function signature\n")
-	prompt.WriteString("3. Do NOT include package declaration or imports\n")
-	prompt.WriteString("4. Replace the panic(\"not implemented\") with actual implementation\n")
-	prompt.WriteString("5. Use proper error handling\n")
-	prompt.WriteString("6. Follow Go idioms and best practices\n")
-	prompt.WriteString("7. Ensure the implementation matches the task description\n")
+	prompt.WriteString("2. Do NOT include the function signature, package declaration, or imports\n")
+	prompt.WriteString("3. Do NOT generate multiple functions or any other functions\n")
+	prompt.WriteString("4. Do NOT include any comments or explanations\n")
+	prompt.WriteString("5. Replace the panic(\"not implemented\") with actual implementation\n")
+	prompt.WriteString("6. Use proper error handling and Go idioms\n")
+	prompt.WriteString("7. Return code that can be directly placed inside the function braces\n")
 	prompt.WriteString("\n")
 
-	prompt.WriteString("Generate only the function body implementation:\n")
+	prompt.WriteString("Generate ONLY the function body code (no signatures, no extra functions):\n")
 
 	return prompt.String()
 }
