@@ -64,7 +64,7 @@ func runInteractiveMode(filePath string) error {
 	m := interactive.NewModel(filePath, aiClient)
 	
 	// Create the Bubble Tea program
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m)
 	
 	// Create file watcher
 	watcher, err := interactive.NewFileWatcher(filePath, func() {

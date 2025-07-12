@@ -15,7 +15,7 @@ type Config struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Model:       "deepseek-r1:latest",
+		Model:       "devstral",
 		Host:        getEnvOrDefault("OLLAMA_HOST", "http://localhost:11434"),
 		Timeout:     5 * time.Minute,
 		Temperature: 0.7,

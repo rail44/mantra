@@ -28,7 +28,7 @@ go build -o glyph .
 
 - Go 1.21 or later
 - [Ollama](https://ollama.ai/) installed and running
-- A compatible AI model (e.g., `deepseek-r1:latest`)
+- A compatible AI model (e.g., `devstral`)
 
 ## Quick Start
 
@@ -55,9 +55,13 @@ type GetUserResponse struct {
 }
 ```
 
-2. Run Glyph in watch mode:
+2. Generate implementation:
 
 ```bash
+# One-time generation
+glyph generate user_queries.go
+
+# Or watch mode for continuous development
 glyph watch user_queries.go
 ```
 
@@ -74,7 +78,7 @@ glyph watch user_queries.go
 Create `.glyph.yaml` in your home directory:
 
 ```yaml
-model: deepseek-r1:latest
+model: devstral
 host: http://localhost:11434
 ```
 
@@ -82,15 +86,25 @@ Or use environment variables:
 - `OLLAMA_HOST`: Ollama server URL
 - `GLYPH_MODEL`: AI model to use
 
-## Command Line Options
+## Commands
 
+### Generate (One-time)
+```bash
+glyph generate <file> [flags]
+```
+Generates implementation once without watching. Perfect for CI/CD or integration with other tools.
+
+### Watch (Interactive)
 ```bash
 glyph watch <file> [flags]
+```
+Watches for file changes and regenerates automatically. Ideal for interactive development.
 
-Flags:
+### Common Flags
+```bash
   --config string   config file (default is $HOME/.glyph.yaml)
   --host string     Ollama host (default from OLLAMA_HOST env)
-  --model string    AI model to use (default "deepseek-r1:latest")
+  --model string    AI model to use (default "devstral")
   -h, --help        help for glyph
 ```
 

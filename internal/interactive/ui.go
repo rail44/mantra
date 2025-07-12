@@ -96,6 +96,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
+	// Debug: ensure View is being called
+	if m.width == 0 || m.height == 0 {
+		// Terminal size not yet initialized, show simple view
+		return fmt.Sprintf("Glyph watching: %s\nStatus: %v\nPress 'q' to quit", m.filePath, m.status)
+	}
+
 	var s strings.Builder
 
 	// Header

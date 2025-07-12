@@ -15,6 +15,9 @@ var rootCmd = &cobra.Command{
 	Short: "AI-powered Go code generator for Spanner",
 	Long: `Glyph is a local-first interactive development tool that generates
 AI-powered Spanner-optimized Go data access layer code from declarative specifications.`,
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd: true,
+	},
 }
 
 func Execute() {
@@ -28,7 +31,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.glyph.yaml)")
-	rootCmd.PersistentFlags().String("model", "deepseek-r1:latest", "AI model to use for generation")
+	rootCmd.PersistentFlags().String("model", "devstral", "AI model to use for generation")
 	rootCmd.PersistentFlags().String("host", "", "Ollama host (default from OLLAMA_HOST env)")
 
 	viper.BindPFlag("model", rootCmd.PersistentFlags().Lookup("model"))

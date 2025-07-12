@@ -21,18 +21,18 @@ func NewClient(config *Config) (*Client, error) {
 	}
 
 	// Create Ollama client
-	ollamaClient, err := api.ClientFromEnvironment()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Ollama client: %w", err)
-	}
-
-	// Override host if specified
+	var ollamaClient *api.Client
+	
 	if config.Host != "" {
 		hostURL, err := url.Parse(config.Host)
 		if err != nil {
 			return nil, fmt.Errorf("invalid host URL: %w", err)
 		}
 		ollamaClient = api.NewClient(hostURL, http.DefaultClient)
+	} else {
+		// Use default host
+		defaultURL, _ := url.Parse("http://localhost:11434")
+		ollamaClient = api.NewClient(defaultURL, http.DefaultClient)
 	}
 
 	return &Client{
