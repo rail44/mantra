@@ -9,13 +9,10 @@ import (
 )
 
 type Builder struct {
-	mode string
 }
 
-func NewBuilder(mode string) *Builder {
-	return &Builder{
-		mode: mode,
-	}
+func NewBuilder() *Builder {
+	return &Builder{}
 }
 
 // BuildForTarget creates a prompt for a specific generation target
@@ -71,17 +68,6 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 	}
 
 	prompt.WriteString("\n")
-
-	// Add mode-specific context
-	if b.mode == "spanner" {
-		prompt.WriteString("## Spanner Context\n")
-		prompt.WriteString("This function should be optimized for Google Cloud Spanner:\n")
-		prompt.WriteString("- Use parameterized queries to prevent SQL injection\n")
-		prompt.WriteString("- Consider read-only transactions for queries\n")
-		prompt.WriteString("- Use appropriate indexes for performance\n")
-		prompt.WriteString("- Handle Spanner-specific errors appropriately\n")
-		prompt.WriteString("\n")
-	}
 
 	// Add relevant code context from the file
 	prompt.WriteString("## File Context\n")

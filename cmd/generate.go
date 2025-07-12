@@ -17,7 +17,6 @@ import (
 )
 
 var (
-	generateMode string
 	debugTiming  bool
 	noStream     bool
 	outputDir    string
@@ -60,7 +59,6 @@ their implementations based on the natural language instructions provided.`,
 func init() {
 	rootCmd.AddCommand(generateCmd)
 
-	generateCmd.Flags().StringVar(&generateMode, "mode", "generic", "Generation mode (spanner, generic, etc.)")
 	generateCmd.Flags().BoolVar(&debugTiming, "debug-timing", false, "Show timing information for each step")
 	generateCmd.Flags().BoolVar(&noStream, "no-stream", false, "Disable streaming output")
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "./generated", "Directory for generated files")
@@ -88,18 +86,14 @@ func runGeneration(filePath string) error {
 
 	fmt.Printf("Found %d generation targets\n", len(targets))
 
-	// Use the mode from flag
-	mode := generateMode
-
 	// Create AI client
 	clientStart := time.Now()
 	config := &ai.Config{
 		Model: GetModel(),
 		Host:  GetHost(),
-		Mode:  mode,
 	}
 
-	fmt.Printf("Creating AI client (model: %s, mode: %s)...\n", config.Model, config.Mode)
+	fmt.Printf("Creating AI client (model: %s)...\n", config.Model)
 	aiClient, err := ai.NewClient(config)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
@@ -132,7 +126,7 @@ func runGeneration(filePath string) error {
 	gen := generator.New(genConfig)
 
 	// Create prompt builder
-	promptBuilder := prompt.NewBuilder(mode)
+	promptBuilder := prompt.NewBuilder()
 
 	// Use separate generation approach
 	return runSeparateGeneration(filePath, gen, promptBuilder, aiClient, targets, debugTiming, noStream)

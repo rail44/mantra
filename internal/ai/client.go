@@ -52,21 +52,13 @@ func (c *Client) SetDebugTiming(enabled bool) {
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	totalStart := time.Now()
 
-	// Build messages based on mode
+	// Build messages
 	buildStart := time.Now()
 	messages := []api.Message{
 		{
 			Role:    "user",
 			Content: prompt,
 		},
-	}
-
-	// Add system prompt if mode is set
-	if c.config.Mode == "spanner" {
-		messages = append([]api.Message{{
-			Role:    "system",
-			Content: spannerSystemPrompt,
-		}}, messages...)
 	}
 	if c.debugTiming {
 		fmt.Printf("    [AI Timing] Message building: %v\n", time.Since(buildStart))
@@ -118,20 +110,12 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 
 // GenerateStream sends a prompt and returns a channel for streaming responses
 func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan string, <-chan error) {
-	// Build messages based on mode
+	// Build messages
 	messages := []api.Message{
 		{
 			Role:    "user",
 			Content: prompt,
 		},
-	}
-
-	// Add system prompt if mode is set
-	if c.config.Mode == "spanner" {
-		messages = append([]api.Message{{
-			Role:    "system",
-			Content: spannerSystemPrompt,
-		}}, messages...)
 	}
 
 	outputCh := make(chan string, 100)
@@ -182,11 +166,3 @@ func (c *Client) CheckModel(ctx context.Context) error {
 
 	return nil
 }
-
-const spannerSystemPrompt = `You are an expert Go developer specializing in Google Cloud Spanner. 
-When generating code:
-- Use parameterized queries to prevent SQL injection
-- Consider using read-only transactions for queries when appropriate
-- Use proper error handling with context
-- Follow Go idioms and best practices
-- Optimize for Spanner's distributed architecture`

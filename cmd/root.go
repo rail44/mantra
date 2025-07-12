@@ -14,9 +14,9 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "glyph",
-	Short: "AI-powered Go code generator for Spanner",
+	Short: "AI-powered Go code generator",
 	Long: `Glyph is a local-first interactive development tool that generates
-AI-powered Spanner-optimized Go data access layer code from declarative specifications.`,
+AI-powered Go code implementations from natural language instructions.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},

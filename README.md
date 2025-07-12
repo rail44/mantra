@@ -9,7 +9,6 @@ Glyph is a local-first AI-powered Go code generation tool that transforms natura
 - **Context-Aware**: Understands your function signatures and surrounding code
 - **Local-First**: Everything runs on your machine with Ollama
 - **Real-time Streaming**: See generation progress as it happens
-- **Multiple Modes**: Specialized modes for different use cases (Spanner, generic Go)
 - **Flexible Output**: Generate to separate files or replace in-place
 
 ## Installation
@@ -109,7 +108,6 @@ glyph generate <file> [flags]
 Generates implementations for all functions with `// glyph:` comments.
 
 **Flags:**
-- `--mode string`: Generation mode (`spanner` or `generic`, default: `generic`)
 - `--model string`: AI model to use (default: `devstral`)
 - `--host string`: Ollama host URL (default: `http://localhost:11434`)
 - `--no-stream`: Disable streaming output (faster for scripting)
@@ -173,21 +171,13 @@ func (s *UserService) GetAllUsers(ctx context.Context) ([]*User, error) {
 }
 ```
 
-## Modes
+## Code Generation
 
-### Generic Mode (Default)
-General-purpose Go code generation for any use case.
-
-### Spanner Mode
-Optimized for Google Cloud Spanner with:
-- Parameterized queries
-- Read-only transactions
-- Proper error handling
-- Index optimization
-
-```bash
-glyph generate --mode spanner user_service.go
-```
+Glyph generates clean, idiomatic Go code with:
+- Parameterized queries for database operations
+- Proper error handling and context usage
+- Best practices for the detected use case
+- Comprehensive implementations based on your instructions
 
 ## Performance Features
 
