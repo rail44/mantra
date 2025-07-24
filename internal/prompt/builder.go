@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"log/slog"
 
 	"github.com/rail44/mantra/internal/context"
+	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 )
 
@@ -106,7 +108,14 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 
 	prompt.WriteString("Generate the function body code (what goes inside the braces):\n")
 
-	return prompt.String()
+	fullPrompt := prompt.String()
+	
+	// Log the generated prompt at trace level for debugging
+	log.Trace("generated prompt", 
+		slog.String("function", target.Name),
+		slog.Int("length", len(fullPrompt)))
+	
+	return fullPrompt
 }
 
 // buildBasicPrompt creates a simple prompt when context extraction fails
