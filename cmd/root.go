@@ -5,11 +5,13 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/rail44/glyph/internal/log"
 )
 
 var (
 	modelName  string
 	ollamaHost string
+	logLevel   string
 )
 
 var rootCmd = &cobra.Command{
@@ -19,6 +21,14 @@ var rootCmd = &cobra.Command{
 AI-powered Go code implementations from natural language instructions.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
+	},
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Set up logging level
+		level, err := log.ParseLevel(logLevel)
+		if err != nil {
+			return fmt.Errorf("invalid log level: %s", logLevel)
+		}
+		return log.SetLevel(level)
 	},
 }
 
@@ -32,6 +42,7 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&modelName, "model", "devstral", "AI model to use for generation")
 	rootCmd.PersistentFlags().StringVar(&ollamaHost, "host", "http://localhost:11434", "Ollama host URL")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (error|warn|info|debug|trace)")
 }
 
 // GetModel returns the configured model name

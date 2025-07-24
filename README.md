@@ -113,7 +113,7 @@ Generates implementations for all functions with `// glyph:` comments.
 - `--model string`: AI model to use (default: `devstral`)
 - `--host string`: Ollama host URL (default: `http://localhost:11434`)
 - `--no-stream`: Disable streaming output (faster for scripting)
-- `--debug-timing`: Show detailed timing information
+- `--log-level string`: Log level (error|warn|info|debug|trace) (default: `info`)
 - `--output-dir string`: Directory for generated files (default: `./generated`)
 - `--package-name string`: Package name for generated files (default: `generated`)
 
@@ -136,8 +136,11 @@ glyph generate main.go
 # Non-streaming for scripting/CI
 glyph generate main.go --no-stream
 
-# Debug performance issues
-glyph generate main.go --debug-timing
+# Debug with detailed logs
+glyph generate main.go --log-level debug
+
+# Trace level for maximum verbosity
+glyph generate main.go --log-level trace
 ```
 
 ## Writing Effective Instructions
@@ -194,18 +197,17 @@ Glyph automatically chooses the right prompt complexity:
 - **Simple functions**: Minimal prompts for faster generation
 - **Complex functions**: Detailed prompts with full context
 
-### Timing Analysis
-Use `--debug-timing` to identify performance bottlenecks:
+### Performance Analysis
+Use debug or trace log levels to identify performance bottlenecks:
 ```bash
-glyph generate main.go --debug-timing
+glyph generate main.go --log-level debug
 ```
 
 This shows:
 - Time spent parsing
 - AI model loading time
-- First token latency
-- Total generation time
-- Tokens per second
+- Generation time per function
+- Total execution time
 
 ## Best Practices
 
@@ -224,7 +226,7 @@ See the `examples/` directory for more usage examples:
 ## Troubleshooting
 
 ### Slow Generation
-- Use `--debug-timing` to identify bottlenecks
+- Use `--log-level debug` to identify bottlenecks
 - Try simpler, more focused instructions
 - Consider using a smaller/faster model
 

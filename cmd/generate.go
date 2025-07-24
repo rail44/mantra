@@ -9,15 +9,16 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"log/slog"
 
 	"github.com/rail44/glyph/internal/ai"
 	"github.com/rail44/glyph/internal/generator"
+	"github.com/rail44/glyph/internal/log"
 	"github.com/rail44/glyph/internal/parser"
 	"github.com/rail44/glyph/internal/prompt"
 )
 
 var (
-	debugTiming bool
 	noStream    bool
 	outputDir   string
 	packageName string
@@ -37,20 +38,20 @@ their implementations based on the natural language instructions provided.`,
 
 		// Verify file exists
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Error: file %s does not exist\n", filePath)
+			log.Error("file does not exist", slog.String("file", filePath))
 			os.Exit(1)
 		}
 
 		// Make absolute path
 		absPath, err := filepath.Abs(filePath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to resolve path: %v\n", err)
+			log.Error("failed to resolve path", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 
 		// Run generation
 		if err := runGeneration(absPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			log.Error("generation failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 	},
@@ -59,32 +60,31 @@ their implementations based on the natural language instructions provided.`,
 func init() {
 	rootCmd.AddCommand(generateCmd)
 
-	generateCmd.Flags().BoolVar(&debugTiming, "debug-timing", false, "Show timing information for each step")
 	generateCmd.Flags().BoolVar(&noStream, "no-stream", false, "Disable streaming output")
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "./generated", "Directory for generated files")
 	generateCmd.Flags().StringVar(&packageName, "package-name", "generated", "Package name for generated files")
 }
 
 func runGeneration(filePath string) error {
-	fmt.Printf("Generating implementation for: %s\n", filePath)
+	log.Info("generating implementation", slog.String("file", filePath))
 
 	// Parse the file to find generation targets
 	parseStart := time.Now()
-	fmt.Println("Parsing file...")
+	log.Info("parsing file", slog.String("file", filepath.Base(filePath)))
 	targets, err := parser.ParseFile(filePath)
 	if err != nil {
 		return fmt.Errorf("parse error: %w", err)
 	}
-	if debugTiming {
-		fmt.Printf("  [Timing] Parsing took: %v\n", time.Since(parseStart))
-	}
+	log.Debug("parsing completed", 
+		slog.Duration("duration", time.Since(parseStart)),
+		slog.Int("targets", len(targets)))
 
 	if len(targets) == 0 {
-		fmt.Println("No generation targets found (functions with // glyph comments)")
+		log.Info("no generation targets found (functions with // glyph comments)")
 		return nil
 	}
 
-	fmt.Printf("Found %d generation targets\n", len(targets))
+	log.Info("found generation targets", slog.Int("count", len(targets)))
 
 	// Create AI client
 	clientStart := time.Now()
@@ -92,29 +92,26 @@ func runGeneration(filePath string) error {
 		Model: GetModel(),
 		Host:  GetHost(),
 	}
-	fmt.Printf("Creating AI client (model: %s)...\n", config.Model)
+	log.Info("creating AI client", slog.String("model", config.Model))
 	aiClient, err := ai.NewClient(config)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	// Enable debug timing on AI client if requested
-	aiClient.SetDebugTiming(debugTiming)
+	aiClient.SetDebugTiming(log.IsDebugEnabled())
 
-	if debugTiming {
-		fmt.Printf("  [Timing] AI client creation took: %v\n", time.Since(clientStart))
-	}
+	log.Debug("AI client created", slog.Duration("duration", time.Since(clientStart)))
 
 	// Check if model is available
 	modelCheckStart := time.Now()
 	ctx := context.Background()
 	if err := aiClient.CheckModel(ctx); err != nil {
-		fmt.Printf("Warning: Model check failed: %v\n", err)
-		fmt.Println("Make sure the model is downloaded with: ollama pull", config.Model)
+		log.Warn("model check failed", 
+			slog.String("error", err.Error()),
+			slog.String("hint", fmt.Sprintf("Make sure the model is downloaded with: ollama pull %s", config.Model)))
 	}
-	if debugTiming {
-		fmt.Printf("  [Timing] Model check took: %v\n", time.Since(modelCheckStart))
-	}
+	log.Debug("model check completed", slog.Duration("duration", time.Since(modelCheckStart)))
 
 	// Always use separate output approach
 	genConfig := &generator.Config{
@@ -128,11 +125,11 @@ func runGeneration(filePath string) error {
 	promptBuilder := prompt.NewBuilder()
 
 	// Use separate generation approach
-	return runSeparateGeneration(filePath, gen, promptBuilder, aiClient, targets, debugTiming, noStream)
+	return runSeparateGeneration(filePath, gen, promptBuilder, aiClient, targets, noStream)
 }
 
 // runSeparateGeneration handles generation with separate output files
-func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuilder *prompt.Builder, aiClient *ai.Client, targets []*parser.Target, debugTiming, noStream bool) error {
+func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuilder *prompt.Builder, aiClient *ai.Client, targets []*parser.Target, noStream bool) error {
 	totalStart := time.Now()
 
 	// Parse file info for package details
@@ -142,14 +139,14 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 	}
 
 	// Log source package information
-	fmt.Printf("Source package: %s\n", fileInfo.PackageName)
+	log.Info("source package", slog.String("package", fileInfo.PackageName))
 
 	if len(targets) == 0 {
-		fmt.Println("No generation targets found (functions with // glyph comments)")
+		log.Info("no generation targets found (functions with // glyph comments)")
 		return nil
 	}
 
-	fmt.Printf("Found %d generation targets, generating to separate file\n", len(targets))
+	log.Info("generating to separate file", slog.Int("targets", len(targets)))
 
 	// Read file content for context
 	fileContent, err := os.ReadFile(filePath)
@@ -163,22 +160,24 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 
 	for i, target := range targets {
 		targetStart := time.Now()
-		fmt.Printf("\n[%d/%d] Generating: %s\n", i+1, len(targets), target.Name)
-		fmt.Printf("  Instruction: %s\n", target.Instruction)
+		log.Info("generating target", 
+			slog.Int("current", i+1),
+			slog.Int("total", len(targets)),
+			slog.String("function", target.Name),
+			slog.String("instruction", target.Instruction))
 
 		// Skip if no panic("not implemented")
 		if !target.HasPanic {
-			fmt.Println("  Skipping: no panic(\"not implemented\") found")
+			log.Info("skipping target - no panic found", slog.String("function", target.Name))
 			continue
 		}
 
 		// Build prompt
 		promptStart := time.Now()
 		fullPrompt := promptBuilder.BuildForTarget(target, string(fileContent))
-		if debugTiming {
-			fmt.Printf("  [Timing] Prompt building took: %v\n", time.Since(promptStart))
-			fmt.Printf("  [Timing] Prompt length: %d chars\n", len(fullPrompt))
-		}
+		log.Debug("prompt built",
+			slog.Duration("duration", time.Since(promptStart)),
+			slog.Int("length", len(fullPrompt)))
 
 		// Generate implementation
 		genStart := time.Now()
@@ -186,14 +185,14 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 
 		if noStream {
 			// Non-streaming mode
-			fmt.Println("  Generating implementation...")
+			log.Info("generating implementation (non-streaming)", slog.String("function", target.Name))
 			response, err = aiClient.Generate(ctx, fullPrompt)
 			if err != nil {
 				return fmt.Errorf("generation error for %s: %w", target.Name, err)
 			}
 		} else {
 			// Streaming mode
-			fmt.Print("  Generating implementation: ")
+			log.Info("generating implementation (streaming)", slog.String("function", target.Name))
 
 			outputCh, errorCh := aiClient.GenerateStream(ctx, fullPrompt)
 			var responseBuilder strings.Builder
@@ -209,7 +208,6 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 					if !ok {
 						// Channel closed, we're done
 						response = responseBuilder.String()
-						fmt.Println() // New line after streaming
 						goto streamDone
 					}
 					responseBuilder.WriteString(chunk)
@@ -219,14 +217,13 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 						firstOutput = false
 					}
 					charCount += len(chunk)
-					// Print a dot for every 10 characters received
-					for i := 0; i < len(chunk)/10; i++ {
-						fmt.Print(".")
-					}
+					// Log progress at trace level
+					log.Trace("streaming progress", 
+						slog.Int("chars_received", charCount),
+						slog.String("function", target.Name))
 
 				case err := <-errorCh:
 					if err != nil {
-						fmt.Println() // New line before error
 						return fmt.Errorf("generation error for %s: %w", target.Name, err)
 					}
 				}
@@ -234,21 +231,21 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 		streamDone:
 		}
 
-		if debugTiming {
-			fmt.Printf("  [Timing] AI generation took: %v\n", time.Since(genStart))
-		}
+		log.Debug("AI generation completed", 
+			slog.Duration("duration", time.Since(genStart)),
+			slog.String("function", target.Name))
 
 		// Store implementation
 		implementations[target.Name] = response
 
-		fmt.Println("  ✓ Generated")
-		if debugTiming {
-			fmt.Printf("  [Timing] Total for %s: %v\n", target.Name, time.Since(targetStart))
-		}
+		log.Info("target generated successfully", slog.String("function", target.Name))
+		log.Debug("target total time", 
+			slog.String("function", target.Name),
+			slog.Duration("duration", time.Since(targetStart)))
 	}
 
 	// Generate the output file with all implementations
-	fmt.Printf("\nGenerating output file...")
+	log.Info("generating output file")
 	generateStart := time.Now()
 
 	// Create new generator with correct source package
@@ -264,17 +261,13 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 		return fmt.Errorf("failed to generate output file: %w", err)
 	}
 
-	if debugTiming {
-		fmt.Printf("  [Timing] File generation took: %v\n", time.Since(generateStart))
-	}
+	log.Debug("file generation completed", slog.Duration("duration", time.Since(generateStart)))
 
 	totalTime := time.Since(totalStart)
-	fmt.Printf("\n✓ All implementations generated to %s!", filepath.Join(outputDir, filepath.Base(filePath)))
-	if debugTiming {
-		fmt.Printf("\n  [Timing] Total execution time: %v\n", totalTime)
-	} else {
-		fmt.Printf(" (took %v)\n", totalTime)
-	}
+	outputPath := filepath.Join(outputDir, filepath.Base(filePath))
+	log.Info("all implementations generated successfully", 
+		slog.String("output", outputPath),
+		slog.Duration("total_time", totalTime))
 
 	return nil
 }
