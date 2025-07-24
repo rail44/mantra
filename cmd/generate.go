@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/rail44/mantra/internal/ai"
+	"github.com/rail44/mantra/internal/detector"
 	"github.com/rail44/mantra/internal/generator"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
@@ -25,32 +26,31 @@ var (
 )
 
 var generateCmd = &cobra.Command{
-	Use:   "generate <file>",
-	Short: "Generate implementation once without watching",
-	Long: `Generate runs the AI generation process once on the specified Go file
-and replaces panic("not implemented") with actual implementations.
+	Use:   "generate [package-dir]",
+	Short: "Generate implementations for all pending targets in a package",
+	Long: `Generate implementations for all mantra targets in a package that are either:
+- Not yet generated (new targets)
+- Outdated (declaration or instruction changed)
 
 The command looks for functions marked with // mantra comments and generates
 their implementations based on the natural language instructions provided.`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		filePath := args[0]
-
-		// Verify file exists
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			log.Error("file does not exist", slog.String("file", filePath))
-			os.Exit(1)
+		// Get package directory (default to current directory)
+		pkgDir := "."
+		if len(args) > 0 {
+			pkgDir = args[0]
 		}
 
-		// Make absolute path
-		absPath, err := filepath.Abs(filePath)
+		// Ensure absolute path
+		absPkgDir, err := filepath.Abs(pkgDir)
 		if err != nil {
-			log.Error("failed to resolve path", slog.String("error", err.Error()))
+			log.Error("failed to get absolute path", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 
-		// Run generation
-		if err := runGeneration(absPath); err != nil {
+		// Run generation for package
+		if err := runPackageGeneration(absPkgDir); err != nil {
 			log.Error("generation failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
@@ -65,209 +65,181 @@ func init() {
 	generateCmd.Flags().StringVar(&packageName, "package-name", "generated", "Package name for generated files")
 }
 
-func runGeneration(filePath string) error {
-	log.Info("generating implementation", slog.String("file", filePath))
-
-	// Parse the file to find generation targets
-	parseStart := time.Now()
-	log.Info("parsing file", slog.String("file", filepath.Base(filePath)))
-	targets, err := parser.ParseFile(filePath)
+func runPackageGeneration(pkgDir string) error {
+	// Detect all targets and their status
+	log.Info("detecting targets in package", slog.String("package", pkgDir))
+	statuses, err := detector.DetectPackageTargets(pkgDir, outputDir)
 	if err != nil {
-		return fmt.Errorf("parse error: %w", err)
+		return fmt.Errorf("failed to detect targets: %w", err)
 	}
-	log.Debug("parsing completed", 
-		slog.Duration("duration", time.Since(parseStart)),
-		slog.Int("targets", len(targets)))
 
-	if len(targets) == 0 {
-		log.Info("no generation targets found (functions with // mantra comments)")
+	// Summary of detection
+	var ungenerated, outdated, current int
+	for _, status := range statuses {
+		switch status.Status {
+		case detector.StatusUngenerated:
+			ungenerated++
+			log.Info("new target found", 
+				slog.String("function", status.Target.Name),
+				slog.String("file", filepath.Base(status.Target.FilePath)))
+		case detector.StatusOutdated:
+			outdated++
+			log.Info("outdated target found", 
+				slog.String("function", status.Target.Name),
+				slog.String("file", filepath.Base(status.Target.FilePath)),
+				slog.String("old_checksum", status.ExistingChecksum),
+				slog.String("new_checksum", status.CurrentChecksum))
+		case detector.StatusCurrent:
+			current++
+			log.Debug("up-to-date target", 
+				slog.String("function", status.Target.Name),
+				slog.String("file", filepath.Base(status.Target.FilePath)))
+		}
+	}
+
+	log.Info("detection summary",
+		slog.Int("ungenerated", ungenerated),
+		slog.Int("outdated", outdated),
+		slog.Int("current", current),
+		slog.Int("total", len(statuses)))
+
+	// Filter targets that need generation
+	targetsToGenerate := detector.FilterTargetsToGenerate(statuses)
+	if len(targetsToGenerate) == 0 {
+		log.Info("all targets are up-to-date, nothing to generate")
 		return nil
 	}
 
-	log.Info("found generation targets", slog.Int("count", len(targets)))
-
-	// Create AI client
-	clientStart := time.Now()
-	config := &ai.Config{
-		Model: GetModel(),
-		Host:  GetHost(),
-	}
-	log.Info("creating AI client", slog.String("model", config.Model))
-	aiClient, err := ai.NewClient(config)
+	// Initialize components
+	aiClient, err := ai.NewClient(&ai.Config{
+		Host:  ollamaHost,
+		Model: modelName,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create AI client: %w", err)
+		return fmt.Errorf("failed to create Ollama client: %w", err)
 	}
 
 	// Enable debug timing on AI client if requested
 	aiClient.SetDebugTiming(log.IsDebugEnabled())
 
-	log.Debug("AI client created", slog.Duration("duration", time.Since(clientStart)))
-
 	// Check if model is available
-	modelCheckStart := time.Now()
 	ctx := context.Background()
 	if err := aiClient.CheckModel(ctx); err != nil {
 		log.Warn("model check failed", 
 			slog.String("error", err.Error()),
-			slog.String("hint", fmt.Sprintf("Make sure the model is downloaded with: ollama pull %s", config.Model)))
+			slog.String("hint", fmt.Sprintf("Make sure the model is downloaded with: ollama pull %s", modelName)))
 	}
-	log.Debug("model check completed", slog.Duration("duration", time.Since(modelCheckStart)))
 
-	// Always use separate output approach
-	genConfig := &generator.Config{
+	promptBuilder := prompt.NewBuilder()
+	gen := generator.New(&generator.Config{
 		OutputDir:     outputDir,
 		PackageName:   packageName,
-		SourcePackage: "", // Will be determined from file
-	}
-	gen := generator.New(genConfig)
+		SourcePackage: filepath.Base(pkgDir),
+	})
 
-	// Create prompt builder
-	promptBuilder := prompt.NewBuilder()
-
-	// Use separate generation approach
-	return runSeparateGeneration(filePath, gen, promptBuilder, aiClient, targets, noStream)
-}
-
-// runSeparateGeneration handles generation with separate output files
-func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuilder *prompt.Builder, aiClient *ai.Client, targets []*parser.Target, noStream bool) error {
-	totalStart := time.Now()
-
-	// Parse file info for package details
-	fileInfo, err := parser.ParseFileInfo(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to parse file info: %w", err)
+	// Group targets by file
+	targetsByFile := make(map[string][]*parser.Target)
+	for _, target := range targetsToGenerate {
+		targetsByFile[target.FilePath] = append(targetsByFile[target.FilePath], target)
 	}
 
-	// Log source package information
-	log.Info("source package", slog.String("package", fileInfo.PackageName))
+	// Process each file
+	for filePath, targets := range targetsByFile {
+		log.Info("processing file", 
+			slog.String("file", filepath.Base(filePath)),
+			slog.Int("targets", len(targets)))
 
-	if len(targets) == 0 {
-		log.Info("no generation targets found (functions with // mantra comments)")
-		return nil
-	}
-
-	log.Info("generating to separate file", slog.Int("targets", len(targets)))
-
-	// Read file content for context
-	fileContent, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-
-	// Generate implementations for all targets
-	implementations := make(map[string]string)
-	ctx := context.Background()
-
-	for i, target := range targets {
-		targetStart := time.Now()
-		log.Info("generating target", 
-			slog.Int("current", i+1),
-			slog.Int("total", len(targets)),
-			slog.String("function", target.Name),
-			slog.String("instruction", target.Instruction))
-
-		// Skip if no panic("not implemented")
-		if !target.HasPanic {
-			log.Info("skipping target - no panic found", slog.String("function", target.Name))
+		// Read file content
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			log.Error("failed to read file", 
+				slog.String("file", filePath),
+				slog.String("error", err.Error()))
 			continue
 		}
 
-		// Build prompt
-		promptStart := time.Now()
-		fullPrompt := promptBuilder.BuildForTarget(target, string(fileContent))
-		log.Debug("prompt built",
-			slog.Duration("duration", time.Since(promptStart)),
-			slog.Int("length", len(fullPrompt)))
-
-		// Generate implementation
-		genStart := time.Now()
-		var response string
-
-		if noStream {
-			// Non-streaming mode
-			log.Info("generating implementation (non-streaming)", slog.String("function", target.Name))
-			response, err = aiClient.Generate(ctx, fullPrompt)
-			if err != nil {
-				return fmt.Errorf("generation error for %s: %w", target.Name, err)
-			}
-		} else {
-			// Streaming mode
-			log.Info("generating implementation (streaming)", slog.String("function", target.Name))
-
-			outputCh, errorCh := aiClient.GenerateStream(ctx, fullPrompt)
-			var responseBuilder strings.Builder
-
-			// Track if we've shown any output
-			firstOutput := true
-			charCount := 0
-
-			// Process streaming output
-			for {
-				select {
-				case chunk, ok := <-outputCh:
-					if !ok {
-						// Channel closed, we're done
-						response = responseBuilder.String()
-						goto streamDone
-					}
-					responseBuilder.WriteString(chunk)
-
-					// Show progress dots instead of the actual code
-					if firstOutput {
-						firstOutput = false
-					}
-					charCount += len(chunk)
-					// Log progress at trace level
-					log.Trace("streaming progress", 
-						slog.Int("chars_received", charCount),
-						slog.String("function", target.Name))
-
-				case err := <-errorCh:
-					if err != nil {
-						return fmt.Errorf("generation error for %s: %w", target.Name, err)
-					}
-				}
-			}
-		streamDone:
+		// Parse file info
+		fileInfo, err := parser.ParseFileInfo(filePath)
+		if err != nil {
+			log.Error("failed to parse file",
+				slog.String("file", filePath),
+				slog.String("error", err.Error()))
+			continue
 		}
 
-		log.Debug("AI generation completed", 
-			slog.Duration("duration", time.Since(genStart)),
-			slog.String("function", target.Name))
+		// Generate implementations
+		implementations := make(map[string]string)
+		for _, target := range targets {
+			targetStart := time.Now()
+			log.Info("generating implementation",
+				slog.String("function", target.Name))
 
-		// Store implementation
-		implementations[target.Name] = response
+			// Build prompt
+			p := promptBuilder.BuildForTarget(target, string(content))
 
-		log.Info("target generated successfully", slog.String("function", target.Name))
-		log.Debug("target total time", 
-			slog.String("function", target.Name),
-			slog.Duration("duration", time.Since(targetStart)))
+			// Generate with AI
+			var implementation string
+			if noStream {
+				implementation, err = aiClient.Generate(ctx, p)
+			} else {
+				// Streaming mode
+				log.Info("generating implementation (streaming)", slog.String("function", target.Name))
+				outputCh, errorCh := aiClient.GenerateStream(ctx, p)
+				var responseBuilder strings.Builder
+				charCount := 0
+
+				for {
+					select {
+					case chunk, ok := <-outputCh:
+						if !ok {
+							implementation = responseBuilder.String()
+							goto streamDone
+						}
+						responseBuilder.WriteString(chunk)
+						charCount += len(chunk)
+						log.Trace("streaming progress", 
+							slog.Int("chars_received", charCount),
+							slog.String("function", target.Name))
+
+					case err := <-errorCh:
+						if err != nil {
+							log.Error("failed to generate implementation",
+								slog.String("function", target.Name),
+								slog.String("error", err.Error()))
+							continue
+						}
+					}
+				}
+			streamDone:
+			}
+
+			if err != nil {
+				log.Error("failed to generate implementation",
+					slog.String("function", target.Name),
+					slog.String("error", err.Error()))
+				continue
+			}
+
+			implementations[target.Name] = implementation
+			log.Info("generated implementation",
+				slog.String("function", target.Name),
+				slog.Duration("duration", time.Since(targetStart)))
+		}
+
+		// Generate file with all implementations
+		if len(implementations) > 0 {
+			if err := gen.GenerateFile(fileInfo, implementations); err != nil {
+				log.Error("failed to generate file",
+					slog.String("file", filePath),
+					slog.String("error", err.Error()))
+			} else {
+				log.Info("generated file",
+					slog.String("output", filepath.Join(outputDir, filepath.Base(filePath))))
+			}
+		}
 	}
 
-	// Generate the output file with all implementations
-	log.Info("generating output file")
-	generateStart := time.Now()
-
-	// Create new generator with correct source package
-	genConfig := &generator.Config{
-		OutputDir:     outputDir,
-		PackageName:   packageName,
-		SourcePackage: fileInfo.PackageName,
-	}
-	gen = generator.New(genConfig)
-
-	err = gen.GenerateFile(fileInfo, implementations)
-	if err != nil {
-		return fmt.Errorf("failed to generate output file: %w", err)
-	}
-
-	log.Debug("file generation completed", slog.Duration("duration", time.Since(generateStart)))
-
-	totalTime := time.Since(totalStart)
-	outputPath := filepath.Join(outputDir, filepath.Base(filePath))
-	log.Info("all implementations generated successfully", 
-		slog.String("output", outputPath),
-		slog.Duration("total_time", totalTime))
-
+	log.Info("package generation complete")
 	return nil
 }
+
