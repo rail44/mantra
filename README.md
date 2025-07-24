@@ -7,6 +7,7 @@ Glyph is a local-first AI-powered Go code generation tool that transforms natura
 - **Natural Language Programming**: Describe what you want in plain language
 - **Safe Generation**: Generates implementations to separate files, preserving original source
 - **Context-Aware**: Understands your function signatures and surrounding code
+- **Smart Examples**: Learns from previously generated code to maintain consistency
 - **Local-First**: Everything runs on your machine with Ollama
 - **Real-time Streaming**: See generation progress as it happens
 - **Flexible Output**: Generate to separate files or replace in-place
@@ -65,10 +66,11 @@ glyph generate main.go
 
 1. **Comment Detection**: Glyph finds functions marked with `// glyph:` comments
 2. **Context Analysis**: Analyzes function signatures and surrounding code
-3. **AI Generation**: Sends context and instructions to your local AI model
-4. **Real-time Streaming**: Shows generation progress with live feedback
-5. **Code Generation**: Generates implementations based on your output preference
-6. **Format & Save**: Formats the code and saves to target location
+3. **Example Learning**: Learns from previously generated implementations to maintain consistency
+4. **AI Generation**: Sends context and instructions to your local AI model
+5. **Real-time Streaming**: Shows generation progress with live feedback
+6. **Code Generation**: Generates implementations based on your output preference
+7. **Format & Save**: Formats the code and saves to target location
 
 ### Output Modes
 

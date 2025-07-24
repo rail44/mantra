@@ -2,6 +2,8 @@ package prompt
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rail44/glyph/internal/context"
@@ -62,6 +64,35 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) stri
 			prompt.WriteString("\n")
 		}
 		prompt.WriteString("```\n\n")
+	}
+
+	// Add examples from previously generated file
+	extractor := context.NewExampleExtractor()
+	
+	// Look for generated file
+	generatedDir := "generated" // TODO: This should be configurable
+	generatedPath := filepath.Join(generatedDir, filepath.Base(target.FilePath))
+	
+	if generatedContent, err := os.ReadFile(generatedPath); err == nil {
+		examples, _ := extractor.ExtractFromFileContent(string(generatedContent), target)
+		if len(examples) > 0 {
+			prompt.WriteString("## Examples from previously generated implementations\n")
+			prompt.WriteString("Here are some functions that were previously generated for this file:\n\n")
+			
+			// Limit to 2 examples to keep prompt size reasonable
+			maxExamples := 2
+			if len(examples) < maxExamples {
+				maxExamples = len(examples)
+			}
+			
+			for i := 0; i < maxExamples; i++ {
+				example := examples[i]
+				prompt.WriteString(fmt.Sprintf("### Example: %s\n", example.Signature))
+				prompt.WriteString("```go\n")
+				prompt.WriteString(example.Body)
+				prompt.WriteString("\n```\n\n")
+			}
+		}
 	}
 
 	// Add key instructions
