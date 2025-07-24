@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/rail44/glyph/internal/log"
+	"github.com/rail44/mantra/internal/log"
 )
 
 var (
@@ -15,9 +15,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "glyph",
+	Use:   "mantra",
 	Short: "AI-powered Go code generator",
-	Long: `Glyph is a local-first interactive development tool that generates
+	Long: `Mantra is a local-first interactive development tool that generates
 AI-powered Go code implementations from natural language instructions.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,

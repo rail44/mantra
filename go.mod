@@ -1,4 +1,4 @@
-module github.com/rail44/glyph
+module github.com/rail44/mantra
 
 go 1.24.2
 

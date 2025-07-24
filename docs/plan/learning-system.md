@@ -1,8 +1,8 @@
-# Glyph Learning System Design
+# Mantra Learning System Design
 
 ## Overview
 
-This document outlines the future design for Glyph's learning system, which will enable the tool to improve its code generation quality based on user behavior without requiring explicit training actions.
+This document outlines the future design for Mantra's learning system, which will enable the tool to improve its code generation quality based on user behavior without requiring explicit training actions.
 
 ## Goals
 
@@ -61,7 +61,7 @@ Leveraging Ollama's ADAPTER feature for lightweight model customization:
 
 ```
 FROM devstral
-ADAPTER ~/.glyph/adapters/user-style.gguf
+ADAPTER ~/.mantra/adapters/user-style.gguf
 
 TEMPLATE """{{ .System }}
 {{ if .Examples }}
@@ -80,9 +80,9 @@ SYSTEM """Customized based on user's coding patterns..."""
 ### Normal Usage (No Learning Awareness)
 
 ```bash
-# User just uses Glyph normally
-glyph generate user_queries.go
-glyph watch api_handlers.go
+# User just uses Mantra normally
+mantra generate user_queries.go
+mantra watch api_handlers.go
 
 # Learning happens automatically in background
 ```
@@ -91,7 +91,7 @@ glyph watch api_handlers.go
 
 ```bash
 # Learn from existing project (one-time)
-glyph init --learn-from ./my-project
+mantra init --learn-from ./my-project
 
 # Output:
 # Analyzing patterns...
@@ -104,10 +104,10 @@ glyph init --learn-from ./my-project
 
 ```bash
 # Only when user wants to provide explicit feedback
-glyph feedback  # Rate last generation
+mantra feedback  # Rate last generation
 
 # Or during generation
-glyph generate user.go --feedback
+mantra generate user.go --feedback
 ```
 
 ## Implementation Phases
@@ -134,7 +134,7 @@ glyph generate user.go --feedback
 
 ## Privacy Considerations
 
-- All data stored locally in `~/.glyph/`
+- All data stored locally in `~/.mantra/`
 - No network transmission of code
 - Configurable anonymization for shared patterns
 - Explicit opt-in for any sharing features
@@ -142,7 +142,7 @@ glyph generate user.go --feedback
 ## Configuration
 
 ```yaml
-# ~/.glyph/config.yaml
+# ~/.mantra/config.yaml
 learning:
   mode: passive          # passive or active
   auto_improve: true     # Automatic model updates

@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strings"
 
-	astutils "github.com/rail44/glyph/internal/ast"
-	"github.com/rail44/glyph/internal/imports"
-	"github.com/rail44/glyph/internal/parser"
+	astutils "github.com/rail44/mantra/internal/ast"
+	"github.com/rail44/mantra/internal/imports"
+	"github.com/rail44/mantra/internal/parser"
 )
 
 // Config holds configuration for code generation

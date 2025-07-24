@@ -7,7 +7,7 @@ import (
 	"go/token"
 	"strings"
 
-	"github.com/rail44/glyph/internal/parser"
+	"github.com/rail44/mantra/internal/parser"
 )
 
 // Example represents a function example from the codebase

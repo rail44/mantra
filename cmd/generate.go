@@ -11,11 +11,11 @@ import (
 	"github.com/spf13/cobra"
 	"log/slog"
 
-	"github.com/rail44/glyph/internal/ai"
-	"github.com/rail44/glyph/internal/generator"
-	"github.com/rail44/glyph/internal/log"
-	"github.com/rail44/glyph/internal/parser"
-	"github.com/rail44/glyph/internal/prompt"
+	"github.com/rail44/mantra/internal/ai"
+	"github.com/rail44/mantra/internal/generator"
+	"github.com/rail44/mantra/internal/log"
+	"github.com/rail44/mantra/internal/parser"
+	"github.com/rail44/mantra/internal/prompt"
 )
 
 var (
@@ -30,7 +30,7 @@ var generateCmd = &cobra.Command{
 	Long: `Generate runs the AI generation process once on the specified Go file
 and replaces panic("not implemented") with actual implementations.
 
-The command looks for functions marked with // glyph comments and generates
+The command looks for functions marked with // mantra comments and generates
 their implementations based on the natural language instructions provided.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -80,7 +80,7 @@ func runGeneration(filePath string) error {
 		slog.Int("targets", len(targets)))
 
 	if len(targets) == 0 {
-		log.Info("no generation targets found (functions with // glyph comments)")
+		log.Info("no generation targets found (functions with // mantra comments)")
 		return nil
 	}
 
@@ -142,7 +142,7 @@ func runSeparateGeneration(filePath string, gen *generator.Generator, promptBuil
 	log.Info("source package", slog.String("package", fileInfo.PackageName))
 
 	if len(targets) == 0 {
-		log.Info("no generation targets found (functions with // glyph comments)")
+		log.Info("no generation targets found (functions with // mantra comments)")
 		return nil
 	}
 

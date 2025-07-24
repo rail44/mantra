@@ -24,12 +24,12 @@ type User struct {
 	Name  string
 }
 
-// glyph: emailでユーザーを検索
+// mantra: emailでユーザーを検索
 func GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	panic("not implemented")
 }
 
-// glyph: 複数のユーザーを取得
+// mantra: 複数のユーザーを取得
 // statusがactiveのユーザーのみ
 // created_atの降順でソート
 func ListActiveUsers(ctx context.Context, limit int) ([]*User, error) {
@@ -45,17 +45,17 @@ type Repository struct {
 	client interface{}
 }
 
-// glyph: ユーザーをIDで取得
+// mantra: ユーザーをIDで取得
 func (r *Repository) GetUser(ctx context.Context, id string) (*User, error) {
 	panic("not implemented")
 }
 
-// glyph: 新規ユーザーを作成
+// mantra: 新規ユーザーを作成
 func (r *Repository) CreateUser(ctx context.Context, user *User) error {
 	panic("not implemented")
 }
 
-// glyph: 割引率を計算
+// mantra: 割引率を計算
 func CalculateDiscount(price float64) float64 {
 	panic("not implemented")
 }

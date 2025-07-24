@@ -6,8 +6,8 @@ import (
 	"go/token"
 	"strings"
 
-	astutils "github.com/rail44/glyph/internal/ast"
-	"github.com/rail44/glyph/internal/parser"
+	astutils "github.com/rail44/mantra/internal/ast"
+	"github.com/rail44/mantra/internal/parser"
 )
 
 // RelevantContext holds context information relevant to a function

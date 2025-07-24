@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rail44/glyph/internal/context"
-	"github.com/rail44/glyph/internal/parser"
+	"github.com/rail44/mantra/internal/context"
+	"github.com/rail44/mantra/internal/parser"
 )
 
 // Builder creates prompts for code generation

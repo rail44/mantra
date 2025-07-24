@@ -1,12 +1,12 @@
-# Glyph Architecture Evolution: From Specific to Generic
+# Mantra Architecture Evolution: From Specific to Generic
 
 ## Overview
 
-This document outlines the planned evolution of Glyph from a Spanner-specific tool to a generic Go code generation framework with pluggable domain knowledge.
+This document outlines the planned evolution of Mantra from a Spanner-specific tool to a generic Go code generation framework with pluggable domain knowledge.
 
 ## Current State (v1.0)
 
-Glyph currently focuses on generating Google Cloud Spanner data access layer code:
+Mantra currently focuses on generating Google Cloud Spanner data access layer code:
 - Hardcoded Spanner best practices
 - Spanner-specific prompt templates
 - Fixed import statements for Spanner libraries
@@ -36,21 +36,21 @@ type GenerationMode interface {
 ### Configuration
 
 ```yaml
-# .glyph.yaml
+# .mantra.yaml
 mode: spanner  # or: grpc, rest, graphql, etc.
 model: devstral
 
 modes:
   spanner:
-    knowledge: ~/.glyph/knowledge/spanner.md
-    templates: ~/.glyph/templates/spanner/
+    knowledge: ~/.mantra/knowledge/spanner.md
+    templates: ~/.mantra/templates/spanner/
     imports:
       - cloud.google.com/go/spanner
       - google.golang.org/api/iterator
   
   grpc:
-    knowledge: ~/.glyph/knowledge/grpc.md
-    templates: ~/.glyph/templates/grpc/
+    knowledge: ~/.mantra/knowledge/grpc.md
+    templates: ~/.mantra/templates/grpc/
     imports:
       - google.golang.org/grpc
       - google.golang.org/protobuf
@@ -60,16 +60,16 @@ modes:
 
 ```bash
 # List available modes
-glyph mode list
+mantra mode list
 
 # Install a community mode
-glyph mode install github.com/user/glyph-graphql-mode
+mantra mode install github.com/user/mantra-graphql-mode
 
 # Create custom mode
-glyph mode create my-mode --template spanner
+mantra mode create my-mode --template spanner
 
 # Set default mode
-glyph mode set grpc
+mantra mode set grpc
 ```
 
 ## Implementation Roadmap

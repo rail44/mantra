@@ -1,6 +1,6 @@
-# Glyph Planning Documents
+# Mantra Planning Documents
 
-This directory contains design documents and plans for future features of Glyph.
+This directory contains design documents and plans for future features of Mantra.
 
 ## Documents
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rail44/glyph/internal/parser"
+	"github.com/rail44/mantra/internal/parser"
 )
 
 func TestExampleExtractor_ExtractFromFileContent(t *testing.T) {
@@ -30,7 +30,7 @@ func GetUserByID(id string) (*User, error) {
 	return &User{ID: id, Name: "John Doe"}, nil
 }
 
-// glyph: emailでユーザーを検索
+// mantra: emailでユーザーを検索
 func GetUserByEmail(email string) (*User, error) {
 	panic("not implemented")
 }
@@ -116,7 +116,7 @@ type UserService struct {
 	db Database
 }
 
-// glyph: IDでユーザーを取得
+// mantra: IDでユーザーを取得
 func (s *UserService) GetByID(id string) (*User, error) {
 	panic("not implemented")
 }

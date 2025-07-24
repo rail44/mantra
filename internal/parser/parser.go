@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	astutils "github.com/rail44/glyph/internal/ast"
+	astutils "github.com/rail44/mantra/internal/ast"
 )
 
 const (
@@ -39,7 +39,7 @@ type Target struct {
 	Receiver       *Receiver      // Receiver for methods (nil for functions)
 	Params         []Param        // Function parameters
 	Returns        []Return       // Return values
-	Instruction    string         // Content from // glyph: comment
+	Instruction    string         // Content from // mantra: comment
 	FilePath       string         // Source file path
 	HasPanic       bool           // Whether function contains panic("not implemented")
 	Implementation string         // Generated implementation (temporary storage)
@@ -122,16 +122,16 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 	// Map to store glyph comments by position
 	glyphComments := make(map[token.Pos]string)
 
-	// First pass: collect all // glyph: comments
+	// First pass: collect all // mantra: comments
 	for _, commentGroup := range node.Comments {
 		var glyphInstruction strings.Builder
 		foundGlyph := false
 
 		for _, comment := range commentGroup.List {
 			text := strings.TrimSpace(comment.Text)
-			if strings.HasPrefix(text, "// glyph:") {
+			if strings.HasPrefix(text, "// mantra:") {
 				foundGlyph = true
-				instruction := strings.TrimSpace(strings.TrimPrefix(text, "// glyph:"))
+				instruction := strings.TrimSpace(strings.TrimPrefix(text, "// mantra:"))
 				glyphInstruction.WriteString(instruction)
 			} else if foundGlyph && strings.HasPrefix(text, "//") {
 				// Continuation of glyph comment

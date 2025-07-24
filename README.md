@@ -1,6 +1,6 @@
-# 🔮 Glyph
+# 🔮 Mantra
 
-Glyph is a local-first AI-powered Go code generation tool that transforms natural language instructions into working implementations.
+Mantra is a local-first AI-powered Go code generation tool that transforms natural language instructions into working implementations.
 
 ## Features
 
@@ -15,15 +15,15 @@ Glyph is a local-first AI-powered Go code generation tool that transforms natura
 ## Installation
 
 ```bash
-go install github.com/rail44/glyph@latest
+go install github.com/rail44/mantra@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/rail44/glyph.git
-cd glyph
-go build -o glyph .
+git clone https://github.com/rail44/mantra.git
+cd mantra
+go build -o mantra .
 ```
 
 ## Prerequisites
@@ -34,19 +34,19 @@ go build -o glyph .
 
 ## Quick Start
 
-1. Write your Go code with `// glyph:` comments:
+1. Write your Go code with `// mantra:` comments:
 
 ```go
 package main
 
 import "context"
 
-// glyph: emailでユーザーを検索
+// mantra: emailでユーザーを検索
 func GetUserByEmail(ctx context.Context, email string) (*User, error) {
     panic("not implemented")
 }
 
-// glyph: 割引率を計算する
+// mantra: 割引率を計算する
 // 購入金額が10000円以上で10%割引
 // 会員ランクがGoldなら追加5%割引
 func CalculateDiscount(amount float64, memberRank string) float64 {
@@ -57,14 +57,14 @@ func CalculateDiscount(amount float64, memberRank string) float64 {
 2. Generate implementations:
 
 ```bash
-glyph generate main.go
+mantra generate main.go
 ```
 
 3. Watch the streaming progress as code is generated in real-time!
 
 ## How It Works
 
-1. **Comment Detection**: Glyph finds functions marked with `// glyph:` comments
+1. **Comment Detection**: Mantra finds functions marked with `// mantra:` comments
 2. **Context Analysis**: Analyzes function signatures and surrounding code
 3. **Example Learning**: Learns from previously generated implementations to maintain consistency
 4. **AI Generation**: Sends context and instructions to your local AI model
@@ -90,10 +90,10 @@ Configuration is handled via command-line flags:
 
 ```bash
 # Use different model
-glyph generate --model qwen2.5-coder main.go
+mantra generate --model qwen2.5-coder main.go
 
 # Use different Ollama host
-glyph generate --host http://192.168.1.100:11434 main.go
+mantra generate --host http://192.168.1.100:11434 main.go
 ```
 
 Defaults:
@@ -104,10 +104,10 @@ Defaults:
 
 ### Generate
 ```bash
-glyph generate <file> [flags]
+mantra generate <file> [flags]
 ```
 
-Generates implementations for all functions with `// glyph:` comments.
+Generates implementations for all functions with `// mantra:` comments.
 
 **Flags:**
 - `--model string`: AI model to use (default: `devstral`)
@@ -121,33 +121,33 @@ Generates implementations for all functions with `// glyph:` comments.
 
 ```bash
 # Default: generate to separate files (preserves original source)
-glyph generate main.go
+mantra generate main.go
 
 # Generate to custom directory and package
-glyph generate main.go --output-dir ./impl --package-name impl
+mantra generate main.go --output-dir ./impl --package-name impl
 ```
 
 ### Performance Options
 
 ```bash
 # Default: streaming with progress indication
-glyph generate main.go
+mantra generate main.go
 
 # Non-streaming for scripting/CI
-glyph generate main.go --no-stream
+mantra generate main.go --no-stream
 
 # Debug with detailed logs
-glyph generate main.go --log-level debug
+mantra generate main.go --log-level debug
 
 # Trace level for maximum verbosity
-glyph generate main.go --log-level trace
+mantra generate main.go --log-level trace
 ```
 
 ## Writing Effective Instructions
 
 ### Basic Instructions
 ```go
-// glyph: IDでユーザーを取得
+// mantra: IDでユーザーを取得
 func GetUser(id string) (*User, error) {
     panic("not implemented")
 }
@@ -155,7 +155,7 @@ func GetUser(id string) (*User, error) {
 
 ### Detailed Instructions
 ```go
-// glyph: ユーザー認証を実行
+// mantra: ユーザー認証を実行
 // - パスワードをbcryptで検証
 // - 成功時はJWTトークンを生成
 // - 失敗回数をRedisでカウント
@@ -170,7 +170,7 @@ type UserService struct {
     db *sql.DB
 }
 
-// glyph: データベースから全ユーザーを取得
+// mantra: データベースから全ユーザーを取得
 func (s *UserService) GetAllUsers(ctx context.Context) ([]*User, error) {
     panic("not implemented")
 }
@@ -178,7 +178,7 @@ func (s *UserService) GetAllUsers(ctx context.Context) ([]*User, error) {
 
 ## Code Generation
 
-Glyph generates clean, idiomatic Go code with:
+Mantra generates clean, idiomatic Go code with:
 - Parameterized queries for database operations
 - Proper error handling and context usage
 - Best practices for the detected use case
@@ -187,20 +187,20 @@ Glyph generates clean, idiomatic Go code with:
 ## Performance Features
 
 ### Streaming Output
-By default, Glyph shows real-time progress as AI generates your code:
+By default, Mantra shows real-time progress as AI generates your code:
 - See dots appear as tokens are generated
 - Get immediate feedback that generation is working
 - Cancel if generation seems to be going wrong
 
 ### Optimized Prompts
-Glyph automatically chooses the right prompt complexity:
+Mantra automatically chooses the right prompt complexity:
 - **Simple functions**: Minimal prompts for faster generation
 - **Complex functions**: Detailed prompts with full context
 
 ### Performance Analysis
 Use debug or trace log levels to identify performance bottlenecks:
 ```bash
-glyph generate main.go --log-level debug
+mantra generate main.go --log-level debug
 ```
 
 This shows:
