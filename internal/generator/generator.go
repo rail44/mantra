@@ -64,7 +64,7 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 	return nil
 }
 
-// generateFileContent creates the content for the generated file by replacing glyph functions
+// generateFileContent creates the content for the generated file by replacing mantra functions
 func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementations map[string]string) (string, error) {
 	// Start with the original source content
 	content := fileInfo.SourceContent
@@ -90,7 +90,7 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 		return iStartLine > jStartLine // Descending order
 	})
 
-	// Replace each glyph function with its implementation (from bottom to top)
+	// Replace each mantra function with its implementation (from bottom to top)
 	for _, target := range targetsToProcess {
 		// Always use original file content and line numbers for each replacement
 		newContent, err := g.replaceFunctionBody(content, target, target.Implementation)

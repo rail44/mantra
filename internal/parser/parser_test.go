@@ -36,7 +36,7 @@ func ListActiveUsers(ctx context.Context, limit int) ([]*User, error) {
 	panic("not implemented")
 }
 
-// This function has no glyph comment
+// This function has no mantra comment
 func IgnoredFunction() {
 	// Do nothing
 }

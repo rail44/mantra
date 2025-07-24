@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// maxCommentGap is the maximum allowed gap between a glyph comment and its target function
+	// maxCommentGap is the maximum allowed gap between a mantra comment and its target function
 	// This prevents associating comments that are too far from the function
 	maxCommentGap = 50
 )
@@ -119,46 +119,46 @@ func ParseFile(filePath string) ([]*Target, error) {
 func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) ([]*Target, error) {
 	var targets []*Target
 
-	// Map to store glyph comments by position
-	glyphComments := make(map[token.Pos]string)
+	// Map to store mantra comments by position
+	mantraComments := make(map[token.Pos]string)
 
 	// First pass: collect all // mantra: comments
 	for _, commentGroup := range node.Comments {
-		var glyphInstruction strings.Builder
-		foundGlyph := false
+		var mantraInstruction strings.Builder
+		foundMantra := false
 
 		for _, comment := range commentGroup.List {
 			text := strings.TrimSpace(comment.Text)
 			if strings.HasPrefix(text, "// mantra:") {
-				foundGlyph = true
+				foundMantra = true
 				instruction := strings.TrimSpace(strings.TrimPrefix(text, "// mantra:"))
-				glyphInstruction.WriteString(instruction)
-			} else if foundGlyph && strings.HasPrefix(text, "//") {
-				// Continuation of glyph comment
+				mantraInstruction.WriteString(instruction)
+			} else if foundMantra && strings.HasPrefix(text, "//") {
+				// Continuation of mantra comment
 				additionalText := strings.TrimSpace(strings.TrimPrefix(text, "//"))
 				if additionalText != "" {
-					glyphInstruction.WriteString("\n")
-					glyphInstruction.WriteString(additionalText)
+					mantraInstruction.WriteString("\n")
+					mantraInstruction.WriteString(additionalText)
 				}
 			}
 		}
 
-		if foundGlyph {
+		if foundMantra {
 			// Store comment with its end position
-			glyphComments[commentGroup.End()] = glyphInstruction.String()
+			mantraComments[commentGroup.End()] = mantraInstruction.String()
 		}
 	}
 
-	// Second pass: find functions with glyph comments
+	// Second pass: find functions with mantra comments
 	ast.Inspect(node, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.FuncDecl:
-			// Check if there's a glyph comment immediately before this function
+			// Check if there's a mantra comment immediately before this function
 			var instruction string
 			var found bool
 
-			// Look for glyph comment right before function
-			for pos, instr := range glyphComments {
+			// Look for mantra comment right before function
+			for pos, instr := range mantraComments {
 				if pos < x.Pos() && x.Pos()-pos < maxCommentGap {
 					instruction = instr
 					found = true

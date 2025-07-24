@@ -22,14 +22,26 @@ func NewBuilder() *Builder {
 
 // BuildForTarget creates a prompt for a specific generation target
 func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) string {
-	var prompt strings.Builder
-
-	// Extract relevant context
-	ctx, err := context.ExtractRelevantContext(fileContent, target)
+	// Use project-wide context extraction by default
+	projectCtx, err := context.ExtractProjectContext(target.FilePath, target)
 	if err != nil {
-		// Fallback to basic prompt if context extraction fails
-		return b.buildBasicPrompt(target)
+		log.Warn("failed to extract project context, falling back to file-only context", 
+			slog.String("error", err.Error()))
+		// Fallback to file-only context extraction
+		ctx, err := context.ExtractRelevantContext(fileContent, target)
+		if err != nil {
+			// Fallback to basic prompt if context extraction fails
+			return b.buildBasicPrompt(target)
+		}
+		return b.buildPromptWithContext(ctx, target)
 	}
+
+	return b.buildPromptWithContext(&projectCtx.RelevantContext, target)
+}
+
+// buildPromptWithContext builds a prompt using the extracted context
+func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *parser.Target) string {
+	var prompt strings.Builder
 
 	// Build the prompt with rich context
 	prompt.WriteString("## Task\n")
