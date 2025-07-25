@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -27,18 +26,17 @@ func ExtractProjectContext(filePath string, target *parser.Target) (*ProjectCont
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | 
 		      packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Tests: false,
-		Dir: filepath.Dir(filePath), // Set working directory
 	}
 	
-	// Load the package containing our file
-	// Use "." to load the package in the current directory
-	pkgs, err := packages.Load(cfg, ".")
+	// Use file= pattern to load specific file directly
+	// This works with both go modules and standalone files
+	pkgs, err := packages.Load(cfg, "file="+filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package: %w", err)
 	}
 	
 	if len(pkgs) == 0 {
-		return nil, fmt.Errorf("no packages found at %s", filepath.Dir(filePath))
+		return nil, fmt.Errorf("no packages found for file %s", filePath)
 	}
 	
 	// Take the first package (should be the one we want)
