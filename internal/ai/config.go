@@ -11,6 +11,8 @@ type Config struct {
 	Timeout      time.Duration
 	Temperature  float32
 	SystemPrompt string
+	Provider     string  // Provider type: "ollama" or "openai"
+	APIKey       string  // API key for OpenAI-compatible providers
 }
 
 func DefaultConfig() *Config {

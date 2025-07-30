@@ -12,6 +12,8 @@ var (
 	modelName  string
 	ollamaHost string
 	logLevel   string
+	provider   string
+	apiKey     string
 )
 
 var rootCmd = &cobra.Command{
@@ -43,6 +45,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&modelName, "model", "devstral", "AI model to use for generation")
 	rootCmd.PersistentFlags().StringVar(&ollamaHost, "host", "http://localhost:11434", "Ollama host URL")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (error|warn|info|debug|trace)")
+	rootCmd.PersistentFlags().StringVar(&provider, "provider", "ollama", "AI provider to use (ollama|openai)")
+	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "API key for OpenAI-compatible providers (can also use MANTRA_OPENAI_API_KEY env var)")
 }
 
 // GetModel returns the configured model name
@@ -53,4 +57,14 @@ func GetModel() string {
 // GetHost returns the configured Ollama host
 func GetHost() string {
 	return ollamaHost
+}
+
+// GetProvider returns the configured provider
+func GetProvider() string {
+	return provider
+}
+
+// GetAPIKey returns the configured API key
+func GetAPIKey() string {
+	return apiKey
 }

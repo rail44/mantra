@@ -112,22 +112,35 @@ func runPackageGeneration(pkgDir string) error {
 
 	// Initialize components
 	aiClient, err := ai.NewClient(&ai.Config{
-		Host:  ollamaHost,
-		Model: modelName,
+		Host:     GetHost(),
+		Model:    GetModel(),
+		Provider: GetProvider(),
+		APIKey:   GetAPIKey(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create Ollama client: %w", err)
+		return fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	// Enable debug timing on AI client if requested
 	aiClient.SetDebugTiming(log.IsDebugEnabled())
 
+	// Log which provider we're using
+	log.Info("using AI provider", 
+		slog.String("provider", aiClient.GetProviderName()),
+		slog.String("model", GetModel()))
+
 	// Check if model is available
 	ctx := context.Background()
 	if err := aiClient.CheckModel(ctx); err != nil {
-		log.Warn("model check failed", 
-			slog.String("error", err.Error()),
-			slog.String("hint", fmt.Sprintf("Make sure the model is downloaded with: ollama pull %s", modelName)))
+		if GetProvider() == "ollama" {
+			log.Warn("model check failed", 
+				slog.String("error", err.Error()),
+				slog.String("hint", fmt.Sprintf("Make sure the model is downloaded with: ollama pull %s", modelName)))
+		} else {
+			log.Warn("model check failed", 
+				slog.String("error", err.Error()),
+				slog.String("hint", "Check your API key and model availability"))
+		}
 	}
 
 	promptBuilder := prompt.NewBuilder()
