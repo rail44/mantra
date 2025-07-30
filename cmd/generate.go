@@ -17,12 +17,14 @@ import (
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/prompt"
+	"github.com/rail44/mantra/internal/tools/setup"
 )
 
 var (
 	noStream    bool
 	outputDir   string
 	packageName string
+	useTools    bool
 )
 
 var generateCmd = &cobra.Command{
@@ -63,6 +65,7 @@ func init() {
 	generateCmd.Flags().BoolVar(&noStream, "no-stream", false, "Disable streaming output")
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "./generated", "Directory for generated files")
 	generateCmd.Flags().StringVar(&packageName, "package-name", "generated", "Package name for generated files")
+	generateCmd.Flags().BoolVar(&useTools, "use-tools", false, "Enable tool usage for dynamic code exploration")
 }
 
 func runPackageGeneration(pkgDir string) error {
@@ -144,6 +147,33 @@ func runPackageGeneration(pkgDir string) error {
 	}
 
 	promptBuilder := prompt.NewBuilder()
+	promptBuilder.SetUseTools(useTools)
+	
+	// Initialize tools if enabled
+	if useTools {
+		toolRegistry := setup.InitializeRegistry(pkgDir)
+		toolExecutor := setup.DefaultExecutor(pkgDir)
+		
+		// Convert our tools to AI tools format
+		availableTools := toolRegistry.ListAvailable()
+		aiTools := make([]ai.Tool, len(availableTools))
+		for i, tool := range availableTools {
+			aiTools[i] = ai.Tool{
+				Type: "function",
+				Function: ai.ToolFunction{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
+				},
+			}
+		}
+		
+		// Set tools on AI client
+		aiClient.SetTools(aiTools, toolExecutor)
+		
+		log.Info("tools enabled", slog.Int("count", len(aiTools)))
+	}
+	
 	gen := generator.New(&generator.Config{
 		OutputDir:     outputDir,
 		PackageName:   packageName,
@@ -192,7 +222,10 @@ func runPackageGeneration(pkgDir string) error {
 
 			// Generate with AI
 			var implementation string
-			if noStream {
+			if useTools {
+				// Use tool-enabled generation
+				implementation, err = aiClient.GenerateWithTools(ctx, p)
+			} else if noStream {
 				implementation, err = aiClient.Generate(ctx, p)
 			} else {
 				// Streaming mode

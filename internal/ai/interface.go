@@ -21,6 +21,11 @@ type Provider interface {
 type ToolProvider interface {
 	Provider
 	
-	// GenerateWithTools sends messages with tool definitions and handles tool calls
-	GenerateWithTools(ctx context.Context, messages []ChatMessage, tools []Tool) ([]ChatMessage, error)
+	// GenerateWithTools sends a prompt with tool definitions and handles tool calls
+	GenerateWithTools(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error)
+}
+
+// ToolExecutor executes tool calls
+type ToolExecutor interface {
+	Execute(ctx context.Context, toolName string, params map[string]interface{}) (interface{}, error)
 }

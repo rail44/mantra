@@ -310,45 +310,110 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 }
 
 // GenerateWithTools sends a prompt with tool definitions and handles tool calls
-func (c *OpenAIClient) GenerateWithTools(ctx context.Context, messages []ChatMessage, tools []Tool) ([]ChatMessage, error) {
-	// Convert ChatMessage to OpenAIMessage
-	openAIMessages := make([]OpenAIMessage, len(messages))
-	for i, msg := range messages {
-		openAIMessages[i] = OpenAIMessage{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			ToolCalls:  msg.ToolCalls,
-			ToolCallID: msg.ToolCallID,
+func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error) {
+	// Build initial messages
+	systemPrompt := c.systemPrompt
+	if systemPrompt == "" {
+		systemPrompt = DefaultConfig().SystemPrompt
+	}
+	
+	messages := []OpenAIMessage{
+		{
+			Role:    "system",
+			Content: systemPrompt,
+		},
+		{
+			Role:    "user",
+			Content: prompt,
+		},
+	}
+
+	// Maximum rounds of tool calls to prevent infinite loops
+	const maxRounds = 5
+	
+	for round := 0; round < maxRounds; round++ {
+		// Build request with tools
+		req := OpenAIRequest{
+			Model:       c.model,
+			Messages:    messages,
+			Temperature: c.temperature,
+			Stream:      false,
+			Tools:       tools,
+			ToolChoice:  "auto",
+		}
+
+		// Make API call
+		resp, err := c.makeRequest(ctx, req)
+		if err != nil {
+			return "", err
+		}
+
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("no response choices returned")
+		}
+
+		responseMsg := resp.Choices[0].Message
+		messages = append(messages, responseMsg)
+
+		// Debug: Log response
+		fmt.Printf("[DEBUG] Response from model: role=%s, content=%d chars, tool_calls=%d\n", 
+			responseMsg.Role, len(responseMsg.Content), len(responseMsg.ToolCalls))
+
+		// Check if we have tool calls
+		if len(responseMsg.ToolCalls) == 0 {
+			// No tool calls, return the content
+			return responseMsg.Content, nil
+		}
+
+		// Execute tool calls
+		for _, toolCall := range responseMsg.ToolCalls {
+			// Parse parameters
+			fmt.Printf("[TOOL CALL DEBUG] Arguments raw: %q\n", string(toolCall.Function.Arguments))
+			
+			// Check if Arguments is already a string (double-encoded)
+			var argStr string
+			if err := json.Unmarshal(toolCall.Function.Arguments, &argStr); err == nil {
+				// It was double-encoded, use the decoded string
+				fmt.Printf("[TOOL CALL DEBUG] Arguments was double-encoded, decoded to: %s\n", argStr)
+				toolCall.Function.Arguments = json.RawMessage(argStr)
+			}
+			
+			var params map[string]interface{}
+			if err := json.Unmarshal(toolCall.Function.Arguments, &params); err != nil {
+				return "", fmt.Errorf("failed to parse tool arguments: %w", err)
+			}
+
+			// Log tool execution
+			fmt.Printf("[TOOL CALL] Executing %s with params: %v\n", toolCall.Function.Name, params)
+			
+			// Execute tool
+			result, err := executor.Execute(ctx, toolCall.Function.Name, params)
+			if err != nil {
+				// Add error response
+				messages = append(messages, OpenAIMessage{
+					Role:       "tool",
+					Content:    fmt.Sprintf("Error executing tool: %v", err),
+					ToolCallID: toolCall.ID,
+				})
+				continue
+			}
+
+			// Marshal result
+			resultJSON, err := json.Marshal(result)
+			if err != nil {
+				return "", fmt.Errorf("failed to marshal tool result: %w", err)
+			}
+			
+			fmt.Printf("[TOOL RESULT] %s: %s\n", toolCall.Function.Name, string(resultJSON))
+
+			// Add tool response
+			messages = append(messages, OpenAIMessage{
+				Role:       "tool",
+				Content:    string(resultJSON),
+				ToolCallID: toolCall.ID,
+			})
 		}
 	}
 
-	// Build request with tools
-	req := OpenAIRequest{
-		Model:       c.model,
-		Messages:    openAIMessages,
-		Temperature: c.temperature,
-		Stream:      false,
-		Tools:       tools,
-		ToolChoice:  ToolChoiceAuto{},
-	}
-
-	// Make API call
-	resp, err := c.makeRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("no response choices returned")
-	}
-
-	// Convert response back to ChatMessage
-	responseMsg := resp.Choices[0].Message
-	result := ChatMessage{
-		Role:      responseMsg.Role,
-		Content:   responseMsg.Content,
-		ToolCalls: responseMsg.ToolCalls,
-	}
-
-	return append(messages, result), nil
+	return "", fmt.Errorf("exceeded maximum rounds of tool calls")
 }

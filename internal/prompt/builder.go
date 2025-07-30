@@ -13,11 +13,18 @@ import (
 )
 
 // Builder creates prompts for code generation
-type Builder struct{}
+type Builder struct{
+	useTools bool
+}
 
 // NewBuilder creates a new prompt builder
 func NewBuilder() *Builder {
 	return &Builder{}
+}
+
+// SetUseTools enables or disables tool usage instructions in prompts
+func (b *Builder) SetUseTools(useTools bool) {
+	b.useTools = useTools
 }
 
 // BuildForTarget creates a prompt for a specific generation target
@@ -47,6 +54,16 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	prompt.WriteString("## Task\n")
 	prompt.WriteString(fmt.Sprintf("Implement the body of this Go function: `%s`\n\n", target.GetFunctionSignature()))
 	prompt.WriteString(fmt.Sprintf("Instruction: %s\n\n", target.Instruction))
+
+	// Add tool usage instructions if enabled
+	if b.useTools {
+		prompt.WriteString("## Tool Usage\n")
+		prompt.WriteString("You have access to tools for inspecting Go code. Use them when you need to:\n")
+		prompt.WriteString("- Understand type definitions and interfaces\n")
+		prompt.WriteString("- Find specific declarations or implementations\n")
+		prompt.WriteString("- Verify the structure of types mentioned in the instruction\n\n")
+		prompt.WriteString("After gathering necessary information, generate the implementation code.\n\n")
+	}
 
 	// Add relevant type definitions
 	if len(ctx.Types) > 0 {

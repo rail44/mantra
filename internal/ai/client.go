@@ -10,6 +10,8 @@ type Client struct {
 	provider    Provider
 	config      *Config
 	debugTiming bool
+	tools       []Tool
+	toolExecutor ToolExecutor
 }
 
 func NewClient(config *Config) (*Client, error) {
@@ -94,4 +96,23 @@ func (c *Client) CheckModel(ctx context.Context) error {
 // GetProviderName returns the name of the current provider
 func (c *Client) GetProviderName() string {
 	return c.provider.Name()
+}
+
+// SetTools sets the tools available for the AI to use
+func (c *Client) SetTools(tools []Tool, executor ToolExecutor) {
+	c.tools = tools
+	c.toolExecutor = executor
+}
+
+// GenerateWithTools sends a prompt to the AI with tool support
+func (c *Client) GenerateWithTools(ctx context.Context, prompt string) (string, error) {
+	// Check if provider supports tools
+	toolProvider, ok := c.provider.(ToolProvider)
+	if !ok {
+		// Fallback to regular generation
+		return c.provider.Generate(ctx, prompt)
+	}
+
+	// Generate with tools
+	return toolProvider.GenerateWithTools(ctx, prompt, c.tools, c.toolExecutor)
 }

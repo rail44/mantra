@@ -5,23 +5,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/rail44/mantra/internal/tools"
 )
 
 // InspectTool provides detailed information about any Go declaration
 type InspectTool struct {
-	// Map of parsed files for caching
-	fileCache map[string]*ast.File
-	fset      *token.FileSet
+	projectRoot string
+	fileCache   map[string]*ast.File
+	fset        *token.FileSet
 }
 
 // NewInspectTool creates a new inspect tool
 func NewInspectTool() *InspectTool {
+	// Get current working directory as project root
+	cwd, _ := os.Getwd()
 	return &InspectTool{
-		fileCache: make(map[string]*ast.File),
-		fset:      token.NewFileSet(),
+		projectRoot: cwd,
+		fileCache:   make(map[string]*ast.File),
+		fset:        token.NewFileSet(),
 	}
 }
 
@@ -60,12 +67,14 @@ func (t *InspectTool) Execute(ctx context.Context, params map[string]interface{}
 		}
 	}
 
-	// TODO: Search through project files to find the declaration
-	// For now, return a structured response format
-	result := InspectResult{
-		Found: false,
-		Name:  name,
-		Error: "Implementation pending - need to integrate with AST parser",
+	// Find the declaration
+	result, err := t.findDeclaration(name)
+	if err != nil {
+		return &InspectResult{
+			Found: false,
+			Name:  name,
+			Error: fmt.Sprintf("Failed to find declaration: %v", err),
+		}, nil
 	}
 
 	return result, nil
@@ -104,33 +113,213 @@ type MethodInfo struct {
 // Helper functions for AST processing
 
 func (t *InspectTool) findDeclaration(name string) (*InspectResult, error) {
-	// This is a placeholder for the actual implementation
-	// It should:
-	// 1. Walk through project files
-	// 2. Parse AST if not cached
-	// 3. Find the declaration by name
-	// 4. Extract relevant information based on declaration type
-	
-	return nil, fmt.Errorf("not implemented")
+	var foundResult *InspectResult
+
+	// Walk through project files to find the declaration
+	err := filepath.Walk(t.projectRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip files with errors
+		}
+
+		// Skip non-Go files and test files
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		// Skip vendor and hidden directories
+		if info.IsDir() && (strings.HasPrefix(info.Name(), ".") || info.Name() == "vendor") {
+			return filepath.SkipDir
+		}
+
+		// Parse file if not cached
+		file, err := t.parseFile(path)
+		if err != nil {
+			return nil // Skip files that can't be parsed
+		}
+
+		// Search for the declaration in this file
+		if result := t.searchInFile(file, name, path); result != nil {
+			foundResult = result
+			return filepath.SkipDir // Stop walking once found
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if foundResult != nil {
+		return foundResult, nil
+	}
+
+	return &InspectResult{
+		Found: false,
+		Name:  name,
+		Error: fmt.Sprintf("Declaration '%s' not found", name),
+	}, nil
 }
 
-func extractTypeInfo(spec *ast.TypeSpec, fset *token.FileSet) *InspectResult {
-	result := &InspectResult{
-		Found: true,
-		Name:  spec.Name.Name,
+func (t *InspectTool) parseFile(path string) (*ast.File, error) {
+	// Check cache first
+	if file, ok := t.fileCache[path]; ok {
+		return file, nil
 	}
 
-	switch t := spec.Type.(type) {
+	// Parse the file
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := parser.ParseFile(t.fset, path, src, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the parsed file
+	t.fileCache[path] = file
+	return file, nil
+}
+
+func (t *InspectTool) searchInFile(file *ast.File, name string, path string) *InspectResult {
+	var result *InspectResult
+	
+	// Get relative path for display
+	relPath, _ := filepath.Rel(t.projectRoot, path)
+	if relPath == "" {
+		relPath = path
+	}
+
+	// Inspect all declarations
+	ast.Inspect(file, func(n ast.Node) bool {
+		if result != nil {
+			return false // Already found
+		}
+
+		switch decl := n.(type) {
+		case *ast.GenDecl:
+			// Type, const, or var declaration
+			for _, spec := range decl.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					if s.Name.Name == name {
+						result = t.extractTypeInfo(s, file.Name.Name, relPath)
+						return false
+					}
+				case *ast.ValueSpec:
+					// Const or var
+					for _, id := range s.Names {
+						if id.Name == name {
+							result = t.extractValueInfo(s, decl, id, file.Name.Name, relPath)
+							return false
+						}
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			// Function or method
+			if decl.Name.Name == name {
+				result = t.extractFuncInfo(decl, file.Name.Name, relPath)
+				return false
+			}
+		}
+		return true
+	})
+
+	return result
+}
+
+func (t *InspectTool) extractTypeInfo(spec *ast.TypeSpec, pkg, path string) *InspectResult {
+	result := &InspectResult{
+		Found:    true,
+		Name:     spec.Name.Name,
+		Package:  pkg,
+		Location: fmt.Sprintf("%s:%d", path, t.fset.Position(spec.Pos()).Line),
+	}
+
+	switch typ := spec.Type.(type) {
 	case *ast.StructType:
 		result.Kind = "struct"
-		result.Fields = extractStructFields(t)
+		result.Fields = extractStructFields(typ)
+		result.Definition = fmt.Sprintf("type %s struct", spec.Name.Name)
 	case *ast.InterfaceType:
 		result.Kind = "interface"
-		result.Methods = extractInterfaceMethods(t)
+		result.Methods = extractInterfaceMethods(typ)
+		result.Definition = fmt.Sprintf("type %s interface", spec.Name.Name)
 	default:
 		result.Kind = "type"
+		result.Type = extractTypeString(spec.Type)
+		result.Definition = fmt.Sprintf("type %s %s", spec.Name.Name, result.Type)
 	}
 
+	return result
+}
+
+func (t *InspectTool) extractValueInfo(spec *ast.ValueSpec, decl *ast.GenDecl, id *ast.Ident, pkg, path string) *InspectResult {
+	result := &InspectResult{
+		Found:    true,
+		Name:     id.Name,
+		Package:  pkg,
+		Location: fmt.Sprintf("%s:%d", path, t.fset.Position(id.Pos()).Line),
+	}
+
+	// Determine if it's const or var
+	if decl.Tok == token.CONST {
+		result.Kind = "const"
+	} else {
+		result.Kind = "var"
+	}
+
+	// Extract type if specified
+	if spec.Type != nil {
+		result.Type = extractTypeString(spec.Type)
+	}
+
+	// Extract value if it's a constant with a simple value
+	if len(spec.Values) > 0 && decl.Tok == token.CONST {
+		// Find the index of this identifier
+		for i, n := range spec.Names {
+			if n == id && i < len(spec.Values) {
+				if lit, ok := spec.Values[i].(*ast.BasicLit); ok {
+					result.Value = lit.Value
+				}
+			}
+		}
+	}
+
+	// Build definition
+	if result.Type != "" {
+		result.Definition = fmt.Sprintf("%s %s %s", result.Kind, id.Name, result.Type)
+	} else {
+		result.Definition = fmt.Sprintf("%s %s", result.Kind, id.Name)
+	}
+
+	return result
+}
+
+func (t *InspectTool) extractFuncInfo(decl *ast.FuncDecl, pkg, path string) *InspectResult {
+	result := &InspectResult{
+		Found:     true,
+		Name:      decl.Name.Name,
+		Package:   pkg,
+		Location:  fmt.Sprintf("%s:%d", path, t.fset.Position(decl.Pos()).Line),
+		Signature: buildFunctionSignatureFromDecl(decl),
+	}
+
+	if decl.Recv != nil {
+		result.Kind = "method"
+		// Extract receiver type
+		if len(decl.Recv.List) > 0 {
+			result.Type = extractTypeString(decl.Recv.List[0].Type)
+		}
+	} else {
+		result.Kind = "func"
+	}
+
+	result.Definition = result.Signature
+	
 	return result
 }
 
