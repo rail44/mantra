@@ -16,3 +16,11 @@ type Provider interface {
 	// Name returns the provider name
 	Name() string
 }
+
+// ToolProvider represents an AI provider that supports tool/function calling
+type ToolProvider interface {
+	Provider
+	
+	// GenerateWithTools sends messages with tool definitions and handles tool calls
+	GenerateWithTools(ctx context.Context, messages []ChatMessage, tools []Tool) ([]ChatMessage, error)
+}

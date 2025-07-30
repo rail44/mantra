@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"strings"
 
 	"github.com/rail44/mantra/internal/tools"
 )
@@ -197,61 +195,4 @@ func extractInterfaceMethods(i *ast.InterfaceType) []MethodInfo {
 	return methods
 }
 
-func buildFunctionSignature(name string, funcType *ast.FuncType) string {
-	var parts []string
-	
-	// Parameters
-	if funcType.Params != nil {
-		var params []string
-		for _, param := range funcType.Params.List {
-			paramType := extractTypeString(param.Type)
-			if len(param.Names) == 0 {
-				params = append(params, paramType)
-			} else {
-				for _, paramName := range param.Names {
-					params = append(params, fmt.Sprintf("%s %s", paramName.Name, paramType))
-				}
-			}
-		}
-		parts = append(parts, fmt.Sprintf("(%s)", strings.Join(params, ", ")))
-	}
-	
-	// Results
-	if funcType.Results != nil {
-		var results []string
-		for _, result := range funcType.Results.List {
-			results = append(results, extractTypeString(result.Type))
-		}
-		
-		if len(results) == 1 {
-			parts = append(parts, results[0])
-		} else if len(results) > 1 {
-			parts = append(parts, fmt.Sprintf("(%s)", strings.Join(results, ", ")))
-		}
-	}
-	
-	return fmt.Sprintf("%s%s", name, strings.Join(parts, " "))
-}
 
-func extractTypeString(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case *ast.Ident:
-		return t.Name
-	case *ast.StarExpr:
-		return "*" + extractTypeString(t.X)
-	case *ast.ArrayType:
-		return "[]" + extractTypeString(t.Elt)
-	case *ast.SelectorExpr:
-		return extractTypeString(t.X) + "." + t.Sel.Name
-	case *ast.InterfaceType:
-		return "interface{}"
-	case *ast.MapType:
-		return fmt.Sprintf("map[%s]%s", extractTypeString(t.Key), extractTypeString(t.Value))
-	case *ast.ChanType:
-		return "chan " + extractTypeString(t.Value)
-	case *ast.FuncType:
-		return "func" // TODO: Full function type
-	default:
-		return "unknown"
-	}
-}

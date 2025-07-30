@@ -30,12 +30,16 @@ type OpenAIRequest struct {
 	Messages    []OpenAIMessage `json:"messages"`
 	Temperature float32        `json:"temperature"`
 	Stream      bool          `json:"stream"`
+	Tools       []Tool         `json:"tools,omitempty"`
+	ToolChoice  interface{}    `json:"tool_choice,omitempty"`
 }
 
 // OpenAIMessage represents a message in the chat
 type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // OpenAIResponse represents a chat completion response
@@ -303,4 +307,48 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 	}
 
 	return nil
+}
+
+// GenerateWithTools sends a prompt with tool definitions and handles tool calls
+func (c *OpenAIClient) GenerateWithTools(ctx context.Context, messages []ChatMessage, tools []Tool) ([]ChatMessage, error) {
+	// Convert ChatMessage to OpenAIMessage
+	openAIMessages := make([]OpenAIMessage, len(messages))
+	for i, msg := range messages {
+		openAIMessages[i] = OpenAIMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
+		}
+	}
+
+	// Build request with tools
+	req := OpenAIRequest{
+		Model:       c.model,
+		Messages:    openAIMessages,
+		Temperature: c.temperature,
+		Stream:      false,
+		Tools:       tools,
+		ToolChoice:  ToolChoiceAuto{},
+	}
+
+	// Make API call
+	resp, err := c.makeRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("no response choices returned")
+	}
+
+	// Convert response back to ChatMessage
+	responseMsg := resp.Choices[0].Message
+	result := ChatMessage{
+		Role:      responseMsg.Role,
+		Content:   responseMsg.Content,
+		ToolCalls: responseMsg.ToolCalls,
+	}
+
+	return append(messages, result), nil
 }
