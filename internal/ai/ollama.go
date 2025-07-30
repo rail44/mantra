@@ -1,3 +1,7 @@
+// Deprecated: This file is kept for backward compatibility.
+// Ollama is now supported through the OpenAI-compatible API.
+// Use NewOpenAIClient with baseURL "http://localhost:11434/v1" instead.
+
 package ai
 
 import (
@@ -12,6 +16,7 @@ import (
 )
 
 // OllamaClient implements Provider for Ollama
+// Deprecated: Use OpenAIClient with Ollama's OpenAI-compatible endpoint instead
 type OllamaClient struct {
 	client      *api.Client
 	model       string

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// OpenAIClient implements Provider for OpenAI-compatible APIs
+// OpenAIClient implements Provider for OpenAI-compatible APIs (including Ollama)
 type OpenAIClient struct {
 	apiKey      string
 	baseURL     string
@@ -21,6 +21,7 @@ type OpenAIClient struct {
 	systemPrompt string
 	httpClient  *http.Client
 	debugTiming bool
+	providerName string // Track which provider we're actually using
 }
 
 // OpenAIRequest represents a chat completion request
@@ -72,8 +73,17 @@ type OpenAIStreamResponse struct {
 
 // NewOpenAIClient creates a new OpenAI-compatible client
 func NewOpenAIClient(apiKey, baseURL, model string, temperature float32, systemPrompt string) (*OpenAIClient, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("API key is required for OpenAI-compatible provider")
+	// API key is optional for some providers (e.g., local Ollama)
+	if baseURL == "" {
+		return nil, fmt.Errorf("base URL is required")
+	}
+
+	// Determine provider name from base URL
+	providerName := "OpenAI-compatible"
+	if strings.Contains(baseURL, "openai.com") {
+		providerName = "OpenAI"
+	} else if strings.Contains(baseURL, "localhost:11434") {
+		providerName = "Ollama"
 	}
 
 	return &OpenAIClient{
@@ -85,6 +95,7 @@ func NewOpenAIClient(apiKey, baseURL, model string, temperature float32, systemP
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
+		providerName: providerName,
 	}, nil
 }
 
@@ -95,7 +106,7 @@ func (c *OpenAIClient) SetDebugTiming(enabled bool) {
 
 // Name returns the provider name
 func (c *OpenAIClient) Name() string {
-	return "OpenAI"
+	return c.providerName
 }
 
 // Generate sends a prompt to the AI and returns the response

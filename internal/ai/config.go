@@ -7,12 +7,12 @@ import (
 
 type Config struct {
 	Model        string
-	Host         string
+	Host         string        // Base URL for the API endpoint
 	Timeout      time.Duration
 	Temperature  float32
 	SystemPrompt string
-	Provider     string  // Provider type: "ollama" or "openai"
-	APIKey       string  // API key for OpenAI-compatible providers
+	Provider     string  // Provider type: "ollama", "openai", or custom
+	APIKey       string  // API key for providers that require authentication
 }
 
 func DefaultConfig() *Config {

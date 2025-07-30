@@ -21,39 +21,44 @@ func NewClient(config *Config) (*Client, error) {
 	var provider Provider
 	var err error
 
-	// Check if we should use OpenAI-compatible API
-	if config.Provider == "openai" || os.Getenv("MANTRA_OPENAI_API_KEY") != "" {
-		apiKey := os.Getenv("MANTRA_OPENAI_API_KEY")
-		if apiKey == "" && config.APIKey != "" {
-			apiKey = config.APIKey
+	// Unified OpenAI-compatible API for all providers
+	apiKey := os.Getenv("MANTRA_OPENAI_API_KEY")
+	if apiKey == "" && config.APIKey != "" {
+		apiKey = config.APIKey
+	}
+	
+	// Determine base URL based on provider
+	baseURL := config.Host
+	if baseURL == "" {
+		baseURL = os.Getenv("MANTRA_OPENAI_BASE_URL")
+	}
+	
+	if baseURL == "" {
+		// Default URLs for known providers
+		switch config.Provider {
+		case "openai":
+			baseURL = "https://api.openai.com/v1"
+		case "ollama":
+			baseURL = "http://localhost:11434/v1"
+		default:
+			// Assume it's a custom OpenAI-compatible endpoint
+			if config.Host != "" {
+				baseURL = config.Host
+			} else {
+				return nil, fmt.Errorf("base URL required for provider %q", config.Provider)
+			}
 		}
-		
-		baseURL := config.Host
-		if baseURL == "" {
-			baseURL = os.Getenv("MANTRA_OPENAI_BASE_URL")
-		}
+	}
 
-		provider, err = NewOpenAIClient(
-			apiKey,
-			baseURL,
-			config.Model,
-			config.Temperature,
-			config.SystemPrompt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create OpenAI client: %w", err)
-		}
-	} else {
-		// Default to Ollama
-		provider, err = NewOllamaClient(
-			config.Host,
-			config.Model,
-			config.Temperature,
-			config.SystemPrompt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create Ollama client: %w", err)
-		}
+	provider, err = NewOpenAIClient(
+		apiKey,
+		baseURL,
+		config.Model,
+		config.Temperature,
+		config.SystemPrompt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	return &Client{
