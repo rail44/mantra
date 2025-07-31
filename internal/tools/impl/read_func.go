@@ -14,16 +14,16 @@ import (
 	"github.com/rail44/mantra/internal/tools"
 )
 
-// ReadBodyTool reads the implementation of functions and methods
-type ReadBodyTool struct {
+// ReadFuncTool reads the implementation of functions and methods
+type ReadFuncTool struct {
 	projectRoot string
 	fileCache   map[string]*ast.File
 	fset        *token.FileSet
 }
 
-// NewReadBodyTool creates a new read_body tool
-func NewReadBodyTool(projectRoot string) *ReadBodyTool {
-	return &ReadBodyTool{
+// NewReadFuncTool creates a new read_func tool
+func NewReadFuncTool(projectRoot string) *ReadFuncTool {
+	return &ReadFuncTool{
 		projectRoot: projectRoot,
 		fileCache:   make(map[string]*ast.File),
 		fset:        token.NewFileSet(),
@@ -31,17 +31,17 @@ func NewReadBodyTool(projectRoot string) *ReadBodyTool {
 }
 
 // Name returns the tool name
-func (t *ReadBodyTool) Name() string {
-	return "read_body"
+func (t *ReadFuncTool) Name() string {
+	return "read_func"
 }
 
 // Description returns what this tool does
-func (t *ReadBodyTool) Description() string {
+func (t *ReadFuncTool) Description() string {
 	return "Read the implementation body of a function or method"
 }
 
 // ParametersSchema returns the JSON Schema for parameters
-func (t *ReadBodyTool) ParametersSchema() json.RawMessage {
+func (t *ReadFuncTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
@@ -54,8 +54,8 @@ func (t *ReadBodyTool) ParametersSchema() json.RawMessage {
 	}`)
 }
 
-// Execute runs the read_body tool
-func (t *ReadBodyTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+// Execute runs the read_func tool
+func (t *ReadFuncTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 	// Extract parameters
 	name, ok := params["name"].(string)
 	if !ok {
@@ -75,6 +75,34 @@ func (t *ReadBodyTool) Execute(ctx context.Context, params map[string]interface{
 		funcName = name
 	}
 
+	// If receiver type is provided, check if it's an interface first
+	if receiverType != "" {
+		// Use inspect tool to check the type
+		inspectTool := &InspectTool{
+			projectRoot: t.projectRoot,
+			fileCache:   make(map[string]*ast.File),
+			fset:        t.fset,
+		}
+		inspectResult, err := inspectTool.Execute(ctx, map[string]interface{}{
+			"name": receiverType,
+		})
+		if err == nil {
+			if inspectRes, ok := inspectResult.(*InspectResult); ok && inspectRes.Found && inspectRes.Kind == "interface" {
+				// This is an interface method - provide interface information instead
+				return &ReadBodyResult{
+					Found: false,
+					Name:  name,
+					Error: fmt.Sprintf("%s is an interface. Interface methods don't have implementations. Use inspect(\"%s\") to see the interface definition.", receiverType, receiverType),
+					InterfaceInfo: &InterfaceMethodInfo{
+						InterfaceName: receiverType,
+						MethodName:    funcName,
+						Kind:          "interface_method",
+					},
+				}, nil
+			}
+		}
+	}
+
 	// Search for the function
 	result, err := t.findFunction(ctx, funcName, receiverType)
 	if err != nil {
@@ -82,7 +110,7 @@ func (t *ReadBodyTool) Execute(ctx context.Context, params map[string]interface{
 	}
 
 	if result == nil {
-		return ReadBodyResult{
+		return &ReadBodyResult{
 			Found: false,
 			Name:  name,
 			Error: fmt.Sprintf("Function %q not found", name),
@@ -92,19 +120,27 @@ func (t *ReadBodyTool) Execute(ctx context.Context, params map[string]interface{
 	return result, nil
 }
 
-// ReadBodyResult represents the result of reading a function body
-type ReadBodyResult struct {
-	Found          bool     `json:"found"`
-	Name           string   `json:"name"`
-	Signature      string   `json:"signature"`
-	Implementation string   `json:"implementation"`
-	ImportsUsed    []string `json:"imports_used,omitempty"`
-	Calls          []string `json:"calls,omitempty"`
-	Location       string   `json:"location,omitempty"`
-	Error          string   `json:"error,omitempty"`
+// InterfaceMethodInfo provides information about interface methods
+type InterfaceMethodInfo struct {
+	InterfaceName string `json:"interface_name"`
+	MethodName    string `json:"method_name"`
+	Kind          string `json:"kind"`
 }
 
-func (t *ReadBodyTool) findFunction(ctx context.Context, funcName, receiverType string) (*ReadBodyResult, error) {
+// ReadBodyResult represents the result of reading a function body
+type ReadBodyResult struct {
+	Found          bool                 `json:"found"`
+	Name           string               `json:"name"`
+	Signature      string               `json:"signature"`
+	Implementation string               `json:"implementation"`
+	ImportsUsed    []string             `json:"imports_used,omitempty"`
+	Calls          []string             `json:"calls,omitempty"`
+	Location       string               `json:"location,omitempty"`
+	Error          string               `json:"error,omitempty"`
+	InterfaceInfo  *InterfaceMethodInfo `json:"interface_info,omitempty"`
+}
+
+func (t *ReadFuncTool) findFunction(ctx context.Context, funcName, receiverType string) (*ReadBodyResult, error) {
 	var searchErr error
 
 	// Search through project files
@@ -170,7 +206,7 @@ func (t *ReadBodyTool) findFunction(ctx context.Context, funcName, receiverType 
 	return result, searchErr
 }
 
-func (t *ReadBodyTool) parseFile(path string) (*ast.File, error) {
+func (t *ReadFuncTool) parseFile(path string) (*ast.File, error) {
 	// Check cache
 	if file, ok := t.fileCache[path]; ok {
 		return file, nil
@@ -187,7 +223,7 @@ func (t *ReadBodyTool) parseFile(path string) (*ast.File, error) {
 	return file, nil
 }
 
-func (t *ReadBodyTool) extractFunctionBody(fn *ast.FuncDecl, file *ast.File, path string) *ReadBodyResult {
+func (t *ReadFuncTool) extractFunctionBody(fn *ast.FuncDecl, file *ast.File, path string) *ReadBodyResult {
 	result := &ReadBodyResult{
 		Found:     true,
 		Name:      fn.Name.Name,
@@ -210,7 +246,7 @@ func (t *ReadBodyTool) extractFunctionBody(fn *ast.FuncDecl, file *ast.File, pat
 	return result
 }
 
-func (t *ReadBodyTool) formatBody(body *ast.BlockStmt) string {
+func (t *ReadFuncTool) formatBody(body *ast.BlockStmt) string {
 	if body == nil || len(body.List) == 0 {
 		return ""
 	}
@@ -230,7 +266,7 @@ func (t *ReadBodyTool) formatBody(body *ast.BlockStmt) string {
 	return buf.String()
 }
 
-func (t *ReadBodyTool) formatStatement(stmt ast.Stmt) string {
+func (t *ReadFuncTool) formatStatement(stmt ast.Stmt) string {
 	// Use go/format to format the statement
 	var buf strings.Builder
 	err := format.Node(&buf, t.fset, stmt)
@@ -240,7 +276,7 @@ func (t *ReadBodyTool) formatStatement(stmt ast.Stmt) string {
 	return buf.String()
 }
 
-func (t *ReadBodyTool) extractFunctionCalls(body *ast.BlockStmt) []string {
+func (t *ReadFuncTool) extractFunctionCalls(body *ast.BlockStmt) []string {
 	var calls []string
 	seen := make(map[string]bool)
 
@@ -258,7 +294,7 @@ func (t *ReadBodyTool) extractFunctionCalls(body *ast.BlockStmt) []string {
 	return calls
 }
 
-func (t *ReadBodyTool) extractCallName(call *ast.CallExpr) string {
+func (t *ReadFuncTool) extractCallName(call *ast.CallExpr) string {
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		return fun.Name
@@ -270,7 +306,7 @@ func (t *ReadBodyTool) extractCallName(call *ast.CallExpr) string {
 	return ""
 }
 
-func (t *ReadBodyTool) extractImportsUsed(body *ast.BlockStmt, file *ast.File) []string {
+func (t *ReadFuncTool) extractImportsUsed(body *ast.BlockStmt, file *ast.File) []string {
 	imports := make(map[string]bool)
 
 	// Extract package names from selector expressions

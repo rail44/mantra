@@ -12,7 +12,7 @@ func InitializeRegistry(projectRoot string) *tools.Registry {
 	// Register all tools
 	registry.Register(impl.NewInspectTool())
 	registry.Register(impl.NewSearchTool(projectRoot))
-	registry.Register(impl.NewReadBodyTool(projectRoot))
+	registry.Register(impl.NewReadFuncTool(projectRoot))
 	registry.Register(impl.NewCheckSyntaxTool())
 
 	return registry

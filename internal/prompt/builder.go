@@ -55,14 +55,10 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	prompt.WriteString(fmt.Sprintf("Implement the body of this Go function: `%s`\n\n", target.GetFunctionSignature()))
 	prompt.WriteString(fmt.Sprintf("Instruction: %s\n\n", target.Instruction))
 
-	// Add tool usage instructions if enabled
+	// Add tool usage reminder if enabled
 	if b.useTools {
-		prompt.WriteString("## Tool Usage\n")
-		prompt.WriteString("You have access to tools for inspecting Go code. Use them when you need to:\n")
-		prompt.WriteString("- Understand type definitions and interfaces\n")
-		prompt.WriteString("- Find specific declarations or implementations\n")
-		prompt.WriteString("- Verify the structure of types mentioned in the instruction\n\n")
-		prompt.WriteString("After gathering necessary information, generate the implementation code.\n\n")
+		prompt.WriteString("## Tools Available\n")
+		prompt.WriteString("You have tools available to explore this codebase. Use them to understand types, find similar implementations, and validate your code.\n\n")
 	}
 
 	// Add relevant type definitions

@@ -7,16 +7,20 @@ import (
 )
 
 type Client struct {
-	provider    Provider
-	config      *Config
-	debugTiming bool
-	tools       []Tool
-	toolExecutor ToolExecutor
+	provider         Provider
+	clientConfig     *ClientConfig
+	generationConfig *GenerationConfig
+	debugTiming      bool
+	tools            []Tool
+	toolExecutor     ToolExecutor
 }
 
-func NewClient(config *Config) (*Client, error) {
-	if config == nil {
-		config = DefaultConfig()
+func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (*Client, error) {
+	if clientConfig == nil {
+		return nil, fmt.Errorf("clientConfig is required")
+	}
+	if generationConfig == nil {
+		return nil, fmt.Errorf("generationConfig is required")
 	}
 
 	// Determine provider based on configuration
@@ -24,48 +28,31 @@ func NewClient(config *Config) (*Client, error) {
 	var err error
 
 	// Unified OpenAI-compatible API for all providers
-	apiKey := os.Getenv("MANTRA_OPENAI_API_KEY")
-	if apiKey == "" && config.APIKey != "" {
-		apiKey = config.APIKey
+	apiKey := clientConfig.APIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("MANTRA_OPENAI_API_KEY")
 	}
 	
-	// Determine base URL based on provider
-	baseURL := config.Host
+	baseURL := clientConfig.BaseURL
 	if baseURL == "" {
-		baseURL = os.Getenv("MANTRA_OPENAI_BASE_URL")
-	}
-	
-	if baseURL == "" {
-		// Default URLs for known providers
-		switch config.Provider {
-		case "openai":
-			baseURL = "https://api.openai.com/v1"
-		case "ollama":
-			baseURL = "http://localhost:11434/v1"
-		default:
-			// Assume it's a custom OpenAI-compatible endpoint
-			if config.Host != "" {
-				baseURL = config.Host
-			} else {
-				return nil, fmt.Errorf("base URL required for provider %q", config.Provider)
-			}
-		}
+		return nil, fmt.Errorf("base URL is required")
 	}
 
 	provider, err = NewOpenAIClient(
 		apiKey,
 		baseURL,
-		config.Model,
-		config.Temperature,
-		config.SystemPrompt,
+		clientConfig.Model,
+		generationConfig.Temperature,
+		generationConfig.SystemPrompt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	return &Client{
-		provider: provider,
-		config:   config,
+		provider:         provider,
+		clientConfig:     clientConfig,
+		generationConfig: generationConfig,
 	}, nil
 }
 

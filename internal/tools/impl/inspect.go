@@ -90,8 +90,9 @@ type InspectResult struct {
 	Fields      []FieldInfo            `json:"fields,omitempty"`      // For structs
 	Methods     []MethodInfo           `json:"methods,omitempty"`     // For types with methods
 	Signature   string                 `json:"signature,omitempty"`   // For functions/methods
-	Value       string                 `json:"value,omitempty"`       // For constants
+	Value       string                 `json:"value,omitempty"`       // For constants only
 	Type        string                 `json:"type,omitempty"`        // For variables/constants
+	InitPattern string                 `json:"init_pattern,omitempty"` // For variables (e.g., "errors.New")
 	Location    string                 `json:"location,omitempty"`    // File and line number
 	Error       string                 `json:"error,omitempty"`
 }
@@ -277,24 +278,65 @@ func (t *InspectTool) extractValueInfo(spec *ast.ValueSpec, decl *ast.GenDecl, i
 		result.Type = extractTypeString(spec.Type)
 	}
 
-	// Extract value if it's a constant with a simple value
-	if len(spec.Values) > 0 && decl.Tok == token.CONST {
+	// Extract value ONLY for constants
+	if decl.Tok == token.CONST && len(spec.Values) > 0 {
 		// Find the index of this identifier
+		idx := -1
 		for i, n := range spec.Names {
-			if n == id && i < len(spec.Values) {
-				if lit, ok := spec.Values[i].(*ast.BasicLit); ok {
-					result.Value = lit.Value
+			if n == id {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 && idx < len(spec.Values) {
+			// Try to extract the value
+			valueStr := extractValueString(spec.Values[idx])
+			if valueStr != "" {
+				result.Value = valueStr
+			}
+		}
+	}
+	
+	// For variables, show initialization pattern if it's a common pattern
+	if decl.Tok == token.VAR && len(spec.Values) > 0 {
+		// Find the index of this identifier
+		idx := -1
+		for i, n := range spec.Names {
+			if n == id {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 && idx < len(spec.Values) {
+			// Check for common patterns like errors.New
+			if call, ok := spec.Values[idx].(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					if x, ok := sel.X.(*ast.Ident); ok {
+						if x.Name == "errors" && sel.Sel.Name == "New" {
+							// This is errors.New(...) pattern
+							result.InitPattern = "errors.New"
+						}
+					}
 				}
 			}
 		}
 	}
+	// Already handled above
 
 	// Build definition
+	var defParts []string
+	defParts = append(defParts, result.Kind, id.Name)
 	if result.Type != "" {
-		result.Definition = fmt.Sprintf("%s %s %s", result.Kind, id.Name, result.Type)
-	} else {
-		result.Definition = fmt.Sprintf("%s %s", result.Kind, id.Name)
+		defParts = append(defParts, result.Type)
 	}
+	if result.Value != "" {
+		// For constants, show the value
+		defParts = append(defParts, "=", result.Value)
+	} else if result.InitPattern != "" {
+		// For variables, show the initialization pattern
+		defParts = append(defParts, "=", result.InitPattern+"(...)")
+	}
+	result.Definition = strings.Join(defParts, " ")
 
 	return result
 }

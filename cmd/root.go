@@ -9,11 +9,10 @@ import (
 )
 
 var (
-	modelName  string
-	ollamaHost string
-	logLevel   string
-	provider   string
-	apiKey     string
+	modelName string
+	baseURL   string
+	logLevel  string
+	apiKey    string
 )
 
 var rootCmd = &cobra.Command{
@@ -43,10 +42,9 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&modelName, "model", "devstral", "AI model to use for generation")
-	rootCmd.PersistentFlags().StringVar(&ollamaHost, "host", "http://localhost:11434", "Ollama host URL")
+	rootCmd.PersistentFlags().StringVar(&baseURL, "base-url", "", "Base URL for OpenAI-compatible API (defaults to Ollama URL)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (error|warn|info|debug|trace)")
-	rootCmd.PersistentFlags().StringVar(&provider, "provider", "ollama", "AI provider to use (ollama|openai)")
-	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "API key for OpenAI-compatible providers (can also use MANTRA_OPENAI_API_KEY env var)")
+	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "API key for providers that require authentication (can also use MANTRA_OPENAI_API_KEY env var)")
 }
 
 // GetModel returns the configured model name
@@ -54,14 +52,9 @@ func GetModel() string {
 	return modelName
 }
 
-// GetHost returns the configured Ollama host
-func GetHost() string {
-	return ollamaHost
-}
-
-// GetProvider returns the configured provider
-func GetProvider() string {
-	return provider
+// GetBaseURL returns the configured base URL
+func GetBaseURL() string {
+	return baseURL
 }
 
 // GetAPIKey returns the configured API key

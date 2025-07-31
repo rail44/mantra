@@ -114,12 +114,22 @@ func runPackageGeneration(pkgDir string) error {
 	}
 
 	// Initialize components
-	aiClient, err := ai.NewClient(&ai.Config{
-		Host:     GetHost(),
-		Model:    GetModel(),
-		Provider: GetProvider(),
-		APIKey:   GetAPIKey(),
-	})
+	clientConfig := ai.DefaultClientConfig()
+	if GetBaseURL() != "" {
+		clientConfig.BaseURL = GetBaseURL()
+	}
+	clientConfig.APIKey = GetAPIKey()
+	clientConfig.Model = GetModel()
+	
+	// Generation config uses defaults
+	generationConfig := ai.DefaultGenerationConfig()
+	
+	// Use tool-optimized system prompt if tools are enabled
+	if useTools {
+		generationConfig.SystemPrompt = ai.ToolEnabledSystemPrompt()
+	}
+	
+	aiClient, err := ai.NewClient(clientConfig, generationConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
 	}
@@ -135,15 +145,9 @@ func runPackageGeneration(pkgDir string) error {
 	// Check if model is available
 	ctx := context.Background()
 	if err := aiClient.CheckModel(ctx); err != nil {
-		if GetProvider() == "ollama" {
-			log.Warn("model check failed", 
-				slog.String("error", err.Error()),
-				slog.String("hint", fmt.Sprintf("Make sure the model is downloaded with: ollama pull %s", modelName)))
-		} else {
-			log.Warn("model check failed", 
-				slog.String("error", err.Error()),
-				slog.String("hint", "Check your API key and model availability"))
-		}
+		log.Warn("model check failed", 
+			slog.String("error", err.Error()),
+			slog.String("hint", "Check your API key, model availability, and base URL"))
 	}
 
 	promptBuilder := prompt.NewBuilder()

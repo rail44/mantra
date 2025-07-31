@@ -329,9 +329,12 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 	}
 
 	// Maximum rounds of tool calls to prevent infinite loops
-	const maxRounds = 5
+	const maxRounds = 10
 	
 	for round := 0; round < maxRounds; round++ {
+		if round > 0 {
+			fmt.Printf("[TOOL USAGE] Starting round %d/%d\n", round+1, maxRounds)
+		}
 		// Build request with tools
 		req := OpenAIRequest{
 			Model:       c.model,
@@ -358,10 +361,18 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		// Debug: Log response
 		fmt.Printf("[DEBUG] Response from model: role=%s, content=%d chars, tool_calls=%d\n", 
 			responseMsg.Role, len(responseMsg.Content), len(responseMsg.ToolCalls))
+		if round >= 5 && len(responseMsg.ToolCalls) > 0 {
+			fmt.Printf("[WARNING] Many tool calls made (round %d) - model may be stuck\n", round+1)
+		}
 
 		// Check if we have tool calls
 		if len(responseMsg.ToolCalls) == 0 {
 			// No tool calls, return the content
+			fmt.Printf("[TOOL USAGE] Completed successfully after %d round(s)\n", round+1)
+			fmt.Printf("[FINAL RESPONSE] Content length: %d chars\n", len(responseMsg.Content))
+			if len(responseMsg.Content) < 2000 {
+				fmt.Printf("[FINAL RESPONSE] Content: %q\n", responseMsg.Content)
+			}
 			return responseMsg.Content, nil
 		}
 

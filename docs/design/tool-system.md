@@ -108,6 +108,42 @@ read_func("PostgresUserRepository.GetByEmail")
 → Database query implementation example
 ```
 
+### 4. check_syntax
+
+**Purpose**: Validate Go syntax and optionally check for type safety
+
+**Parameters**:
+```json
+{
+  "code": "string",      // Go code to validate
+  "context": "string",   // Optional: "function_body", "expression", or "statements"
+  "type_check": "bool"   // Optional: Whether to perform type checking
+}
+```
+
+**Returns**:
+```json
+{
+  "valid": "boolean",
+  "errors": [            // Array of syntax errors if any
+    {
+      "position": "string",
+      "message": "string"
+    }
+  ],
+  "suggestions": ["..."] // Optional: Fix suggestions
+}
+```
+
+**Examples**:
+```
+check_syntax("return user, nil", context="function_body")
+→ Valid syntax for function body
+
+check_syntax("if user != nil {", context="statements")
+→ Syntax error: missing closing brace
+```
+
 ## Usage Flow
 
 ### Example: Implementing CreateUser method
@@ -133,7 +169,11 @@ Step 5: Read another example
 → read_func("ProductService.CreateProduct")
 Result: Business logic pattern with validation
 
-Step 6: Generate CreateUser using learned patterns
+Step 6: Validate generated code syntax
+→ check_syntax(generated_code, context="function_body")
+Result: Valid Go syntax confirmed
+
+Step 7: Generate CreateUser using learned patterns
 ```
 
 ## Implementation Architecture
@@ -145,9 +185,10 @@ internal/tools/
 ├── registry.go       # Tool registration and management
 ├── executor.go       # Tool execution engine
 └── impl/
-    ├── inspect.go    # inspect tool implementation
-    ├── search.go     # search tool implementation
-    └── read_func.go  # read_func tool implementation
+    ├── inspect.go      # inspect tool implementation
+    ├── search.go       # search tool implementation
+    ├── read_func.go    # read_func tool implementation
+    └── check_syntax.go # check_syntax tool implementation
 ```
 
 ### Core Interfaces
@@ -180,6 +221,7 @@ type Executor interface {
 2. **Reduced Context Size**: No need to include all possible information upfront
 3. **Better Accuracy**: LLM can verify and correct as it generates
 4. **Simpler Implementation**: Replace complex context extraction with focused tools
+5. **Syntax Validation**: LLM can validate generated code before finalizing
 
 ## Migration Strategy
 

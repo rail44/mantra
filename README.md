@@ -10,7 +10,7 @@ Mantra is a local-first AI-powered Go code generation tool that transforms natur
 - **Safe Generation**: Generates implementations to separate files, preserving original source
 - **Context-Aware**: Understands your function signatures and surrounding code
 - **Smart Examples**: Learns from previously generated code to maintain consistency
-- **Local-First**: Everything runs on your machine with Ollama
+- **Flexible AI Backend**: Works with Ollama (local), OpenAI, deepinfra, or any OpenAI-compatible API
 - **Real-time Streaming**: See generation progress as it happens
 - **Flexible Output**: Generate to separate files or replace in-place
 
@@ -31,8 +31,11 @@ go build -o mantra .
 ## Prerequisites
 
 - Go 1.21 or later
-- [Ollama](https://ollama.ai/) installed and running
-- A compatible AI model (e.g., `devstral`)
+- One of the following AI backends:
+  - [Ollama](https://ollama.ai/) installed and running locally (default)
+  - OpenAI API key
+  - deepinfra API key
+  - Any OpenAI-compatible API endpoint
 
 ## Quick Start
 
@@ -69,10 +72,11 @@ mantra generate main.go
 1. **Comment Detection**: Mantra finds functions marked with `// mantra:` comments
 2. **Context Analysis**: Analyzes function signatures and surrounding code
 3. **Example Learning**: Learns from previously generated implementations to maintain consistency
-4. **AI Generation**: Sends context and instructions to your local AI model
-5. **Real-time Streaming**: Shows generation progress with live feedback
-6. **Code Generation**: Generates implementations based on your output preference
-7. **Format & Save**: Formats the code and saves to target location
+4. **AI Generation**: Sends context and instructions to your AI model
+5. **Tool Usage** (Optional): When enabled with `--use-tools`, the AI can dynamically inspect code
+6. **Real-time Streaming**: Shows generation progress with live feedback
+7. **Code Generation**: Generates implementations based on your output preference
+8. **Format & Save**: Formats the code and saves to target location
 
 ### Output Modes
 
@@ -94,13 +98,29 @@ Configuration is handled via command-line flags:
 # Use different model
 mantra generate --model qwen2.5-coder main.go
 
-# Use different Ollama host
-mantra generate --host http://192.168.1.100:11434 main.go
+# Use OpenAI
+mantra generate --base-url https://api.openai.com/v1 --api-key YOUR_KEY --model gpt-4 main.go
+
+# Use deepinfra
+mantra generate --base-url https://api.deepinfra.com/v1/openai --api-key YOUR_KEY --model mistralai/Devstral-Small-2507 main.go
+
+# Use custom Ollama instance
+mantra generate --base-url http://192.168.1.100:11434/v1 main.go
+
+# Enable tool usage for better code understanding
+mantra generate --use-tools main.go
 ```
 
 Defaults:
 - Model: `devstral`
-- Host: `http://localhost:11434`
+- Base URL: `http://localhost:11434/v1` (Ollama)
+
+### Environment Variables
+
+You can also configure Mantra using environment variables:
+
+- `MANTRA_OPENAI_API_KEY`: API key for OpenAI-compatible providers
+- `MANTRA_OPENAI_BASE_URL`: Base URL for the API endpoint
 
 ## Commands
 
@@ -113,7 +133,9 @@ Generates implementations for all functions with `// mantra:` comments.
 
 **Flags:**
 - `--model string`: AI model to use (default: `devstral`)
-- `--host string`: Ollama host URL (default: `http://localhost:11434`)
+- `--base-url string`: Base URL for OpenAI-compatible API (defaults to Ollama URL)
+- `--api-key string`: API key for providers that require authentication
+- `--use-tools`: Enable tool usage for dynamic code exploration
 - `--no-stream`: Disable streaming output (faster for scripting)
 - `--log-level string`: Log level (error|warn|info|debug|trace) (default: `info`)
 - `--output-dir string`: Directory for generated files (default: `./generated`)
@@ -185,6 +207,30 @@ Mantra generates clean, idiomatic Go code with:
 - Proper error handling and context usage
 - Best practices for the detected use case
 - Comprehensive implementations based on your instructions
+
+## Tool System
+
+When enabled with `--use-tools`, Mantra provides the AI with dynamic code inspection capabilities:
+
+### Available Tools
+
+1. **inspect**: Get detailed information about any Go declaration (structs, interfaces, functions, etc.)
+2. **search**: Search for declarations using pattern matching
+3. **read_func**: Read the implementation of functions and methods
+4. **check_syntax**: Validate Go syntax before generating code
+
+### Benefits
+
+- **Better Understanding**: AI can explore your codebase dynamically
+- **Higher Accuracy**: AI verifies types and interfaces before using them
+- **Smarter Generation**: AI learns from existing patterns in your code
+
+### Usage
+
+```bash
+# Enable tools for more accurate generation
+mantra generate --use-tools main.go
+```
 
 ## Performance Features
 
