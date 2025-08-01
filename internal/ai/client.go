@@ -48,6 +48,11 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
+	
+	// Set provider specification if it's an OpenAIClient and providers are specified
+	if openaiClient, ok := provider.(*OpenAIClient); ok && len(clientConfig.Provider) > 0 {
+		openaiClient.SetProviderSpec(clientConfig.Provider)
+	}
 
 	return &Client{
 		provider:         provider,

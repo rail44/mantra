@@ -22,6 +22,7 @@ type ClientConfig struct {
 	APIKey   string        // API key for providers that require authentication
 	Model    string        // Model to use
 	Timeout  time.Duration // Request timeout
+	Provider []string      // OpenRouter provider specification (e.g., ["Cerebras"])
 }
 
 // GenerationConfig represents the configuration for content generation

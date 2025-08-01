@@ -24,6 +24,7 @@ type OpenAIClient struct {
 	httpClient  *http.Client
 	debugTiming bool
 	providerName string // Track which provider we're actually using
+	providerSpec *ProviderSpec // OpenRouter-specific provider routing
 }
 
 // OpenAIRequest represents a chat completion request
@@ -35,6 +36,12 @@ type OpenAIRequest struct {
 	Tools             []Tool         `json:"tools,omitempty"`
 	ToolChoice        interface{}    `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool          `json:"parallel_tool_calls,omitempty"`
+	Provider          *ProviderSpec  `json:"provider,omitempty"` // OpenRouter provider specification
+}
+
+// ProviderSpec allows specifying provider routing for OpenRouter
+type ProviderSpec struct {
+	Only []string `json:"only,omitempty"` // List of providers to use (e.g., ["Cerebras"])
 }
 
 // OpenAIMessage represents a message in the chat
@@ -61,6 +68,7 @@ type OpenAIResponse struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
+	Provider string `json:"provider,omitempty"` // OpenRouter provider info
 }
 
 // OpenAIStreamResponse represents a streaming response chunk
@@ -76,6 +84,7 @@ type OpenAIStreamResponse struct {
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
+	Provider string `json:"provider,omitempty"` // OpenRouter provider info
 }
 
 // NewOpenAIClient creates a new OpenAI-compatible client
@@ -111,6 +120,15 @@ func (c *OpenAIClient) SetDebugTiming(enabled bool) {
 	c.debugTiming = enabled
 }
 
+// SetProviderSpec sets OpenRouter provider routing specification
+func (c *OpenAIClient) SetProviderSpec(providers []string) {
+	if len(providers) > 0 {
+		c.providerSpec = &ProviderSpec{
+			Only: providers,
+		}
+	}
+}
+
 // Name returns the provider name
 func (c *OpenAIClient) Name() string {
 	return c.providerName
@@ -129,6 +147,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string) (string, err
 		},
 		Temperature: c.temperature,
 		Stream:      false,
+		Provider:    c.providerSpec,
 	}
 
 	if c.debugTiming {
@@ -177,6 +196,7 @@ func (c *OpenAIClient) GenerateStream(ctx context.Context, prompt string) (<-cha
 			},
 			Temperature: c.temperature,
 			Stream:      true,
+			Provider:    c.providerSpec,
 		}
 
 		// Make streaming request
@@ -202,6 +222,7 @@ func (c *OpenAIClient) CheckModel(ctx context.Context) error {
 		},
 		Temperature: 0,
 		Stream:      false,
+		Provider:    c.providerSpec,
 	}
 
 	_, err := c.makeRequest(ctx, req)
@@ -222,6 +243,11 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	
+	// Debug: Log request with provider info
+	if c.providerSpec != nil {
+		fmt.Printf("[DEBUG] Sending request with provider spec: %+v\n", c.providerSpec)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
@@ -246,6 +272,11 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	var result OpenAIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Log provider info if available (OpenRouter)
+	if result.Provider != "" {
+		fmt.Printf("[PROVIDER] OpenRouter used provider: %s\n", result.Provider)
 	}
 
 	return &result, nil
@@ -294,6 +325,11 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 		var chunk OpenAIStreamResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // Skip malformed chunks
+		}
+		
+		// Log provider info if available (OpenRouter)
+		if chunk.Provider != "" {
+			fmt.Printf("[PROVIDER] OpenRouter used provider: %s\n", chunk.Provider)
 		}
 
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
@@ -352,6 +388,7 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 			Tools:             tools,
 			ToolChoice:        "auto",
 			ParallelToolCalls: true,
+			Provider:          c.providerSpec,
 		}
 
 		// Make API call

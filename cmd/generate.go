@@ -25,6 +25,7 @@ var (
 	outputDir   string
 	packageName string
 	useTools    bool
+	provider    string // OpenRouter provider specification
 )
 
 var generateCmd = &cobra.Command{
@@ -66,6 +67,7 @@ func init() {
 	generateCmd.Flags().StringVar(&outputDir, "output-dir", "./generated", "Directory for generated files")
 	generateCmd.Flags().StringVar(&packageName, "package-name", "generated", "Package name for generated files")
 	generateCmd.Flags().BoolVar(&useTools, "use-tools", false, "Enable tool usage for dynamic code exploration")
+	generateCmd.Flags().StringVar(&provider, "provider", "", "OpenRouter provider (e.g., 'Cerebras' or 'Cerebras,DeepInfra')")
 }
 
 func runPackageGeneration(pkgDir string) error {
@@ -120,6 +122,15 @@ func runPackageGeneration(pkgDir string) error {
 	}
 	clientConfig.APIKey = GetAPIKey()
 	clientConfig.Model = GetModel()
+	
+	// Parse provider specification
+	providerSpec := provider
+	if providerSpec == "" {
+		providerSpec = os.Getenv("MANTRA_PROVIDER")
+	}
+	if providerSpec != "" {
+		clientConfig.Provider = strings.Split(providerSpec, ",")
+	}
 	
 	// Generation config uses defaults
 	generationConfig := ai.DefaultGenerationConfig()
