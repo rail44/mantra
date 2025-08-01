@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/rail44/mantra/internal/tools"
 )
@@ -19,6 +20,7 @@ type InspectTool struct {
 	projectRoot string
 	fileCache   map[string]*ast.File
 	fset        *token.FileSet
+	mu          sync.RWMutex
 }
 
 // NewInspectTool creates a new inspect tool
@@ -163,10 +165,13 @@ func (t *InspectTool) findDeclaration(name string) (*InspectResult, error) {
 }
 
 func (t *InspectTool) parseFile(path string) (*ast.File, error) {
-	// Check cache first
+	// Check cache first with read lock
+	t.mu.RLock()
 	if file, ok := t.fileCache[path]; ok {
+		t.mu.RUnlock()
 		return file, nil
 	}
+	t.mu.RUnlock()
 
 	// Parse the file
 	src, err := os.ReadFile(path)
@@ -179,8 +184,11 @@ func (t *InspectTool) parseFile(path string) (*ast.File, error) {
 		return nil, err
 	}
 
-	// Cache the parsed file
+	// Cache the parsed file with write lock
+	t.mu.Lock()
 	t.fileCache[path] = file
+	t.mu.Unlock()
+	
 	return file, nil
 }
 

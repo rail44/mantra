@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/rail44/mantra/internal/tools"
 )
@@ -19,6 +20,7 @@ type ReadFuncTool struct {
 	projectRoot string
 	fileCache   map[string]*ast.File
 	fset        *token.FileSet
+	mu          sync.RWMutex
 }
 
 // NewReadFuncTool creates a new read_func tool
@@ -207,10 +209,13 @@ func (t *ReadFuncTool) findFunction(ctx context.Context, funcName, receiverType 
 }
 
 func (t *ReadFuncTool) parseFile(path string) (*ast.File, error) {
-	// Check cache
+	// Check cache with read lock
+	t.mu.RLock()
 	if file, ok := t.fileCache[path]; ok {
+		t.mu.RUnlock()
 		return file, nil
 	}
+	t.mu.RUnlock()
 
 	// Parse file
 	file, err := parser.ParseFile(t.fset, path, nil, parser.ParseComments)
@@ -218,8 +223,11 @@ func (t *ReadFuncTool) parseFile(path string) (*ast.File, error) {
 		return nil, err
 	}
 
-	// Cache result
+	// Cache result with write lock
+	t.mu.Lock()
 	t.fileCache[path] = file
+	t.mu.Unlock()
+	
 	return file, nil
 }
 

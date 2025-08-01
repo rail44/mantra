@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,12 +28,13 @@ type OpenAIClient struct {
 
 // OpenAIRequest represents a chat completion request
 type OpenAIRequest struct {
-	Model       string         `json:"model"`
-	Messages    []OpenAIMessage `json:"messages"`
-	Temperature float32        `json:"temperature"`
-	Stream      bool          `json:"stream"`
-	Tools       []Tool         `json:"tools,omitempty"`
-	ToolChoice  interface{}    `json:"tool_choice,omitempty"`
+	Model             string         `json:"model"`
+	Messages          []OpenAIMessage `json:"messages"`
+	Temperature       float32        `json:"temperature"`
+	Stream            bool          `json:"stream"`
+	Tools             []Tool         `json:"tools,omitempty"`
+	ToolChoice        interface{}    `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool          `json:"parallel_tool_calls,omitempty"`
 }
 
 // OpenAIMessage represents a message in the chat
@@ -311,6 +314,11 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 
 // GenerateWithTools sends a prompt with tool definitions and handles tool calls
 func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error) {
+	overallStart := time.Now()
+	var toolExecutionTime time.Duration
+	var apiCallTime time.Duration
+	var toolCallCount int
+
 	// Build initial messages
 	systemPrompt := c.systemPrompt
 	if systemPrompt == "" {
@@ -337,16 +345,19 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		}
 		// Build request with tools
 		req := OpenAIRequest{
-			Model:       c.model,
-			Messages:    messages,
-			Temperature: c.temperature,
-			Stream:      false,
-			Tools:       tools,
-			ToolChoice:  "auto",
+			Model:             c.model,
+			Messages:          messages,
+			Temperature:       c.temperature,
+			Stream:            false,
+			Tools:             tools,
+			ToolChoice:        "auto",
+			ParallelToolCalls: true,
 		}
 
 		// Make API call
+		apiStart := time.Now()
 		resp, err := c.makeRequest(ctx, req)
+		apiCallTime += time.Since(apiStart)
 		if err != nil {
 			return "", err
 		}
@@ -356,6 +367,14 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		}
 
 		responseMsg := resp.Choices[0].Message
+		
+		// Fix missing Type field for Mistral API compatibility
+		for i := range responseMsg.ToolCalls {
+			if responseMsg.ToolCalls[i].Type == "" {
+				responseMsg.ToolCalls[i].Type = "function"
+			}
+		}
+		
 		messages = append(messages, responseMsg)
 
 		// Debug: Log response
@@ -368,7 +387,15 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		// Check if we have tool calls
 		if len(responseMsg.ToolCalls) == 0 {
 			// No tool calls, return the content
+			totalTime := time.Since(overallStart)
 			fmt.Printf("[TOOL USAGE] Completed successfully after %d round(s)\n", round+1)
+			fmt.Printf("[PERFORMANCE] Total time: %v\n", totalTime)
+			fmt.Printf("[PERFORMANCE] API calls time: %v (%.1f%%)\n", apiCallTime, float64(apiCallTime)/float64(totalTime)*100)
+			fmt.Printf("[PERFORMANCE] Tool execution time: %v (%.1f%%)\n", toolExecutionTime, float64(toolExecutionTime)/float64(totalTime)*100)
+			fmt.Printf("[PERFORMANCE] Tool calls: %d\n", toolCallCount)
+			if toolCallCount > 0 {
+				fmt.Printf("[PERFORMANCE] Avg time per tool: %v\n", toolExecutionTime/time.Duration(toolCallCount))
+			}
 			fmt.Printf("[FINAL RESPONSE] Content length: %d chars\n", len(responseMsg.Content))
 			if len(responseMsg.Content) < 2000 {
 				fmt.Printf("[FINAL RESPONSE] Content: %q\n", responseMsg.Content)
@@ -376,55 +403,137 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 			return responseMsg.Content, nil
 		}
 
-		// Execute tool calls
-		for _, toolCall := range responseMsg.ToolCalls {
+		// Execute tool calls in parallel
+		toolResults := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)
+		
+		// Add all tool responses to messages
+		messages = append(messages, toolResults...)
+	}
+
+	return "", fmt.Errorf("exceeded maximum rounds of tool calls")
+}
+
+// executeToolsParallel executes multiple tool calls in parallel
+func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []ToolCall, executor ToolExecutor, toolExecutionTime *time.Duration, toolCallCount *int) []OpenAIMessage {
+	type toolResult struct {
+		index      int
+		toolCallID string
+		message    OpenAIMessage
+		duration   time.Duration
+	}
+
+	results := make(chan toolResult, len(toolCalls))
+	var wg sync.WaitGroup
+
+	// Execute all tools in parallel
+	for i, toolCall := range toolCalls {
+		wg.Add(1)
+		go func(index int, tc ToolCall) {
+			defer wg.Done()
+
 			// Parse parameters
-			fmt.Printf("[TOOL CALL DEBUG] Arguments raw: %q\n", string(toolCall.Function.Arguments))
+			fmt.Printf("[TOOL CALL DEBUG] Arguments raw: %q\n", string(tc.Function.Arguments))
 			
 			// Check if Arguments is already a string (double-encoded)
 			var argStr string
-			if err := json.Unmarshal(toolCall.Function.Arguments, &argStr); err == nil {
+			if err := json.Unmarshal(tc.Function.Arguments, &argStr); err == nil {
 				// It was double-encoded, use the decoded string
 				fmt.Printf("[TOOL CALL DEBUG] Arguments was double-encoded, decoded to: %s\n", argStr)
-				toolCall.Function.Arguments = json.RawMessage(argStr)
+				tc.Function.Arguments = json.RawMessage(argStr)
 			}
 			
 			var params map[string]interface{}
-			if err := json.Unmarshal(toolCall.Function.Arguments, &params); err != nil {
-				return "", fmt.Errorf("failed to parse tool arguments: %w", err)
+			if err := json.Unmarshal(tc.Function.Arguments, &params); err != nil {
+				results <- toolResult{
+					index:      index,
+					toolCallID: tc.ID,
+					message: OpenAIMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf("Error parsing arguments: %v", err),
+						ToolCallID: tc.ID,
+					},
+				}
+				return
 			}
 
 			// Log tool execution
-			fmt.Printf("[TOOL CALL] Executing %s with params: %v\n", toolCall.Function.Name, params)
+			fmt.Printf("[TOOL CALL] Executing %s with params: %v\n", tc.Function.Name, params)
 			
 			// Execute tool
-			result, err := executor.Execute(ctx, toolCall.Function.Name, params)
+			toolStart := time.Now()
+			result, err := executor.Execute(ctx, tc.Function.Name, params)
+			duration := time.Since(toolStart)
+			
 			if err != nil {
-				// Add error response
-				messages = append(messages, OpenAIMessage{
-					Role:       "tool",
-					Content:    fmt.Sprintf("Error executing tool: %v", err),
-					ToolCallID: toolCall.ID,
-				})
-				continue
+				results <- toolResult{
+					index:      index,
+					toolCallID: tc.ID,
+					duration:   duration,
+					message: OpenAIMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf("Error executing tool: %v", err),
+						ToolCallID: tc.ID,
+					},
+				}
+				return
 			}
 
 			// Marshal result
 			resultJSON, err := json.Marshal(result)
 			if err != nil {
-				return "", fmt.Errorf("failed to marshal tool result: %w", err)
+				results <- toolResult{
+					index:      index,
+					toolCallID: tc.ID,
+					duration:   duration,
+					message: OpenAIMessage{
+						Role:       "tool",
+						Content:    fmt.Sprintf("Error marshaling result: %v", err),
+						ToolCallID: tc.ID,
+					},
+				}
+				return
 			}
 			
-			fmt.Printf("[TOOL RESULT] %s: %s\n", toolCall.Function.Name, string(resultJSON))
+			fmt.Printf("[TOOL RESULT] %s: %s\n", tc.Function.Name, string(resultJSON))
 
-			// Add tool response
-			messages = append(messages, OpenAIMessage{
-				Role:       "tool",
-				Content:    string(resultJSON),
-				ToolCallID: toolCall.ID,
-			})
-		}
+			results <- toolResult{
+				index:      index,
+				toolCallID: tc.ID,
+				duration:   duration,
+				message: OpenAIMessage{
+					Role:       "tool",
+					Content:    string(resultJSON),
+					ToolCallID: tc.ID,
+				},
+			}
+		}(i, toolCall)
 	}
 
-	return "", fmt.Errorf("exceeded maximum rounds of tool calls")
+	// Wait for all tools to complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results in order
+	resultSlice := make([]toolResult, 0, len(toolCalls))
+	for result := range results {
+		resultSlice = append(resultSlice, result)
+		*toolExecutionTime += result.duration
+		*toolCallCount++
+		fmt.Printf("[TOOL TIMING] Tool at index %d took %v\n", result.index, result.duration)
+	}
+
+	// Sort by original index to maintain order
+	sort.Slice(resultSlice, func(i, j int) bool {
+		return resultSlice[i].index < resultSlice[j].index
+	})
+
+	// Extract messages in order
+	messages := make([]OpenAIMessage, len(resultSlice))
+	for i, result := range resultSlice {
+		messages[i] = result.message
+	}
+
+	return messages
 }
