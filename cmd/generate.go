@@ -81,11 +81,21 @@ func init() {
 
 func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	// Detect targets and check if generation is needed
-	targetsToGenerate, err := detectAndSummarizeTargets(pkgDir, cfg.Dest)
+	statuses, err := detectAndSummarizeTargets(pkgDir, cfg.Dest)
 	if err != nil {
 		return err
 	}
-	if len(targetsToGenerate) == 0 {
+
+	// Check if any targets need generation
+	needsGeneration := false
+	for _, status := range statuses {
+		if status.Status != detector.StatusCurrent {
+			needsGeneration = true
+			break
+		}
+	}
+
+	if !needsGeneration {
 		log.Info("all targets are up-to-date, nothing to generate")
 		return nil
 	}
@@ -99,7 +109,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	ctx := context.Background()
 
 	// Process targets grouped by file
-	err = processTargetsByFile(ctx, targetsToGenerate, aiClient, promptBuilder, gen, cfg.Dest)
+	err = processTargetsByFile(ctx, statuses, aiClient, promptBuilder, gen, cfg.Dest)
 	if err != nil {
 		return err
 	}
@@ -109,7 +119,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 }
 
 // detectAndSummarizeTargets detects targets and provides logging summary
-func detectAndSummarizeTargets(pkgDir, destDir string) ([]*parser.Target, error) {
+func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.TargetStatus, error) {
 	log.Info("detecting targets in package", slog.String("package", pkgDir))
 	statuses, err := detector.DetectPackageTargets(pkgDir, destDir)
 	if err != nil {
@@ -146,8 +156,8 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*parser.Target, error)
 		slog.Int("current", current),
 		slog.Int("total", len(statuses)))
 
-	// Filter targets that need generation
-	return detector.FilterTargetsToGenerate(statuses), nil
+	// Return all statuses (including current ones with existing implementations)
+	return statuses, nil
 }
 
 // setupAIClient initializes AI client, tools, and related components
@@ -201,18 +211,32 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 }
 
 // processTargetsByFile groups targets by file and processes each file
-func processTargetsByFile(ctx context.Context, targetsToGenerate []*parser.Target, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
-	// Group targets by file
-	targetsByFile := make(map[string][]*parser.Target)
-	for _, target := range targetsToGenerate {
-		targetsByFile[target.FilePath] = append(targetsByFile[target.FilePath], target)
+func processTargetsByFile(ctx context.Context, statuses []*detector.TargetStatus, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
+	// Group statuses by file
+	statusesByFile := make(map[string][]*detector.TargetStatus)
+	for _, status := range statuses {
+		statusesByFile[status.Target.FilePath] = append(statusesByFile[status.Target.FilePath], status)
 	}
 
 	// Process each file
-	for filePath, targets := range targetsByFile {
+	for filePath, fileStatuses := range statusesByFile {
+		// Count targets that need generation
+		targetsNeedingGeneration := 0
+		for _, status := range fileStatuses {
+			if status.Status != detector.StatusCurrent {
+				targetsNeedingGeneration++
+			}
+		}
+
+		// Skip files where all targets are current
+		if targetsNeedingGeneration == 0 {
+			continue
+		}
+
 		log.Info("processing file",
 			slog.String("file", filepath.Base(filePath)),
-			slog.Int("targets", len(targets)))
+			slog.Int("targets_to_generate", targetsNeedingGeneration),
+			slog.Int("total_targets", len(fileStatuses)))
 
 		// Read file content
 		content, err := os.ReadFile(filePath)
@@ -232,15 +256,38 @@ func processTargetsByFile(ctx context.Context, targetsToGenerate []*parser.Targe
 			continue
 		}
 
-		// Generate implementations for all targets in this file
-		implementations, err := generateImplementationsForTargets(ctx, targets, string(content), aiClient, promptBuilder)
+		// Generate implementations only for targets that need it
+		var targetsToGenerate []*parser.Target
+		existingImplementations := make(map[string]string)
+
+		for _, status := range fileStatuses {
+			if status.Status == detector.StatusCurrent {
+				// Use existing implementation
+				existingImplementations[status.Target.Name] = status.ExistingImpl
+			} else {
+				// Need to generate
+				targetsToGenerate = append(targetsToGenerate, status.Target)
+			}
+		}
+
+		// Generate new implementations
+		newImplementations, err := generateImplementationsForTargets(ctx, targetsToGenerate, string(content), aiClient, promptBuilder)
 		if err != nil {
 			return fmt.Errorf("failed to generate implementations for file %s: %w", filePath, err)
 		}
 
+		// Merge existing and new implementations
+		allImplementations := make(map[string]string)
+		for name, impl := range existingImplementations {
+			allImplementations[name] = impl
+		}
+		for name, impl := range newImplementations {
+			allImplementations[name] = impl
+		}
+
 		// Generate file with all implementations
-		if len(implementations) > 0 {
-			if err := gen.GenerateFile(fileInfo, implementations); err != nil {
+		if len(allImplementations) > 0 {
+			if err := gen.GenerateFile(fileInfo, allImplementations); err != nil {
 				log.Error("failed to generate file",
 					slog.String("file", filePath),
 					slog.String("error", err.Error()))

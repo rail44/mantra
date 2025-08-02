@@ -39,8 +39,17 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	// Check if generated file already exists
+	sourceFileName := filepath.Base(fileInfo.FilePath)
+	outputFile := filepath.Join(g.config.Dest, sourceFileName)
+
+	var existingContent string
+	if existingData, err := os.ReadFile(outputFile); err == nil {
+		existingContent = string(existingData)
+	}
+
 	// Generate the file content
-	content, err := g.generateFileContent(fileInfo, implementations)
+	content, err := g.generateFileContent(fileInfo, implementations, existingContent)
 	if err != nil {
 		return fmt.Errorf("failed to generate file content: %w", err)
 	}
@@ -53,9 +62,7 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 		formatted = []byte(content)
 	}
 
-	// Determine output file path
-	sourceFileName := filepath.Base(fileInfo.FilePath)
-	outputFile := filepath.Join(g.config.Dest, sourceFileName)
+	// File paths already determined above
 
 	// Write the generated file
 	if err := os.WriteFile(outputFile, formatted, 0644); err != nil {
@@ -66,7 +73,7 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 }
 
 // generateFileContent creates the content for the generated file by replacing mantra functions
-func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementations map[string]string) (string, error) {
+func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementations map[string]string, existingContent string) (string, error) {
 	// Start with the original source content
 	content := fileInfo.SourceContent
 
@@ -90,11 +97,10 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	// Sort targets by line number in reverse order to avoid line number shifts
 	var targetsToProcess []*parser.Target
 	for _, target := range fileInfo.Targets {
-		if target.HasPanic {
-			if implementation, exists := implementations[target.Name]; exists {
-				target.Implementation = implementation // Store implementation in target
-				targetsToProcess = append(targetsToProcess, target)
-			}
+		// Process all targets with mantra comments (remove HasPanic check)
+		if implementation, exists := implementations[target.Name]; exists {
+			target.Implementation = implementation // Store implementation in target
+			targetsToProcess = append(targetsToProcess, target)
 		}
 	}
 

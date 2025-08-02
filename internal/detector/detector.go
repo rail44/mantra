@@ -28,6 +28,7 @@ type TargetStatus struct {
 	Status           Status
 	CurrentChecksum  string // Checksum of current declaration
 	ExistingChecksum string // Checksum found in generated file (if any)
+	ExistingImpl     string // Existing implementation (if checksum matches)
 }
 
 // DetectPackageTargets analyzes all Go files in a package directory and returns targets with their status
@@ -56,32 +57,35 @@ func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStat
 		// Get generated file path
 		generatedFile := filepath.Join(generatedDir, filepath.Base(sourceFile))
 
-		// Load existing checksums from generated file (if exists)
-		existingChecksums := make(map[string]string)
+		// Load existing implementations from generated file (if exists)
+		existingImplementations := make(map[string]*ImplementationInfo)
 		if _, err := os.Stat(generatedFile); err == nil {
-			checksums, err := extractChecksumsFromFile(generatedFile)
+			impls, err := extractImplementationsFromFile(generatedFile)
 			if err == nil {
-				existingChecksums = checksums
+				existingImplementations = impls
 			}
 		}
 
 		// Check status of each target
 		for _, target := range fileInfo.Targets {
-			// Only process targets with panic (unimplemented)
-			if !target.HasPanic {
-				continue
-			}
-
+			// Process all targets with mantra comments (remove HasPanic check)
 			currentChecksum := checksum.Calculate(target)
-			existingChecksum, exists := existingChecksums[target.Name]
+			existingImpl, exists := existingImplementations[target.Name]
 
-			status := StatusUngenerated
+			var status Status
+			var existingChecksum string
+			var existingBody string
+
 			if exists {
+				existingChecksum = existingImpl.Checksum
 				if existingChecksum == currentChecksum {
 					status = StatusCurrent
+					existingBody = existingImpl.Body
 				} else {
 					status = StatusOutdated
 				}
+			} else {
+				status = StatusUngenerated
 			}
 
 			allStatuses = append(allStatuses, &TargetStatus{
@@ -89,6 +93,7 @@ func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStat
 				Status:           status,
 				CurrentChecksum:  currentChecksum,
 				ExistingChecksum: existingChecksum,
+				ExistingImpl:     existingBody,
 			})
 		}
 	}
@@ -96,8 +101,14 @@ func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStat
 	return allStatuses, nil
 }
 
-// extractChecksumsFromFile parses a generated file and extracts function checksums
-func extractChecksumsFromFile(filePath string) (map[string]string, error) {
+// ImplementationInfo holds checksum and implementation for a function
+type ImplementationInfo struct {
+	Checksum string
+	Body     string
+}
+
+// extractImplementationsFromFile parses a generated file and extracts function checksums and implementations
+func extractImplementationsFromFile(filePath string) (map[string]*ImplementationInfo, error) {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
@@ -109,7 +120,7 @@ func extractChecksumsFromFile(filePath string) (map[string]string, error) {
 		return nil, err
 	}
 
-	checksums := make(map[string]string)
+	implementations := make(map[string]*ImplementationInfo)
 
 	// Walk through all functions
 	ast.Inspect(node, func(n ast.Node) bool {
@@ -120,23 +131,70 @@ func extractChecksumsFromFile(filePath string) (map[string]string, error) {
 
 		// Look for checksum comment immediately before function
 		funcPos := fset.Position(funcDecl.Pos())
+		var foundChecksum string
 		for _, commentGroup := range node.Comments {
 			commentPos := fset.Position(commentGroup.End())
 			// Check if comment is right before function (within 2 lines)
 			if commentPos.Line >= funcPos.Line-2 && commentPos.Line < funcPos.Line {
 				for _, comment := range commentGroup.List {
 					if cs := checksum.ExtractFromComment(comment.Text); cs != "" {
-						checksums[funcDecl.Name.Name] = cs
+						foundChecksum = cs
 						break
 					}
 				}
 			}
 		}
 
+		// If we found a checksum, extract the function body
+		if foundChecksum != "" {
+			// Get the function body without panic check
+			bodyContent := extractFunctionBody(string(content), funcDecl, fset)
+			implementations[funcDecl.Name.Name] = &ImplementationInfo{
+				Checksum: foundChecksum,
+				Body:     bodyContent,
+			}
+		}
+
 		return true
 	})
 
-	return checksums, nil
+	return implementations, nil
+}
+
+// extractFunctionBody extracts the body content of a function from source
+func extractFunctionBody(source string, funcDecl *ast.FuncDecl, fset *token.FileSet) string {
+	if funcDecl.Body == nil {
+		return ""
+	}
+
+	// Get positions
+	start := fset.Position(funcDecl.Body.Lbrace)
+	end := fset.Position(funcDecl.Body.Rbrace)
+
+	lines := strings.Split(source, "\n")
+	if start.Line <= 0 || end.Line > len(lines) {
+		return ""
+	}
+
+	// Extract body content (excluding braces)
+	var bodyLines []string
+	for i := start.Line; i < end.Line-1; i++ {
+		bodyLines = append(bodyLines, lines[i])
+	}
+
+	// Handle last line specially to exclude closing brace
+	if end.Line-1 < len(lines) && end.Line > start.Line {
+		lastLine := lines[end.Line-1]
+		if end.Column > 1 {
+			lastLine = lastLine[:end.Column-1]
+		}
+		lastLine = strings.TrimRight(lastLine, " \t}")
+		if lastLine != "" {
+			bodyLines = append(bodyLines, lastLine)
+		}
+	}
+
+	return strings.Join(bodyLines, "\n")
 }
 
 // FilterTargetsToGenerate returns only targets that need generation (ungenerated or outdated)
