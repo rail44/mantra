@@ -4,16 +4,6 @@ import (
 	"time"
 )
 
-// Config is deprecated. Use ClientConfig and GenerationConfig instead.
-type Config struct {
-	Model       string
-	Host        string // Base URL for the API endpoint
-	Timeout     time.Duration
-	Temperature float32
-	Provider    string // Deprecated: provider type
-	APIKey      string // API key for providers that require authentication
-}
-
 // ClientConfig represents the configuration for connecting to an AI provider
 type ClientConfig struct {
 	URL      string        // URL for the API endpoint (e.g., "http://localhost:11434/v1" for Ollama)
@@ -28,13 +18,6 @@ type GenerationConfig struct {
 	Temperature float32 // Temperature for generation (0.0 to 1.0)
 }
 
-func DefaultConfig() *Config {
-	return &Config{
-		Timeout:     5 * time.Minute,
-		Temperature: 0.7,
-	}
-}
-
 // DefaultClientConfig returns default client configuration
 func DefaultClientConfig() *ClientConfig {
 	// No defaults in the simplified version - config is required
@@ -45,9 +28,8 @@ func DefaultClientConfig() *ClientConfig {
 
 // DefaultGenerationConfig returns default generation configuration
 func DefaultGenerationConfig() *GenerationConfig {
-	config := DefaultConfig()
 	return &GenerationConfig{
-		Temperature: config.Temperature,
+		Temperature: 0.7,
 	}
 }
 

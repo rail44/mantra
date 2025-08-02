@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -22,11 +21,6 @@ func NewExecutor(registry *Registry) *Executor {
 		registry: registry,
 		timeout:  30 * time.Second, // Default timeout
 	}
-}
-
-// SetTimeout sets the execution timeout
-func (e *Executor) SetTimeout(timeout time.Duration) {
-	e.timeout = timeout
 }
 
 // Execute runs a tool by name with the given parameters
@@ -68,18 +62,4 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		slog.Duration("duration", duration))
 
 	return result, nil
-}
-
-// ExecuteJSON executes a tool with JSON-encoded parameters
-func (e *Executor) ExecuteJSON(ctx context.Context, toolName string, paramsJSON json.RawMessage) (interface{}, error) {
-	var params map[string]interface{}
-	if err := json.Unmarshal(paramsJSON, &params); err != nil {
-		return nil, &ToolError{
-			Code:    "invalid_params",
-			Message: "Failed to parse parameters",
-			Details: err.Error(),
-		}
-	}
-
-	return e.Execute(ctx, toolName, params)
 }

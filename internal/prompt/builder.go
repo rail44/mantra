@@ -60,21 +60,6 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 		}
 	}
 
-	// その他のコンテキスト情報
-	if len(ctx.Constants) > 0 {
-		prompt.WriteString("Constants:\n")
-		for _, constDef := range ctx.Constants {
-			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", constDef))
-		}
-	}
-
-	if len(ctx.Variables) > 0 {
-		prompt.WriteString("Variables:\n")
-		for _, varDef := range ctx.Variables {
-			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", varDef))
-		}
-	}
-
 	prompt.WriteString("</context>\n\n")
 
 	prompt.WriteString("<target>\n")

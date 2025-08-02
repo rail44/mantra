@@ -17,9 +17,3 @@ func InitializeRegistry(projectRoot string) *tools.Registry {
 
 	return registry
 }
-
-// DefaultExecutor creates a default tool executor with all tools registered
-func DefaultExecutor(projectRoot string) *tools.Executor {
-	registry := InitializeRegistry(projectRoot)
-	return tools.NewExecutor(registry)
-}

@@ -21,12 +21,3 @@ func NewToolError(code, message string) *ToolError {
 		Message: message,
 	}
 }
-
-// NewToolErrorWithDetails creates a new tool error with details
-func NewToolErrorWithDetails(code, message, details string) *ToolError {
-	return &ToolError{
-		Code:    code,
-		Message: message,
-		Details: details,
-	}
-}

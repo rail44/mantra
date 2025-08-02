@@ -12,13 +12,9 @@ import (
 
 // RelevantContext holds context information relevant to a function
 type RelevantContext struct {
-	Imports      []string          // Import statements
-	Types        map[string]string // Type definitions (name -> definition)
-	Constants    map[string]string // Constant definitions
-	Variables    map[string]string // Variable definitions
-	Functions    map[string]string // Other function signatures that might be called
-	PackageName  string            // Package name
-	ReceiverType string            // Full type definition if the target is a method
+	Imports     []string          // Import statements
+	Types       map[string]string // Type definitions (name -> definition)
+	PackageName string            // Package name
 }
 
 // ExtractFunctionContext extracts context using a reliable, function-focused approach
@@ -32,9 +28,6 @@ func ExtractFunctionContext(filePath string, target *parser.Target) (*RelevantCo
 
 	ctx := &RelevantContext{
 		Types:       make(map[string]string),
-		Constants:   make(map[string]string),
-		Variables:   make(map[string]string),
-		Functions:   make(map[string]string),
 		PackageName: node.Name.Name,
 		Imports:     analysis.ExtractImports(node),
 	}
