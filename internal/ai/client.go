@@ -39,7 +39,6 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 		url,
 		clientConfig.Model,
 		generationConfig.Temperature,
-		generationConfig.SystemPrompt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI client: %w", err)
@@ -66,14 +65,9 @@ func (c *Client) SetDebugTiming(enabled bool) {
 	}
 }
 
-// Generate sends a prompt to the AI and returns the response
+// Generate sends a prompt to the AI with tool support
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
-	return c.provider.Generate(ctx, prompt)
-}
-
-// GenerateStream sends a prompt and returns a channel for streaming responses
-func (c *Client) GenerateStream(ctx context.Context, prompt string) (<-chan string, <-chan error) {
-	return c.provider.GenerateStream(ctx, prompt)
+	return c.provider.Generate(ctx, prompt, c.tools, c.toolExecutor)
 }
 
 // CheckModel verifies if the specified model is available
@@ -90,17 +84,4 @@ func (c *Client) GetProviderName() string {
 func (c *Client) SetTools(tools []Tool, executor ToolExecutor) {
 	c.tools = tools
 	c.toolExecutor = executor
-}
-
-// GenerateWithTools sends a prompt to the AI with tool support
-func (c *Client) GenerateWithTools(ctx context.Context, prompt string) (string, error) {
-	// Check if provider supports tools
-	toolProvider, ok := c.provider.(ToolProvider)
-	if !ok {
-		// Fallback to regular generation
-		return c.provider.Generate(ctx, prompt)
-	}
-
-	// Generate with tools
-	return toolProvider.GenerateWithTools(ctx, prompt, c.tools, c.toolExecutor)
 }

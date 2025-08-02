@@ -79,6 +79,14 @@ func (t *InspectTool) Execute(ctx context.Context, params map[string]interface{}
 		}, nil
 	}
 
+	// If it's a struct, also find its methods
+	if result != nil && result.Found && result.Kind == "struct" {
+		methods, err := t.findStructMethods(name, result.Package)
+		if err == nil {
+			result.Methods = methods
+		}
+	}
+
 	return result, nil
 }
 
@@ -114,6 +122,41 @@ type MethodInfo struct {
 }
 
 // Helper functions for AST processing
+
+func (t *InspectTool) findStructMethods(structName, pkgName string) ([]MethodInfo, error) {
+	var methods []MethodInfo
+	
+	// Use the cached files to find methods more efficiently
+	for _, file := range t.fileCache {
+		// Only look in files from the same package
+		if file.Name.Name != pkgName {
+			continue
+		}
+		
+		// Search for methods on this struct
+		for _, decl := range file.Decls {
+			funcDecl, ok := decl.(*ast.FuncDecl)
+			if !ok || funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+				continue
+			}
+			
+			// Check if receiver matches our struct
+			recv := funcDecl.Recv.List[0]
+			recvType := extractTypeString(recv.Type)
+			// Handle both *StructName and StructName
+			if recvType == structName || recvType == "*"+structName {
+				method := MethodInfo{
+					Name:      funcDecl.Name.Name,
+					Signature: buildFunctionSignatureFromDecl(funcDecl),
+					Receiver:  recvType,
+				}
+				methods = append(methods, method)
+			}
+		}
+	}
+	
+	return methods, nil
+}
 
 func (t *InspectTool) findDeclaration(name string) (*InspectResult, error) {
 	var foundResult *InspectResult

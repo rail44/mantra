@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -155,13 +154,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 		slog.String("provider", aiClient.GetProviderName()),
 		slog.String("model", cfg.Model))
 
-	// Check if model is available
 	ctx := context.Background()
-	if err := aiClient.CheckModel(ctx); err != nil {
-		log.Warn("model check failed", 
-			slog.String("error", err.Error()),
-			slog.String("hint", "Check your API key, model availability, and base URL"))
-	}
 
 	promptBuilder := prompt.NewBuilder()
 	promptBuilder.SetUseTools(true) // Enable tools
@@ -230,44 +223,15 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 			var implementation string
 			var genErr error
 			
-			// Try GenerateWithTools first
-			log.Debug("attempting GenerateWithTools", slog.String("function", target.Name))
-			implementation, genErr = aiClient.GenerateWithTools(ctx, p)
+			// Generate implementation
+			log.Debug("attempting generation", slog.String("function", target.Name))
+			implementation, genErr = aiClient.Generate(ctx, p)
 			if genErr != nil {
-				log.Debug("GenerateWithTools error", 
+				log.Debug("generation error", 
 					slog.String("function", target.Name),
 					slog.String("error", genErr.Error()))
-				if genErr.Error() == "provider does not support tools" {
-				// Fallback to streaming for providers that don't support tools
-				log.Debug("provider does not support tools, falling back to streaming")
-				outputCh, errorCh := aiClient.GenerateStream(ctx, p)
-				var responseBuilder strings.Builder
-				charCount := 0
-
-				for {
-					select {
-					case chunk, ok := <-outputCh:
-						if !ok {
-							implementation = responseBuilder.String()
-							goto streamDone
-						}
-						responseBuilder.WriteString(chunk)
-						charCount += len(chunk)
-						log.Trace("streaming progress", 
-							slog.Int("chars_received", charCount),
-							slog.String("function", target.Name))
-
-					case err := <-errorCh:
-						if err != nil {
-							genErr = err
-							goto streamDone
-						}
-					}
-				}
-				streamDone:
-				}
 			} else {
-				log.Debug("GenerateWithTools succeeded", slog.String("function", target.Name))
+				log.Debug("generation succeeded", slog.String("function", target.Name))
 			}
 
 			if genErr != nil {

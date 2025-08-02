@@ -180,11 +180,6 @@ func (g *Generator) replaceFunctionBody(content string, target *parser.Target, i
 				}
 
 				if targetFound {
-					// For methods, convert to function by adding receiver as first parameter
-					if target.Receiver != nil {
-						g.convertMethodToFunctionAST(funcDecl, target)
-					}
-
 					// Replace function body with the new implementation
 					funcDecl.Body = implBody
 					return false // Stop traversing this branch

@@ -22,7 +22,6 @@ type OpenAIClient struct {
 	baseURL     string
 	model       string
 	temperature float32
-	systemPrompt string
 	httpClient  *http.Client
 	debugTiming bool
 	providerSpec *ProviderSpec // OpenRouter-specific provider routing
@@ -89,7 +88,7 @@ type OpenAIStreamResponse struct {
 }
 
 // NewOpenAIClient creates a new OpenAI API client
-func NewOpenAIClient(apiKey, baseURL, model string, temperature float32, systemPrompt string) (*OpenAIClient, error) {
+func NewOpenAIClient(apiKey, baseURL, model string, temperature float32) (*OpenAIClient, error) {
 	// API key is optional for some providers (e.g., local Ollama)
 	if baseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
@@ -100,7 +99,6 @@ func NewOpenAIClient(apiKey, baseURL, model string, temperature float32, systemP
 		baseURL:     strings.TrimSuffix(baseURL, "/"),
 		model:       model,
 		temperature: temperature,
-		systemPrompt: systemPrompt,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
@@ -127,82 +125,7 @@ func (c *OpenAIClient) Name() string {
 	return "OpenAI API"
 }
 
-// Generate sends a prompt to the AI and returns the response
-func (c *OpenAIClient) Generate(ctx context.Context, prompt string) (string, error) {
-	totalStart := time.Now()
 
-	// Build request
-	req := OpenAIRequest{
-		Model: c.model,
-		Messages: []OpenAIMessage{
-			{Role: "system", Content: c.systemPrompt},
-			{Role: "user", Content: prompt},
-		},
-		Temperature: c.temperature,
-		Stream:      false,
-		Provider:    c.providerSpec,
-	}
-
-	if c.debugTiming {
-		log.Debug("AI timing - request preparation", "duration", time.Since(totalStart))
-		log.Debug("AI timing - prompt size", "chars", len(prompt))
-	}
-
-	// Make API call
-	apiCallStart := time.Now()
-	resp, err := c.makeRequest(ctx, req)
-	if err != nil {
-		return "", err
-	}
-
-	if c.debugTiming {
-		log.Debug("AI timing - API call", "duration", time.Since(apiCallStart))
-		log.Debug("AI timing - total", "duration", time.Since(totalStart))
-		if resp.Usage.TotalTokens > 0 {
-			log.Debug("AI timing - tokens", 
-				"total", resp.Usage.TotalTokens,
-				"prompt", resp.Usage.PromptTokens,
-				"completion", resp.Usage.CompletionTokens)
-		}
-	}
-
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("no response choices returned")
-	}
-
-	return resp.Choices[0].Message.Content, nil
-}
-
-// GenerateStream sends a prompt and returns channels for streaming responses
-func (c *OpenAIClient) GenerateStream(ctx context.Context, prompt string) (<-chan string, <-chan error) {
-	outputCh := make(chan string, 100)
-	errorCh := make(chan error, 1)
-
-	go func() {
-		defer close(outputCh)
-		defer close(errorCh)
-
-		// Build request
-		req := OpenAIRequest{
-			Model: c.model,
-			Messages: []OpenAIMessage{
-				{Role: "system", Content: c.systemPrompt},
-				{Role: "user", Content: prompt},
-			},
-			Temperature: c.temperature,
-			Stream:      true,
-			Provider:    c.providerSpec,
-		}
-
-		// Make streaming request
-		err := c.makeStreamRequest(ctx, req, outputCh)
-		if err != nil {
-			errorCh <- err
-		}
-	}()
-
-	return outputCh, errorCh
-}
 
 // CheckModel verifies if the specified model is available
 func (c *OpenAIClient) CheckModel(ctx context.Context) error {
@@ -240,8 +163,12 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 	
-	// Debug: Log full request JSON for troubleshooting
-	log.Trace("request JSON", "json", string(jsonData))
+	// Log request summary instead of full JSON
+	log.Trace("API request", 
+		"model", req.Model,
+		"messages", len(req.Messages),
+		"tools", len(req.Tools),
+		"temperature", req.Temperature)
 	
 	// Debug: Log request with provider info
 	if c.providerSpec != nil {
@@ -348,19 +275,15 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 	return nil
 }
 
-// GenerateWithTools sends a prompt with tool definitions and handles tool calls
-func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error) {
+// Generate sends a prompt with tool definitions and handles tool calls
+func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error) {
 	overallStart := time.Now()
 	var toolExecutionTime time.Duration
 	var apiCallTime time.Duration
 	var toolCallCount int
 
-	// Build initial messages
-	systemPrompt := c.systemPrompt
-	if systemPrompt == "" {
-		systemPrompt = DefaultConfig().SystemPrompt
-	}
-	
+	// Build initial messages with system prompt
+	systemPrompt := ToolEnabledSystemPrompt()
 	messages := []OpenAIMessage{
 		{
 			Role:    "system",
@@ -371,20 +294,18 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 			Content: prompt,
 		},
 	}
+	
 
 	// Maximum rounds of tool calls to prevent infinite loops
-	const maxRounds = 10
+	const maxRounds = 30
 	
 	for round := 0; round < maxRounds; round++ {
 		if round > 0 {
 			log.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
 		}
 		
-		// Debug: Log message sequence before API call
-		log.Debug("message sequence before API call", "round", round+1)
-		for i, msg := range messages {
-			log.Debug("message", "index", i, "role", msg.Role, "has_tool_calls", len(msg.ToolCalls) > 0, "tool_call_id", msg.ToolCallID)
-		}
+		// Log concise message stats
+		log.Trace("message stats", "round", round+1, "total_messages", len(messages))
 		
 		// Build request with tools
 		req := OpenAIRequest{
@@ -465,11 +386,6 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		// Add all tool responses to messages
 		messages = append(messages, toolResults...)
 		
-		// Debug: Log message sequence for Mistral debugging
-		log.Debug("message sequence after tool execution")
-		for i, msg := range messages {
-			log.Debug("message", "index", i, "role", msg.Role, "has_tool_calls", len(msg.ToolCalls) > 0, "tool_call_id", msg.ToolCallID)
-		}
 	}
 
 	return "", fmt.Errorf("exceeded maximum rounds of tool calls")
@@ -494,13 +410,11 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 			defer wg.Done()
 
 			// Parse parameters
-			log.Trace("tool call arguments raw", "args", string(tc.Function.Arguments))
 			
 			// Check if Arguments is already a string (double-encoded)
 			var argStr string
 			if err := json.Unmarshal(tc.Function.Arguments, &argStr); err == nil {
 				// It was double-encoded, use the decoded string
-				log.Trace("tool call arguments double-encoded", "decoded", argStr)
 				tc.Function.Arguments = json.RawMessage(argStr)
 			}
 			
