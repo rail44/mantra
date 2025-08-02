@@ -12,14 +12,14 @@ import (
 func Calculate(target *parser.Target) string {
 	// Normalize the signature (remove extra spaces, newlines)
 	signature := normalizeSignature(target.GetFunctionSignature())
-	
+
 	// Combine signature and instruction
 	content := signature + "\n" + target.Instruction
-	
+
 	// Calculate FNV-1a hash
 	h := fnv.New32a()
 	h.Write([]byte(content))
-	
+
 	// Return as 8-character hex string
 	return fmt.Sprintf("%08x", h.Sum32())
 }

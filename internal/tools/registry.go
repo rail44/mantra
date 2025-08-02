@@ -3,7 +3,7 @@ package tools
 import (
 	"fmt"
 	"sync"
-	
+
 	"github.com/rail44/mantra/internal/ai"
 )
 
@@ -24,12 +24,12 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(tool Tool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	name := tool.Name()
 	if _, exists := r.tools[name]; exists {
 		return fmt.Errorf("tool %q already registered", name)
 	}
-	
+
 	r.tools[name] = tool
 	return nil
 }
@@ -38,12 +38,12 @@ func (r *Registry) Register(tool Tool) error {
 func (r *Registry) Get(name string) (Tool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	tool, exists := r.tools[name]
 	if !exists {
 		return nil, fmt.Errorf("tool %q not found", name)
 	}
-	
+
 	return tool, nil
 }
 
@@ -51,7 +51,7 @@ func (r *Registry) Get(name string) (Tool, error) {
 func (r *Registry) ListAvailable() []ai.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	tools := make([]ai.Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		tools = append(tools, ai.Tool{
@@ -63,6 +63,6 @@ func (r *Registry) ListAvailable() []ai.Tool {
 			},
 		})
 	}
-	
+
 	return tools
 }

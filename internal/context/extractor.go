@@ -45,7 +45,7 @@ func ExtractRelevantContext(fileContent string, target *parser.Target) (*Relevan
 		Importer: importer.Default(),
 		Error:    func(err error) {}, // Ignore type errors for now
 	}
-	
+
 	info := &types.Info{
 		Types: make(map[ast.Expr]types.TypeAndValue),
 		Defs:  make(map[*ast.Ident]types.Object),
@@ -280,13 +280,13 @@ func extractFunctionSignature(fn *ast.FuncDecl) string {
 func extractInterfacesFromTypes(ctx *RelevantContext, pkg *types.Package, info *types.Info, node *ast.File, fileContent string, fset *token.FileSet) {
 	// First, collect all types that are referenced in the context
 	referencedTypes := make(map[string]bool)
-	
+
 	// Check all type definitions we've already collected
 	for typeName := range ctx.Types {
 		// Parse the type definition to find field types
 		collectReferencedTypesFromTypedef(ctx.Types[typeName], referencedTypes)
 	}
-	
+
 	// Always include types referenced directly in fields
 	for name := range referencedTypes {
 		if _, exists := ctx.Types[name]; !exists {
@@ -300,25 +300,25 @@ func extractInterfacesFromTypes(ctx *RelevantContext, pkg *types.Package, info *
 			}
 		}
 	}
-	
+
 	// Now look for interface definitions for these referenced types
 	scope := pkg.Scope()
 	for _, name := range scope.Names() {
 		if !referencedTypes[name] {
 			continue
 		}
-		
+
 		obj := scope.Lookup(name)
 		if obj == nil {
 			continue
 		}
-		
+
 		// Check if it's a type name
 		typeName, ok := obj.(*types.TypeName)
 		if !ok {
 			continue
 		}
-		
+
 		// Check if the underlying type is an interface
 		if iface, ok := typeName.Type().Underlying().(*types.Interface); ok {
 			// Extract the interface definition
@@ -338,7 +338,7 @@ func collectReferencedTypesFromTypedef(typeDef string, types map[string]bool) {
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
-		
+
 		// Look for field definitions
 		parts := strings.Fields(line)
 		if len(parts) >= 2 {
@@ -359,7 +359,7 @@ func extractInterfaceDefinition(name string, iface *types.Interface) string {
 	var result strings.Builder
 	result.WriteString(name)
 	result.WriteString(" interface {\n")
-	
+
 	// Add methods
 	for i := 0; i < iface.NumMethods(); i++ {
 		method := iface.Method(i)
@@ -369,7 +369,7 @@ func extractInterfaceDefinition(name string, iface *types.Interface) string {
 		result.WriteString(formatMethodSignature(sig))
 		result.WriteString("\n")
 	}
-	
+
 	// Add embedded interfaces
 	for i := 0; i < iface.NumEmbeddeds(); i++ {
 		embedded := iface.EmbeddedType(i)
@@ -377,7 +377,7 @@ func extractInterfaceDefinition(name string, iface *types.Interface) string {
 		result.WriteString(embedded.String())
 		result.WriteString("\n")
 	}
-	
+
 	result.WriteString("}")
 	return result.String()
 }
@@ -386,7 +386,7 @@ func extractInterfaceDefinition(name string, iface *types.Interface) string {
 func formatMethodSignature(sig *types.Signature) string {
 	var result strings.Builder
 	result.WriteString("(")
-	
+
 	// Parameters
 	params := sig.Params()
 	for i := 0; i < params.Len(); i++ {
@@ -400,9 +400,9 @@ func formatMethodSignature(sig *types.Signature) string {
 		}
 		result.WriteString(param.Type().String())
 	}
-	
+
 	result.WriteString(")")
-	
+
 	// Results
 	results := sig.Results()
 	if results.Len() > 0 {
@@ -425,14 +425,14 @@ func formatMethodSignature(sig *types.Signature) string {
 			result.WriteString(")")
 		}
 	}
-	
+
 	return result.String()
 }
 
 // filterImportsByUsage filters imports based on what's actually used
 func filterImportsByUsage(allImports map[string]string, target *parser.Target, ctx *RelevantContext, info *types.Info) []string {
 	usedPackages := make(map[string]bool)
-	
+
 	// Check parameter and return types for package references
 	for _, param := range target.Params {
 		collectPackageFromType(param.Type, usedPackages)
@@ -440,18 +440,18 @@ func filterImportsByUsage(allImports map[string]string, target *parser.Target, c
 	for _, ret := range target.Returns {
 		collectPackageFromType(ret.Type, usedPackages)
 	}
-	
+
 	// Check types used in context
 	for _, typeDef := range ctx.Types {
 		// Look for qualified types in the definition
 		collectPackagesFromString(typeDef, usedPackages)
 	}
-	
+
 	// Check function signatures
 	for _, funcSig := range ctx.Functions {
 		collectPackagesFromString(funcSig, usedPackages)
 	}
-	
+
 	// Build filtered import list
 	var filteredImports []string
 	for pkg := range usedPackages {
@@ -459,7 +459,7 @@ func filterImportsByUsage(allImports map[string]string, target *parser.Target, c
 			filteredImports = append(filteredImports, imp)
 		}
 	}
-	
+
 	return filteredImports
 }
 
@@ -485,13 +485,13 @@ func collectPackagesFromString(str string, packages map[string]bool) {
 		"time.Duration":   "time",
 		"error":           "", // builtin
 	}
-	
+
 	for typeName, pkg := range commonTypes {
 		if strings.Contains(str, typeName) && pkg != "" {
 			packages[pkg] = true
 		}
 	}
-	
+
 	// Also look for any word.Word pattern that might be a qualified type
 	parts := strings.Fields(str)
 	for _, part := range parts {

@@ -2,8 +2,8 @@ package prompt
 
 import (
 	"fmt"
-	"strings"
 	"log/slog"
+	"strings"
 
 	"github.com/rail44/mantra/internal/context"
 	"github.com/rail44/mantra/internal/log"
@@ -11,7 +11,7 @@ import (
 )
 
 // Builder creates prompts for code generation
-type Builder struct{
+type Builder struct {
 	useTools bool
 }
 
@@ -45,7 +45,7 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	// Show the function with placeholder
 	prompt.WriteString("Implement the following function:\n\n")
 	prompt.WriteString(fmt.Sprintf("%s {\n    <IMPLEMENT_HERE>\n}\n\n", target.GetFunctionSignature()))
-	
+
 	// Add the mantra instruction
 	prompt.WriteString(fmt.Sprintf("Instruction: %s\n", target.Instruction))
 
@@ -58,20 +58,11 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	}
 
 	fullPrompt := prompt.String()
-	
+
 	// Log the generated prompt at trace level for debugging
-	log.Trace("generated prompt", 
+	log.Trace("generated prompt",
 		slog.String("function", target.Name),
 		slog.Int("length", len(fullPrompt)))
-	
-	return fullPrompt
-}
 
-// buildBasicPrompt creates a simple prompt when context extraction fails
-func (b *Builder) buildBasicPrompt(target *parser.Target) string {
-	var prompt strings.Builder
-	prompt.WriteString(fmt.Sprintf("Implement this Go function: %s\n", target.GetFunctionSignature()))
-	prompt.WriteString(fmt.Sprintf("Task: %s\n", target.Instruction))
-	prompt.WriteString("Return only the function body code (the code inside the braces).\n")
-	return prompt.String()
+	return fullPrompt
 }

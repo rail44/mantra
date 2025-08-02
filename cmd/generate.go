@@ -21,7 +21,6 @@ import (
 	"github.com/rail44/mantra/internal/tools/setup"
 )
 
-
 var generateCmd = &cobra.Command{
 	Use:   "generate [package-dir]",
 	Short: "Generate implementations for all pending targets in a package",
@@ -94,19 +93,19 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 		switch status.Status {
 		case detector.StatusUngenerated:
 			ungenerated++
-			log.Info("new target found", 
+			log.Info("new target found",
 				slog.String("function", status.Target.Name),
 				slog.String("file", filepath.Base(status.Target.FilePath)))
 		case detector.StatusOutdated:
 			outdated++
-			log.Info("outdated target found", 
+			log.Info("outdated target found",
 				slog.String("function", status.Target.Name),
 				slog.String("file", filepath.Base(status.Target.FilePath)),
 				slog.String("old_checksum", status.ExistingChecksum),
 				slog.String("new_checksum", status.CurrentChecksum))
 		case detector.StatusCurrent:
 			current++
-			log.Debug("up-to-date target", 
+			log.Debug("up-to-date target",
 				slog.String("function", status.Target.Name),
 				slog.String("file", filepath.Base(status.Target.FilePath)))
 		}
@@ -132,15 +131,15 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 		Model:   cfg.Model,
 		Timeout: 5 * time.Minute,
 	}
-	
+
 	// Set OpenRouter providers if configured
 	if cfg.OpenRouter != nil && len(cfg.OpenRouter.Providers) > 0 {
 		clientConfig.Provider = cfg.OpenRouter.Providers
 	}
-	
+
 	// Generation config uses defaults
 	generationConfig := ai.DefaultGenerationConfig()
-	
+
 	aiClient, err := ai.NewClient(clientConfig, generationConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
@@ -150,7 +149,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	aiClient.SetDebugTiming(log.IsDebugEnabled())
 
 	// Log which provider we're using
-	log.Info("using AI provider", 
+	log.Info("using AI provider",
 		slog.String("provider", aiClient.GetProviderName()),
 		slog.String("model", cfg.Model))
 
@@ -158,14 +157,14 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 
 	promptBuilder := prompt.NewBuilder()
 	promptBuilder.SetUseTools(true) // Enable tools
-	
+
 	// Setup tools for AI
 	toolRegistry := setup.InitializeRegistry(pkgDir)
 	toolExecutor := tools.NewExecutor(toolRegistry)
-	
+
 	// Set tools on AI client
 	aiClient.SetTools(toolRegistry.ListAvailable(), toolExecutor)
-	
+
 	gen := generator.New(&generator.Config{
 		Dest:          cfg.Dest,
 		PackageName:   cfg.GetPackageName(),
@@ -180,14 +179,14 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 
 	// Process each file
 	for filePath, targets := range targetsByFile {
-		log.Info("processing file", 
+		log.Info("processing file",
 			slog.String("file", filepath.Base(filePath)),
 			slog.Int("targets", len(targets)))
 
 		// Read file content
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			log.Error("failed to read file", 
+			log.Error("failed to read file",
 				slog.String("file", filePath),
 				slog.String("error", err.Error()))
 			continue
@@ -212,22 +211,22 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 			// Build prompt
 			p, err := promptBuilder.BuildForTarget(target, string(content))
 			if err != nil {
-				log.Error("failed to build prompt", 
+				log.Error("failed to build prompt",
 					slog.String("function", target.Name),
 					slog.String("error", err.Error()))
 				return err
 			}
 
 			// Generate with AI (try tools first, fallback to streaming)
-			
+
 			var implementation string
 			var genErr error
-			
+
 			// Generate implementation
 			log.Debug("attempting generation", slog.String("function", target.Name))
 			implementation, genErr = aiClient.Generate(ctx, p)
 			if genErr != nil {
-				log.Debug("generation error", 
+				log.Debug("generation error",
 					slog.String("function", target.Name),
 					slog.String("error", genErr.Error()))
 			} else {
@@ -263,4 +262,3 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	log.Info("package generation complete")
 	return nil
 }
-

@@ -28,7 +28,7 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 
 	// Unified OpenAI-compatible API for all providers
 	apiKey := clientConfig.APIKey
-	
+
 	url := clientConfig.URL
 	if url == "" {
 		return nil, fmt.Errorf("URL is required")
@@ -43,7 +43,7 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
-	
+
 	// Set provider specification if it's an OpenAIClient and providers are specified
 	if openaiClient, ok := provider.(*OpenAIClient); ok && len(clientConfig.Provider) > 0 {
 		openaiClient.SetProviderSpec(clientConfig.Provider)

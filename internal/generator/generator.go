@@ -227,40 +227,6 @@ func (g *Generator) parseImplementationAsBlockWithFileSet(implementation string,
 	return funcDecl.Body, nil
 }
 
-// convertMethodToFunctionAST converts a method AST node to a function by adding receiver as first parameter
-func (g *Generator) convertMethodToFunctionAST(funcDecl *ast.FuncDecl, target *parser.Target) {
-	if target.Receiver == nil || funcDecl.Recv == nil {
-		return
-	}
-
-	// Get receiver information
-	receiverField := funcDecl.Recv.List[0]
-	receiverType := receiverField.Type
-	receiverName := "self" // Default name
-	if len(receiverField.Names) > 0 {
-		receiverName = receiverField.Names[0].Name
-	}
-
-	// Create new parameter from receiver
-	receiverParam := &ast.Field{
-		Names: []*ast.Ident{ast.NewIdent(receiverName)},
-		Type:  receiverType,
-	}
-
-	// Add receiver as first parameter
-	if funcDecl.Type.Params == nil {
-		funcDecl.Type.Params = &ast.FieldList{}
-	}
-
-	// Prepend receiver to parameter list
-	newParams := []*ast.Field{receiverParam}
-	newParams = append(newParams, funcDecl.Type.Params.List...)
-	funcDecl.Type.Params.List = newParams
-
-	// Remove receiver from function declaration
-	funcDecl.Recv = nil
-}
-
 // cleanCode removes markdown formatting and extracts function body from AI responses.
 // It handles cases where the AI includes function signatures or markdown code blocks.
 func cleanCode(response string) string {
@@ -305,18 +271,18 @@ func cleanCode(response string) string {
 // addChecksumComment adds a checksum comment before the generated function
 func (g *Generator) addChecksumComment(content string, target *parser.Target) (string, error) {
 	lines := strings.Split(content, "\n")
-	
+
 	// Calculate checksum
 	cs := checksum.Calculate(target)
 	checksumComment := checksum.FormatComment(cs)
-	
+
 	// Find the function declaration
 	var functionFound bool
 	var insertIndex int
-	
+
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		
+
 		// Look for the function declaration
 		if strings.HasPrefix(trimmed, "func ") && strings.Contains(line, target.Name) {
 			// Verify this is the correct function (not just a similar name)
@@ -337,16 +303,16 @@ func (g *Generator) addChecksumComment(content string, target *parser.Target) (s
 			}
 		}
 	}
-	
+
 	if !functionFound {
 		return "", fmt.Errorf("could not find function %s in generated content", target.Name)
 	}
-	
+
 	// Insert checksum comment before function
 	newLines := make([]string, 0, len(lines)+1)
 	newLines = append(newLines, lines[:insertIndex]...)
 	newLines = append(newLines, checksumComment)
 	newLines = append(newLines, lines[insertIndex:]...)
-	
+
 	return strings.Join(newLines, "\n"), nil
 }

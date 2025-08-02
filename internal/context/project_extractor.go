@@ -7,9 +7,9 @@ import (
 	"go/types"
 	"strings"
 
-	"golang.org/x/tools/go/packages"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
+	"golang.org/x/tools/go/packages"
 	"log/slog"
 )
 
@@ -23,32 +23,32 @@ type ProjectContext struct {
 func ExtractProjectContext(filePath string, target *parser.Target) (*ProjectContext, error) {
 	// Load the package containing the target file
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | 
-		      packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Tests: false,
 	}
-	
+
 	// Use file= pattern to load specific file directly
 	// This works with both go modules and standalone files
 	pkgs, err := packages.Load(cfg, "file="+filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load package: %w", err)
 	}
-	
+
 	if len(pkgs) == 0 {
 		return nil, fmt.Errorf("no packages found for file %s", filePath)
 	}
-	
+
 	// Take the first package (should be the one we want)
 	pkg := pkgs[0]
 	if packages.PrintErrors(pkgs) > 0 {
 		return nil, fmt.Errorf("package has errors")
 	}
-	
-	log.Debug("loaded package", 
+
+	log.Debug("loaded package",
 		slog.String("name", pkg.Name),
 		slog.Int("files", len(pkg.GoFiles)))
-	
+
 	// Create context
 	ctx := &ProjectContext{
 		RelevantContext: RelevantContext{
@@ -61,10 +61,10 @@ func ExtractProjectContext(filePath string, target *parser.Target) (*ProjectCont
 		},
 		PackageInfo: pkg,
 	}
-	
+
 	// Collect all type names used in the target function
 	usedTypes := collectUsedTypes(target)
-	
+
 	// Extract types from all files in the package
 	for i, file := range pkg.Syntax {
 		if i < len(pkg.CompiledGoFiles) {
@@ -72,7 +72,7 @@ func ExtractProjectContext(filePath string, target *parser.Target) (*ProjectCont
 		}
 		extractTypesFromFile(file, pkg, usedTypes, ctx)
 	}
-	
+
 	// Extract imports from the target file
 	for _, file := range pkg.Syntax {
 		// Find the file that contains our target
@@ -84,7 +84,7 @@ func ExtractProjectContext(filePath string, target *parser.Target) (*ProjectCont
 			}
 		}
 	}
-	
+
 	// Add receiver type if it's a method
 	if target.Receiver != nil && target.Receiver.Type != "" {
 		receiverType := strings.TrimPrefix(target.Receiver.Type, "*")
@@ -93,7 +93,7 @@ func ExtractProjectContext(filePath string, target *parser.Target) (*ProjectCont
 			log.Warn("receiver type not found", slog.String("type", receiverType))
 		}
 	}
-	
+
 	return ctx, nil
 }
 
@@ -106,17 +106,17 @@ func extractTypesFromFile(file *ast.File, pkg *packages.Package, usedTypes map[s
 				switch s := spec.(type) {
 				case *ast.TypeSpec:
 					typeName := s.Name.Name
-					
+
 					// Check if this type is used or referenced
 					if usedTypes[typeName] || isReferencedType(typeName, usedTypes, s.Type, pkg) {
 						ctx.Types[typeName] = extractFullTypeDefinition(s, pkg)
-						
+
 						// If it's a struct, check for fields that reference other types
 						if structType, ok := s.Type.(*ast.StructType); ok {
 							collectTypesFromStruct(structType, pkg, usedTypes)
 						}
 					}
-					
+
 				case *ast.ValueSpec:
 					// Extract constants and variables if needed
 					for _, name := range s.Names {
@@ -128,7 +128,7 @@ func extractTypesFromFile(file *ast.File, pkg *packages.Package, usedTypes map[s
 					}
 				}
 			}
-			
+
 		case *ast.FuncDecl:
 			// Extract function signatures that might be useful
 			if d.Name != nil {
@@ -160,7 +160,7 @@ func isReferencedType(typeName string, usedTypes map[string]bool, typeExpr ast.E
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -169,7 +169,7 @@ func collectTypesFromStruct(structType *ast.StructType, pkg *packages.Package, u
 	if structType.Fields == nil {
 		return
 	}
-	
+
 	for _, field := range structType.Fields.List {
 		if field.Type != nil {
 			typeName := extractTypeNameFromExpr(field.Type)
@@ -204,12 +204,12 @@ func extractFullTypeDefinition(spec *ast.TypeSpec, pkg *packages.Package) string
 	if obj == nil {
 		return formatTypeSpec(spec)
 	}
-	
+
 	// If it's an interface, use our interface extraction
 	if iface, ok := obj.Type().Underlying().(*types.Interface); ok {
 		return extractInterfaceDefinition(spec.Name.Name, iface)
 	}
-	
+
 	// Otherwise, use the AST representation
 	return formatTypeSpec(spec)
 }
@@ -250,11 +250,11 @@ func formatTypeExpr(expr ast.Expr) string {
 func formatStructType(s *ast.StructType) string {
 	var result strings.Builder
 	result.WriteString("struct {\n")
-	
+
 	if s.Fields != nil {
 		for _, field := range s.Fields.List {
 			result.WriteString("\t")
-			
+
 			// Field names
 			if len(field.Names) > 0 {
 				for i, name := range field.Names {
@@ -265,20 +265,20 @@ func formatStructType(s *ast.StructType) string {
 				}
 				result.WriteString(" ")
 			}
-			
+
 			// Field type
 			result.WriteString(formatTypeExpr(field.Type))
-			
+
 			// Field tag
 			if field.Tag != nil {
 				result.WriteString(" ")
 				result.WriteString(field.Tag.Value)
 			}
-			
+
 			result.WriteString("\n")
 		}
 	}
-	
+
 	result.WriteString("}")
 	return result.String()
 }
@@ -287,25 +287,25 @@ func formatStructType(s *ast.StructType) string {
 func formatInterfaceType(i *ast.InterfaceType) string {
 	var result strings.Builder
 	result.WriteString("interface {\n")
-	
+
 	if i.Methods != nil {
 		for _, method := range i.Methods.List {
 			result.WriteString("\t")
-			
+
 			// Method name
 			if len(method.Names) > 0 {
 				result.WriteString(method.Names[0].Name)
 			}
-			
+
 			// Method signature
 			if fn, ok := method.Type.(*ast.FuncType); ok {
 				result.WriteString(formatFuncTypeProj(fn))
 			}
-			
+
 			result.WriteString("\n")
 		}
 	}
-	
+
 	result.WriteString("}")
 	return result.String()
 }
@@ -314,14 +314,14 @@ func formatInterfaceType(i *ast.InterfaceType) string {
 func formatFuncTypeProj(fn *ast.FuncType) string {
 	var result strings.Builder
 	result.WriteString("(")
-	
+
 	// Parameters
 	if fn.Params != nil {
 		for i, field := range fn.Params.List {
 			if i > 0 {
 				result.WriteString(", ")
 			}
-			
+
 			if len(field.Names) > 0 {
 				for j, name := range field.Names {
 					if j > 0 {
@@ -331,26 +331,26 @@ func formatFuncTypeProj(fn *ast.FuncType) string {
 					result.WriteString(" ")
 				}
 			}
-			
+
 			result.WriteString(formatTypeExpr(field.Type))
 		}
 	}
-	
+
 	result.WriteString(")")
-	
+
 	// Results
 	if fn.Results != nil && len(fn.Results.List) > 0 {
 		result.WriteString(" ")
-		
+
 		if len(fn.Results.List) > 1 {
 			result.WriteString("(")
 		}
-		
+
 		for i, field := range fn.Results.List {
 			if i > 0 {
 				result.WriteString(", ")
 			}
-			
+
 			if len(field.Names) > 0 {
 				for j, name := range field.Names {
 					if j > 0 {
@@ -360,15 +360,15 @@ func formatFuncTypeProj(fn *ast.FuncType) string {
 					result.WriteString(" ")
 				}
 			}
-			
+
 			result.WriteString(formatTypeExpr(field.Type))
 		}
-		
+
 		if len(fn.Results.List) > 1 {
 			result.WriteString(")")
 		}
 	}
-	
+
 	return result.String()
 }
 
@@ -388,25 +388,25 @@ func formatExprProj(expr ast.Expr) string {
 func extractValueDef(spec *ast.ValueSpec, pkg *packages.Package) string {
 	// Simple implementation - can be enhanced
 	var result strings.Builder
-	
+
 	for i, name := range spec.Names {
 		if i > 0 {
 			result.WriteString(", ")
 		}
 		result.WriteString(name.Name)
 	}
-	
+
 	if spec.Type != nil {
 		result.WriteString(" ")
 		result.WriteString(formatTypeExpr(spec.Type))
 	}
-	
-	if spec.Values != nil && len(spec.Values) > 0 {
+
+	if len(spec.Values) > 0 {
 		result.WriteString(" = ")
 		// Simplified - just show that there's a value
 		result.WriteString("...")
 	}
-	
+
 	return result.String()
 }
 
@@ -414,7 +414,7 @@ func extractValueDef(spec *ast.ValueSpec, pkg *packages.Package) string {
 func extractFuncSignature(fn *ast.FuncDecl, pkg *packages.Package) string {
 	var sig strings.Builder
 	sig.WriteString("func ")
-	
+
 	// Receiver
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
 		sig.WriteString("(")
@@ -426,11 +426,11 @@ func extractFuncSignature(fn *ast.FuncDecl, pkg *packages.Package) string {
 		sig.WriteString(formatTypeExpr(recv.Type))
 		sig.WriteString(") ")
 	}
-	
+
 	// Name and signature
 	sig.WriteString(fn.Name.Name)
 	sig.WriteString(formatFuncTypeProj(fn.Type))
-	
+
 	return sig.String()
 }
 
@@ -446,7 +446,7 @@ func extractImportsFromFile(file *ast.File, pkg *packages.Package, target *parse
 			allImports[path] = imp.Path.Value
 		}
 	}
-	
+
 	// Use the existing filterImportsByUsage function
 	return filterImportsByUsage(allImports, target, ctx, nil)
 }

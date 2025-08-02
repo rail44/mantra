@@ -192,7 +192,7 @@ func (t *SearchTool) parseFile(path string) (*ast.File, error) {
 	t.mu.Lock()
 	t.fileCache[path] = file
 	t.mu.Unlock()
-	
+
 	return file, nil
 }
 
@@ -286,4 +286,3 @@ func (t *SearchTool) checkGenSpec(spec ast.Spec, tok token.Token, pkg, path, pat
 
 	return nil
 }
-

@@ -6,10 +6,10 @@ import "context"
 type Provider interface {
 	// Generate sends a prompt with tool definitions and handles tool calls
 	Generate(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error)
-	
+
 	// CheckModel verifies if the specified model is available
 	CheckModel(ctx context.Context) error
-	
+
 	// Name returns the provider name
 	Name() string
 }

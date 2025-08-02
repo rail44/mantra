@@ -148,7 +148,7 @@ func (t *ReadFuncTool) findFunction(ctx context.Context, funcName, receiverType 
 	// Search through project files
 	var result *ReadBodyResult
 	searchTool := NewSearchTool(t.projectRoot)
-	
+
 	// Use search tool to find the function
 	searchParams := map[string]interface{}{
 		"pattern": funcName,
@@ -169,7 +169,7 @@ func (t *ReadFuncTool) findFunction(ctx context.Context, funcName, receiverType 
 			// Parse the file to get the function body
 			filePath := strings.Split(res.Location, ":")[0]
 			fullPath := filepath.Join(t.projectRoot, filePath)
-			
+
 			file, err := t.parseFile(fullPath)
 			if err != nil {
 				continue
@@ -227,7 +227,7 @@ func (t *ReadFuncTool) parseFile(path string) (*ast.File, error) {
 	t.mu.Lock()
 	t.fileCache[path] = file
 	t.mu.Unlock()
-	
+
 	return file, nil
 }
 
@@ -265,7 +265,7 @@ func (t *ReadFuncTool) formatBody(body *ast.BlockStmt) string {
 		if i > 0 {
 			buf.WriteString("\n")
 		}
-		
+
 		// Format each statement
 		stmtStr := t.formatStatement(stmt)
 		buf.WriteString(stmtStr)

@@ -92,19 +92,19 @@ func (t *InspectTool) Execute(ctx context.Context, params map[string]interface{}
 
 // InspectResult represents the result of inspecting a declaration
 type InspectResult struct {
-	Found       bool                   `json:"found"`
-	Name        string                 `json:"name"`
-	Kind        string                 `json:"kind,omitempty"` // "struct", "interface", "func", etc.
-	Package     string                 `json:"package,omitempty"`
-	Definition  string                 `json:"definition,omitempty"`
-	Fields      []FieldInfo            `json:"fields,omitempty"`      // For structs
-	Methods     []MethodInfo           `json:"methods,omitempty"`     // For types with methods
-	Signature   string                 `json:"signature,omitempty"`   // For functions/methods
-	Value       string                 `json:"value,omitempty"`       // For constants only
-	Type        string                 `json:"type,omitempty"`        // For variables/constants
-	InitPattern string                 `json:"init_pattern,omitempty"` // For variables (e.g., "errors.New")
-	Location    string                 `json:"location,omitempty"`    // File and line number
-	Error       string                 `json:"error,omitempty"`
+	Found       bool         `json:"found"`
+	Name        string       `json:"name"`
+	Kind        string       `json:"kind,omitempty"` // "struct", "interface", "func", etc.
+	Package     string       `json:"package,omitempty"`
+	Definition  string       `json:"definition,omitempty"`
+	Fields      []FieldInfo  `json:"fields,omitempty"`       // For structs
+	Methods     []MethodInfo `json:"methods,omitempty"`      // For types with methods
+	Signature   string       `json:"signature,omitempty"`    // For functions/methods
+	Value       string       `json:"value,omitempty"`        // For constants only
+	Type        string       `json:"type,omitempty"`         // For variables/constants
+	InitPattern string       `json:"init_pattern,omitempty"` // For variables (e.g., "errors.New")
+	Location    string       `json:"location,omitempty"`     // File and line number
+	Error       string       `json:"error,omitempty"`
 }
 
 // FieldInfo represents information about a struct field
@@ -125,21 +125,21 @@ type MethodInfo struct {
 
 func (t *InspectTool) findStructMethods(structName, pkgName string) ([]MethodInfo, error) {
 	var methods []MethodInfo
-	
+
 	// Use the cached files to find methods more efficiently
 	for _, file := range t.fileCache {
 		// Only look in files from the same package
 		if file.Name.Name != pkgName {
 			continue
 		}
-		
+
 		// Search for methods on this struct
 		for _, decl := range file.Decls {
 			funcDecl, ok := decl.(*ast.FuncDecl)
 			if !ok || funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
 				continue
 			}
-			
+
 			// Check if receiver matches our struct
 			recv := funcDecl.Recv.List[0]
 			recvType := extractTypeString(recv.Type)
@@ -154,7 +154,7 @@ func (t *InspectTool) findStructMethods(structName, pkgName string) ([]MethodInf
 			}
 		}
 	}
-	
+
 	return methods, nil
 }
 
@@ -231,13 +231,13 @@ func (t *InspectTool) parseFile(path string) (*ast.File, error) {
 	t.mu.Lock()
 	t.fileCache[path] = file
 	t.mu.Unlock()
-	
+
 	return file, nil
 }
 
 func (t *InspectTool) searchInFile(file *ast.File, name string, path string) *InspectResult {
 	var result *InspectResult
-	
+
 	// Get relative path for display
 	relPath, _ := filepath.Rel(t.projectRoot, path)
 	if relPath == "" {
@@ -347,7 +347,7 @@ func (t *InspectTool) extractValueInfo(spec *ast.ValueSpec, decl *ast.GenDecl, i
 			}
 		}
 	}
-	
+
 	// For variables, show initialization pattern if it's a common pattern
 	if decl.Tok == token.VAR && len(spec.Values) > 0 {
 		// Find the index of this identifier
@@ -412,20 +412,20 @@ func (t *InspectTool) extractFuncInfo(decl *ast.FuncDecl, pkg, path string) *Ins
 	}
 
 	result.Definition = result.Signature
-	
+
 	return result
 }
 
 func extractStructFields(s *ast.StructType) []FieldInfo {
 	var fields []FieldInfo
-	
+
 	if s.Fields == nil {
 		return fields
 	}
 
 	for _, field := range s.Fields.List {
 		fieldType := extractTypeString(field.Type)
-		
+
 		if len(field.Names) == 0 {
 			// Embedded field
 			fields = append(fields, FieldInfo{
@@ -439,23 +439,23 @@ func extractStructFields(s *ast.StructType) []FieldInfo {
 					Name: name.Name,
 					Type: fieldType,
 				}
-				
+
 				// Extract tag if present
 				if field.Tag != nil {
 					fieldInfo.Tag = field.Tag.Value
 				}
-				
+
 				fields = append(fields, fieldInfo)
 			}
 		}
 	}
-	
+
 	return fields
 }
 
 func extractInterfaceMethods(i *ast.InterfaceType) []MethodInfo {
 	var methods []MethodInfo
-	
+
 	if i.Methods == nil {
 		return methods
 	}
@@ -473,8 +473,6 @@ func extractInterfaceMethods(i *ast.InterfaceType) []MethodInfo {
 		}
 		// TODO: Handle embedded interfaces
 	}
-	
+
 	return methods
 }
-
-

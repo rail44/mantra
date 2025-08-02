@@ -32,7 +32,7 @@ func extractValueString(expr ast.Expr) string {
 // extractCallString extracts a string representation of a function call
 func extractCallString(call *ast.CallExpr) string {
 	var parts []string
-	
+
 	// Get function name
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
@@ -42,7 +42,7 @@ func extractCallString(call *ast.CallExpr) string {
 			parts = append(parts, fmt.Sprintf("%s.%s", x.Name, fn.Sel.Name))
 		}
 	}
-	
+
 	// Get arguments
 	var args []string
 	for _, arg := range call.Args {
@@ -52,7 +52,7 @@ func extractCallString(call *ast.CallExpr) string {
 			args = append(args, "...")
 		}
 	}
-	
+
 	if len(parts) > 0 {
 		return fmt.Sprintf("%s(%s)", parts[0], strings.Join(args, ", "))
 	}

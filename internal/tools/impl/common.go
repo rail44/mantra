@@ -59,7 +59,7 @@ func matchesPattern(name, pattern string) bool {
 // buildFunctionSignature builds a function signature string
 func buildFunctionSignature(name string, funcType *ast.FuncType) string {
 	var parts []string
-	
+
 	// Parameters
 	if funcType.Params != nil {
 		var params []string
@@ -75,21 +75,21 @@ func buildFunctionSignature(name string, funcType *ast.FuncType) string {
 		}
 		parts = append(parts, fmt.Sprintf("(%s)", strings.Join(params, ", ")))
 	}
-	
+
 	// Results
 	if funcType.Results != nil {
 		var results []string
 		for _, result := range funcType.Results.List {
 			results = append(results, extractTypeString(result.Type))
 		}
-		
+
 		if len(results) == 1 {
 			parts = append(parts, results[0])
 		} else if len(results) > 1 {
 			parts = append(parts, fmt.Sprintf("(%s)", strings.Join(results, ", ")))
 		}
 	}
-	
+
 	return fmt.Sprintf("%s%s", name, strings.Join(parts, " "))
 }
 

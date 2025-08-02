@@ -22,7 +22,7 @@ func TestExtractProjectContext(t *testing.T) {
 			setup: func(t *testing.T) (string, func()) {
 				// Create a temporary directory
 				tmpDir := t.TempDir()
-				
+
 				// Create a standalone Go file
 				content := `package main
 
@@ -47,7 +47,7 @@ func main() {
 				if err != nil {
 					t.Fatal(err)
 				}
-				
+
 				return filePath, func() {}
 			},
 			targetName:    "CreateUser",
@@ -60,7 +60,7 @@ func main() {
 			setup: func(t *testing.T) (string, func()) {
 				// Create a temporary directory
 				tmpDir := t.TempDir()
-				
+
 				// Create go.mod
 				goModContent := `module testmodule
 
@@ -70,7 +70,7 @@ go 1.21
 				if err != nil {
 					t.Fatal(err)
 				}
-				
+
 				// Create a Go file
 				content := `package mypackage
 
@@ -93,7 +93,7 @@ func NewService(cfg *Config) *Service {
 				if err != nil {
 					t.Fatal(err)
 				}
-				
+
 				return filePath, func() {}
 			},
 			targetName:    "NewService",
@@ -106,7 +106,7 @@ func NewService(cfg *Config) *Service {
 			setup: func(t *testing.T) (string, func()) {
 				// Create a temporary directory
 				tmpDir := t.TempDir()
-				
+
 				// Create go.mod
 				goModContent := `module github.com/test/project
 
@@ -116,14 +116,14 @@ go 1.21
 				if err != nil {
 					t.Fatal(err)
 				}
-				
+
 				// Create subdirectory
 				subDir := filepath.Join(tmpDir, "internal", "handler")
 				err = os.MkdirAll(subDir, 0755)
 				if err != nil {
 					t.Fatal(err)
 				}
-				
+
 				// Create a Go file in subdirectory
 				content := `package handler
 
@@ -147,7 +147,7 @@ func HandleRequest(ctx context.Context, req *Request) (*Response, error) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				
+
 				return filePath, func() {}
 			},
 			targetName:    "HandleRequest",

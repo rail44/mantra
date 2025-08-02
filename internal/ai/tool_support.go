@@ -6,8 +6,8 @@ import (
 
 // ToolCall represents a request to call a tool (OpenAI format)
 type ToolCall struct {
-	ID       string          `json:"id"`
-	Type     string          `json:"type"`
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
 	Function ToolCallFunction `json:"function"`
 }
 
@@ -66,4 +66,3 @@ func (ToolChoiceNone) MarshalJSON() ([]byte, error) {
 func (ToolChoiceRequired) MarshalJSON() ([]byte, error) {
 	return json.Marshal("required")
 }
-

@@ -208,25 +208,25 @@ func (t *CheckSyntaxTool) generateHint(message, code string) string {
 	switch {
 	case strings.Contains(msg, "expected ')'"):
 		return "Missing closing parenthesis. Check your function calls and expressions."
-	
+
 	case strings.Contains(msg, "expected '}'"):
 		return "Missing closing brace. Check your if statements, loops, and function bodies."
-	
+
 	case strings.Contains(msg, "expected ';'"):
 		return "Missing semicolon or newline. In Go, statements are usually terminated by newlines."
-	
+
 	case strings.Contains(msg, "unexpected"):
 		if strings.Contains(msg, "end of statement") {
 			return "Syntax error at end of statement. Check for missing operators or incomplete expressions."
 		}
 		return "Unexpected token. Check for typos or incorrect syntax."
-	
+
 	case strings.Contains(msg, "missing ',' in"):
 		return "Missing comma in list. Check function arguments, slice literals, or composite literals."
-	
+
 	case strings.Contains(msg, "cannot use"):
 		return "Type mismatch. Ensure you're using the correct types for operations."
-	
+
 	default:
 		// Try to provide context-specific hints
 		if strings.Contains(code, "if ") && !strings.Contains(code, "{") {

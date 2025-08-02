@@ -23,7 +23,7 @@ const (
 var (
 	// Current logger instance
 	logger *slog.Logger
-	
+
 	// Current log level
 	currentLevel slog.Level
 )
@@ -49,7 +49,7 @@ func SetLevel(level LogLevel) error {
 	default:
 		return fmt.Errorf("invalid log level: %s", level)
 	}
-	
+
 	setupLogger(os.Stderr)
 	return nil
 }
@@ -92,7 +92,7 @@ func setupLogger(output io.Writer) {
 			return a
 		},
 	}
-	
+
 	handler := slog.NewTextHandler(output, opts)
 	logger = slog.New(handler)
 }

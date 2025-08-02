@@ -104,18 +104,18 @@ func findConfigFile(startPath string) (string, error) {
 func expandEnvVars(s string) string {
 	// Pattern to match ${VAR_NAME}
 	re := regexp.MustCompile(`\$\{([^}]+)\}`)
-	
+
 	return re.ReplaceAllStringFunc(s, func(match string) string {
 		// Extract variable name
 		varName := match[2 : len(match)-1]
-		
+
 		// Get environment variable value
 		value := os.Getenv(varName)
 		if value == "" {
 			// Keep original if not set (will be caught in validation)
 			return match
 		}
-		
+
 		return value
 	})
 }
@@ -175,7 +175,7 @@ func (c *Config) GetAPIKey() string {
 	if c.APIKey == "" {
 		return ""
 	}
-	
+
 	// Expand environment variables
 	return expandEnvVars(c.APIKey)
 }

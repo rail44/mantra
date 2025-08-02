@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,25 +17,25 @@ import (
 
 // OpenAIClient implements Provider for OpenAI API and compatible services
 type OpenAIClient struct {
-	apiKey      string
-	baseURL     string
-	model       string
-	temperature float32
-	httpClient  *http.Client
-	debugTiming bool
+	apiKey       string
+	baseURL      string
+	model        string
+	temperature  float32
+	httpClient   *http.Client
+	debugTiming  bool
 	providerSpec *ProviderSpec // OpenRouter-specific provider routing
 }
 
 // OpenAIRequest represents a chat completion request
 type OpenAIRequest struct {
-	Model             string         `json:"model"`
+	Model             string          `json:"model"`
 	Messages          []OpenAIMessage `json:"messages"`
-	Temperature       float32        `json:"temperature"`
-	Stream            bool          `json:"stream"`
-	Tools             []Tool         `json:"tools,omitempty"`
-	ToolChoice        interface{}    `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool          `json:"parallel_tool_calls,omitempty"`
-	Provider          *ProviderSpec  `json:"provider,omitempty"` // OpenRouter provider specification
+	Temperature       float32         `json:"temperature"`
+	Stream            bool            `json:"stream"`
+	Tools             []Tool          `json:"tools,omitempty"`
+	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool            `json:"parallel_tool_calls,omitempty"`
+	Provider          *ProviderSpec   `json:"provider,omitempty"` // OpenRouter provider specification
 }
 
 // ProviderSpec allows specifying provider routing for OpenRouter
@@ -59,9 +58,9 @@ type OpenAIResponse struct {
 	Created int64  `json:"created"`
 	Model   string `json:"model"`
 	Choices []struct {
-		Index   int           `json:"index"`
-		Message OpenAIMessage `json:"message"`
-		FinishReason string   `json:"finish_reason"`
+		Index        int           `json:"index"`
+		Message      OpenAIMessage `json:"message"`
+		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -125,8 +124,6 @@ func (c *OpenAIClient) Name() string {
 	return "OpenAI API"
 }
 
-
-
 // CheckModel verifies if the specified model is available
 func (c *OpenAIClient) CheckModel(ctx context.Context) error {
 	checkStart := time.Now()
@@ -162,14 +159,14 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	
+
 	// Log request summary instead of full JSON
-	log.Trace("API request", 
+	log.Trace("API request",
 		"model", req.Model,
 		"messages", len(req.Messages),
 		"tools", len(req.Tools),
 		"temperature", req.Temperature)
-	
+
 	// Debug: Log request with provider info
 	if c.providerSpec != nil {
 		log.Debug("sending request with provider spec", "provider_spec", fmt.Sprintf("%+v", c.providerSpec))
@@ -207,74 +204,6 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	return &result, nil
 }
 
-// makeStreamRequest makes a streaming request to the API
-func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest, outputCh chan<- string) error {
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	scanner := bufio.NewScanner(resp.Body)
-	var providerLogged bool
-	for scanner.Scan() {
-		line := scanner.Text()
-		
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			return nil
-		}
-
-		var chunk OpenAIStreamResponse
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue // Skip malformed chunks
-		}
-		
-		// Log provider info only once (OpenRouter)
-		if chunk.Provider != "" && !providerLogged {
-			log.Debug("OpenRouter provider", "provider", chunk.Provider)
-			providerLogged = true
-		}
-
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			select {
-			case outputCh <- chunk.Choices[0].Delta.Content:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading stream: %w", err)
-	}
-
-	return nil
-}
-
 // Generate sends a prompt with tool definitions and handles tool calls
 func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error) {
 	overallStart := time.Now()
@@ -294,19 +223,18 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 			Content: prompt,
 		},
 	}
-	
 
 	// Maximum rounds of tool calls to prevent infinite loops
 	const maxRounds = 30
-	
+
 	for round := 0; round < maxRounds; round++ {
 		if round > 0 {
 			log.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
 		}
-		
+
 		// Log concise message stats
 		log.Trace("message stats", "round", round+1, "total_messages", len(messages))
-		
+
 		// Build request with tools
 		req := OpenAIRequest{
 			Model:             c.model,
@@ -332,15 +260,14 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		}
 
 		responseMsg := resp.Choices[0].Message
-		
+
 		// Fix missing Type field for Mistral API compatibility
 		for i := range responseMsg.ToolCalls {
 			if responseMsg.ToolCalls[i].Type == "" {
 				responseMsg.ToolCalls[i].Type = "function"
 			}
 		}
-		
-		
+
 		// Create clean message with only required fields to avoid API compatibility issues
 		cleanMsg := OpenAIMessage{
 			Role:      responseMsg.Role,
@@ -350,7 +277,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		messages = append(messages, cleanMsg)
 
 		// Debug: Log response
-		log.Debug("model response", 
+		log.Debug("model response",
 			"role", responseMsg.Role,
 			"content_length", len(responseMsg.Content),
 			"tool_calls", len(responseMsg.ToolCalls))
@@ -382,10 +309,10 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 		// Execute tool calls in parallel
 		toolResults := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)
-		
+
 		// Add all tool responses to messages
 		messages = append(messages, toolResults...)
-		
+
 	}
 
 	return "", fmt.Errorf("exceeded maximum rounds of tool calls")
@@ -410,14 +337,14 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 			defer wg.Done()
 
 			// Parse parameters
-			
+
 			// Check if Arguments is already a string (double-encoded)
 			var argStr string
 			if err := json.Unmarshal(tc.Function.Arguments, &argStr); err == nil {
 				// It was double-encoded, use the decoded string
 				tc.Function.Arguments = json.RawMessage(argStr)
 			}
-			
+
 			var params map[string]interface{}
 			if err := json.Unmarshal(tc.Function.Arguments, &params); err != nil {
 				results <- toolResult{
@@ -434,12 +361,12 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 
 			// Log tool execution
 			log.Debug("executing tool", "name", tc.Function.Name, "params", fmt.Sprintf("%v", params))
-			
+
 			// Execute tool
 			toolStart := time.Now()
 			result, err := executor.Execute(ctx, tc.Function.Name, params)
 			duration := time.Since(toolStart)
-			
+
 			if err != nil {
 				results <- toolResult{
 					index:      index,
@@ -469,7 +396,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				}
 				return
 			}
-			
+
 			log.Trace("tool result", "name", tc.Function.Name, "result", string(resultJSON))
 
 			results <- toolResult{

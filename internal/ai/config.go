@@ -6,12 +6,12 @@ import (
 
 // Config is deprecated. Use ClientConfig and GenerationConfig instead.
 type Config struct {
-	Model        string
-	Host         string        // Base URL for the API endpoint
-	Timeout      time.Duration
-	Temperature  float32
-	Provider     string  // Deprecated: provider type
-	APIKey       string  // API key for providers that require authentication
+	Model       string
+	Host        string // Base URL for the API endpoint
+	Timeout     time.Duration
+	Temperature float32
+	Provider    string // Deprecated: provider type
+	APIKey      string // API key for providers that require authentication
 }
 
 // ClientConfig represents the configuration for connecting to an AI provider
@@ -39,7 +39,7 @@ func DefaultConfig() *Config {
 func DefaultClientConfig() *ClientConfig {
 	// No defaults in the simplified version - config is required
 	return &ClientConfig{
-		Timeout:  5 * time.Minute,
+		Timeout: 5 * time.Minute,
 	}
 }
 
