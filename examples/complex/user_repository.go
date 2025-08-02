@@ -1,6 +1,9 @@
 package complex
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // User represents a user
 type User struct {
@@ -10,7 +13,10 @@ type User struct {
 }
 
 // UserRepository handles user data access
-type UserRepository struct{}
+type UserRepository struct {
+	mu    sync.RWMutex
+	users map[int64]*User
+}
 
 // mantra: ユーザーをIDで取得する
 // 存在しない場合はnilとエラーを返す

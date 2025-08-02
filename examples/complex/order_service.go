@@ -50,7 +50,6 @@ type OrderService struct {
 // mantra: 注文を作成する
 // ユーザーの存在確認をUserRepositoryで行う
 // 注文IDはUUIDv4で生成
-// mantra:checksum:5954f9a2
 func CreateOrder(s *OrderService, ctx context.Context, userID int64, items []OrderItem) (*Order, error) {
 	panic("not implemented")
 }
@@ -58,7 +57,6 @@ func CreateOrder(s *OrderService, ctx context.Context, userID int64, items []Ord
 // mantra: 注文をキャンセルする
 // すでにshipped以降のステータスの場合はエラー
 // キャンセル成功時はキャッシュから削除
-// mantra:checksum:ac4d25ec
 func CancelOrder(s *OrderService, ctx context.Context, orderID string) error {
 	panic("not implemented")
 }
@@ -66,7 +64,6 @@ func CancelOrder(s *OrderService, ctx context.Context, orderID string) error {
 // mantra: ユーザーの注文履歴を取得する
 // キャッシュに存在する場合はキャッシュから返す
 // キャッシュキーは"user_orders:{userID}"
-// mantra:checksum:90aa05cb
 func GetUserOrders(s *OrderService, ctx context.Context, userID int64) ([]*Order, error) {
 	panic("not implemented")
 }

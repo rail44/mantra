@@ -2,11 +2,20 @@ package complex
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
+type cacheItem struct {
+	value     interface{}
+	expiresAt time.Time
+}
+
 // CacheService handles caching operations
-type CacheService struct{}
+type CacheService struct {
+	mu    sync.RWMutex
+	items map[string]cacheItem
+}
 
 // mantra: キーに対応する値をキャッシュから取得する
 // 存在しない場合はfalseを返す
