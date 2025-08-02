@@ -236,9 +236,9 @@ Mantra generates clean, idiomatic Go code with:
 - Best practices for the detected use case
 - Comprehensive implementations based on your instructions
 
-## Tool System (Currently Disabled)
+## Tool System
 
-Note: Tool support is temporarily disabled in the simplified version. The AI generates code based on the provided context without dynamic inspection capabilities.
+The tool system is now enabled by default. The AI can dynamically inspect your codebase during generation for better accuracy and understanding.
 
 ### Available Tools
 
@@ -256,8 +256,8 @@ Note: Tool support is temporarily disabled in the simplified version. The AI gen
 ### Usage
 
 ```bash
-# Enable tools for more accurate generation
-mantra generate --use-tools main.go
+# Tools are enabled by default for accurate generation
+mantra generate main.go
 ```
 
 ## Performance Features
@@ -296,8 +296,8 @@ This shows:
 ## Examples
 
 See the `examples/` directory for more usage examples:
-- `user_service.go`: Database operations example (using Spanner)
-- `calculator.go`: General computation functions
+- `examples/simple/`: Basic cache implementation
+- `examples/complex/`: Advanced business logic with order management, user repositories, and caching services
 
 ## Troubleshooting
 
