@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	astutils "github.com/rail44/mantra/internal/ast"
+	"github.com/rail44/mantra/internal/analysis"
 	"github.com/rail44/mantra/internal/checksum"
 	"github.com/rail44/mantra/internal/imports"
 	"github.com/rail44/mantra/internal/parser"
@@ -169,7 +169,7 @@ func (g *Generator) replaceFunctionBody(content string, target *parser.Target, i
 				// For methods, also check receiver type matches
 				if target.Receiver != nil && funcDecl.Recv != nil {
 					if len(funcDecl.Recv.List) > 0 {
-						receiverType := astutils.GetTypeString(funcDecl.Recv.List[0].Type)
+						receiverType := analysis.ExtractTypeString(funcDecl.Recv.List[0].Type)
 						if receiverType == target.Receiver.Type {
 							targetFound = true
 						}

@@ -10,6 +10,17 @@ import (
 	"github.com/rail44/mantra/internal/parser"
 )
 
+// RelevantContext holds context information relevant to a function
+type RelevantContext struct {
+	Imports      []string          // Import statements
+	Types        map[string]string // Type definitions (name -> definition)
+	Constants    map[string]string // Constant definitions
+	Variables    map[string]string // Variable definitions
+	Functions    map[string]string // Other function signatures that might be called
+	PackageName  string            // Package name
+	ReceiverType string            // Full type definition if the target is a method
+}
+
 // ExtractFunctionContext extracts context using a reliable, function-focused approach
 func ExtractFunctionContext(filePath string, target *parser.Target) (*RelevantContext, error) {
 	// Read and parse the source file

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	astutils "github.com/rail44/mantra/internal/ast"
+	"github.com/rail44/mantra/internal/analysis"
 )
 
 const (
@@ -186,7 +186,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			if x.Recv != nil && len(x.Recv.List) > 0 {
 				recv := x.Recv.List[0]
 				target.Receiver = &Receiver{
-					Type: astutils.GetTypeString(recv.Type),
+					Type: analysis.ExtractTypeString(recv.Type),
 				}
 				if len(recv.Names) > 0 {
 					target.Receiver.Name = recv.Names[0].Name
@@ -196,7 +196,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			// Parse parameters
 			if x.Type.Params != nil {
 				for _, field := range x.Type.Params.List {
-					paramType := astutils.GetTypeString(field.Type)
+					paramType := analysis.ExtractTypeString(field.Type)
 					if len(field.Names) == 0 {
 						// Unnamed parameter
 						target.Params = append(target.Params, Param{
@@ -217,7 +217,7 @@ func parseTargetsFromNode(node *ast.File, fset *token.FileSet, filePath string) 
 			// Parse return values
 			if x.Type.Results != nil {
 				for _, field := range x.Type.Results.List {
-					retType := astutils.GetTypeString(field.Type)
+					retType := analysis.ExtractTypeString(field.Type)
 					// Return values can have multiple types in one field
 					if len(field.Names) == 0 {
 						target.Returns = append(target.Returns, Return{
