@@ -25,7 +25,6 @@ type OpenAIClient struct {
 	systemPrompt string
 	httpClient  *http.Client
 	debugTiming bool
-	providerName string // Track which provider we're actually using
 	providerSpec *ProviderSpec // OpenRouter-specific provider routing
 }
 
@@ -96,22 +95,6 @@ func NewOpenAIClient(apiKey, baseURL, model string, temperature float32, systemP
 		return nil, fmt.Errorf("base URL is required")
 	}
 
-	// Determine provider name from base URL
-	providerName := "OpenAI"
-	if strings.Contains(baseURL, "openai.com") {
-		providerName = "OpenAI"
-	} else if strings.Contains(baseURL, "localhost:11434") {
-		providerName = "Ollama"
-	} else if strings.Contains(baseURL, "api.mistral.ai") {
-		providerName = "Mistral"
-	} else if strings.Contains(baseURL, "openrouter.ai") {
-		providerName = "OpenRouter"
-	} else if strings.Contains(baseURL, "api.cerebras.ai") {
-		providerName = "Cerebras"
-	} else if strings.Contains(baseURL, "api.deepinfra.com") {
-		providerName = "DeepInfra"
-	}
-
 	return &OpenAIClient{
 		apiKey:      apiKey,
 		baseURL:     strings.TrimSuffix(baseURL, "/"),
@@ -121,7 +104,6 @@ func NewOpenAIClient(apiKey, baseURL, model string, temperature float32, systemP
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
-		providerName: providerName,
 	}, nil
 }
 
@@ -141,7 +123,8 @@ func (c *OpenAIClient) SetProviderSpec(providers []string) {
 
 // Name returns the provider name
 func (c *OpenAIClient) Name() string {
-	return c.providerName
+	// Return a simple name based on the model being used
+	return "OpenAI API"
 }
 
 // Generate sends a prompt to the AI and returns the response
