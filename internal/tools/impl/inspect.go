@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rail44/mantra/internal/analysis"
 	"github.com/rail44/mantra/internal/tools"
 )
 
@@ -107,19 +108,9 @@ type InspectResult struct {
 	Error       string       `json:"error,omitempty"`
 }
 
-// FieldInfo represents information about a struct field
-type FieldInfo struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Tag  string `json:"tag,omitempty"`
-}
-
-// MethodInfo represents information about a method
-type MethodInfo struct {
-	Name      string `json:"name"`
-	Signature string `json:"signature"`
-	Receiver  string `json:"receiver,omitempty"`
-}
+// Use shared field and method info types
+type FieldInfo = analysis.FieldInfo
+type MethodInfo = analysis.MethodInfo
 
 // Helper functions for AST processing
 
@@ -142,12 +133,12 @@ func (t *InspectTool) findStructMethods(structName, pkgName string) ([]MethodInf
 
 			// Check if receiver matches our struct
 			recv := funcDecl.Recv.List[0]
-			recvType := extractTypeString(recv.Type)
+			recvType := analysis.ExtractTypeString(recv.Type)
 			// Handle both *StructName and StructName
 			if recvType == structName || recvType == "*"+structName {
 				method := MethodInfo{
 					Name:      funcDecl.Name.Name,
-					Signature: buildFunctionSignatureFromDecl(funcDecl),
+					Signature: analysis.BuildFunctionSignatureFromDecl(funcDecl),
 					Receiver:  recvType,
 				}
 				methods = append(methods, method)
@@ -294,15 +285,15 @@ func (t *InspectTool) extractTypeInfo(spec *ast.TypeSpec, pkg, path string) *Ins
 	switch typ := spec.Type.(type) {
 	case *ast.StructType:
 		result.Kind = "struct"
-		result.Fields = extractStructFields(typ)
+		result.Fields = analysis.ExtractStructFields(typ)
 		result.Definition = fmt.Sprintf("type %s struct", spec.Name.Name)
 	case *ast.InterfaceType:
 		result.Kind = "interface"
-		result.Methods = extractInterfaceMethods(typ)
+		result.Methods = analysis.ExtractInterfaceMethods(typ)
 		result.Definition = fmt.Sprintf("type %s interface", spec.Name.Name)
 	default:
 		result.Kind = "type"
-		result.Type = extractTypeString(spec.Type)
+		result.Type = analysis.ExtractTypeString(spec.Type)
 		result.Definition = fmt.Sprintf("type %s %s", spec.Name.Name, result.Type)
 	}
 
@@ -326,7 +317,7 @@ func (t *InspectTool) extractValueInfo(spec *ast.ValueSpec, decl *ast.GenDecl, i
 
 	// Extract type if specified
 	if spec.Type != nil {
-		result.Type = extractTypeString(spec.Type)
+		result.Type = analysis.ExtractTypeString(spec.Type)
 	}
 
 	// Extract value ONLY for constants
@@ -398,14 +389,14 @@ func (t *InspectTool) extractFuncInfo(decl *ast.FuncDecl, pkg, path string) *Ins
 		Name:      decl.Name.Name,
 		Package:   pkg,
 		Location:  fmt.Sprintf("%s:%d", path, t.fset.Position(decl.Pos()).Line),
-		Signature: buildFunctionSignatureFromDecl(decl),
+		Signature: analysis.BuildFunctionSignatureFromDecl(decl),
 	}
 
 	if decl.Recv != nil {
 		result.Kind = "method"
 		// Extract receiver type
 		if len(decl.Recv.List) > 0 {
-			result.Type = extractTypeString(decl.Recv.List[0].Type)
+			result.Type = analysis.ExtractTypeString(decl.Recv.List[0].Type)
 		}
 	} else {
 		result.Kind = "func"
@@ -414,65 +405,4 @@ func (t *InspectTool) extractFuncInfo(decl *ast.FuncDecl, pkg, path string) *Ins
 	result.Definition = result.Signature
 
 	return result
-}
-
-func extractStructFields(s *ast.StructType) []FieldInfo {
-	var fields []FieldInfo
-
-	if s.Fields == nil {
-		return fields
-	}
-
-	for _, field := range s.Fields.List {
-		fieldType := extractTypeString(field.Type)
-
-		if len(field.Names) == 0 {
-			// Embedded field
-			fields = append(fields, FieldInfo{
-				Name: fieldType,
-				Type: fieldType,
-			})
-		} else {
-			// Named fields
-			for _, name := range field.Names {
-				fieldInfo := FieldInfo{
-					Name: name.Name,
-					Type: fieldType,
-				}
-
-				// Extract tag if present
-				if field.Tag != nil {
-					fieldInfo.Tag = field.Tag.Value
-				}
-
-				fields = append(fields, fieldInfo)
-			}
-		}
-	}
-
-	return fields
-}
-
-func extractInterfaceMethods(i *ast.InterfaceType) []MethodInfo {
-	var methods []MethodInfo
-
-	if i.Methods == nil {
-		return methods
-	}
-
-	for _, method := range i.Methods.List {
-		if len(method.Names) > 0 {
-			// Method signature
-			if funcType, ok := method.Type.(*ast.FuncType); ok {
-				sig := buildFunctionSignature(method.Names[0].Name, funcType)
-				methods = append(methods, MethodInfo{
-					Name:      method.Names[0].Name,
-					Signature: sig,
-				})
-			}
-		}
-		// TODO: Handle embedded interfaces
-	}
-
-	return methods
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rail44/mantra/internal/analysis"
 	"github.com/rail44/mantra/internal/tools"
 )
 
@@ -183,7 +184,7 @@ func (t *ReadFuncTool) findFunction(ctx context.Context, funcName, receiverType 
 						if fn.Recv == nil || len(fn.Recv.List) == 0 {
 							return true
 						}
-						recvType := extractTypeString(fn.Recv.List[0].Type)
+						recvType := analysis.ExtractTypeString(fn.Recv.List[0].Type)
 						if !strings.Contains(recvType, receiverType) {
 							return true
 						}
@@ -235,7 +236,7 @@ func (t *ReadFuncTool) extractFunctionBody(fn *ast.FuncDecl, file *ast.File, pat
 	result := &ReadBodyResult{
 		Found:     true,
 		Name:      fn.Name.Name,
-		Signature: buildFunctionSignatureFromDecl(fn),
+		Signature: analysis.BuildFunctionSignatureFromDecl(fn),
 		Location:  fmt.Sprintf("%s:%d", path, t.fset.Position(fn.Pos()).Line),
 	}
 

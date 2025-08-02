@@ -27,42 +27,77 @@ func (b *Builder) SetUseTools(useTools bool) {
 
 // BuildForTarget creates a prompt for a specific generation target
 func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) (string, error) {
-	// Use project-wide context extraction by default
-	projectCtx, err := context.ExtractProjectContext(target.FilePath, target)
+	// Use function-focused context extraction for reliable type information
+	ctx, err := context.ExtractFunctionContext(target.FilePath, target)
 	if err != nil {
-		log.Error("package has compilation errors", slog.String("error", err.Error()))
-		log.Error("fix compilation errors before running generation")
-		return "", fmt.Errorf("package compilation failed: %w", err)
+		log.Error("context extraction failed", slog.String("error", err.Error()))
+		return "", fmt.Errorf("context extraction failed: %w", err)
 	}
 
-	return b.buildPromptWithContext(&projectCtx.RelevantContext, target), nil
+	return b.buildPromptWithContext(ctx, target), nil
 }
 
 // buildPromptWithContext builds a prompt using the extracted context
 func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *parser.Target) string {
 	var prompt strings.Builder
 
-	// Show the function with placeholder
-	prompt.WriteString("Implement the following function:\n\n")
-	prompt.WriteString(fmt.Sprintf("%s {\n    <IMPLEMENT_HERE>\n}\n\n", target.GetFunctionSignature()))
+	// DevStral最適化：XMLタグで構造化
+	prompt.WriteString("<context>\n")
 
-	// Add the mantra instruction
-	prompt.WriteString(fmt.Sprintf("Instruction: %s\n", target.Instruction))
-
-	// Only add minimal context when needed
-	if len(ctx.Types) > 0 {
-		prompt.WriteString("\nContext:\n")
-		for _, typeDef := range ctx.Types {
-			prompt.WriteString(fmt.Sprintf("- %s\n", typeDef))
+	// Import情報を最初に表示
+	if len(ctx.Imports) > 0 {
+		prompt.WriteString("Available imports:\n")
+		for _, imp := range ctx.Imports {
+			prompt.WriteString(fmt.Sprintf("```go\nimport %s\n```\n\n", imp))
 		}
 	}
+
+	// 関数シグネチャに関連する型情報を優先的に表示
+	if len(ctx.Types) > 0 {
+		prompt.WriteString("Available types:\n")
+		for _, typeDef := range ctx.Types {
+			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", typeDef))
+		}
+	}
+
+	// その他のコンテキスト情報
+	if len(ctx.Constants) > 0 {
+		prompt.WriteString("Constants:\n")
+		for _, constDef := range ctx.Constants {
+			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", constDef))
+		}
+	}
+
+	if len(ctx.Variables) > 0 {
+		prompt.WriteString("Variables:\n")
+		for _, varDef := range ctx.Variables {
+			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", varDef))
+		}
+	}
+
+	prompt.WriteString("</context>\n\n")
+
+	prompt.WriteString("<target>\n")
+	prompt.WriteString(fmt.Sprintf("```go\n%s {\n    <IMPLEMENT_HERE>\n}\n```\n", target.GetFunctionSignature()))
+	prompt.WriteString("</target>\n\n")
+
+	prompt.WriteString("<instruction>\n")
+	prompt.WriteString(fmt.Sprintf("%s\n", target.Instruction))
+	prompt.WriteString("</instruction>\n")
 
 	fullPrompt := prompt.String()
 
 	// Log the generated prompt at trace level for debugging
 	log.Trace("generated prompt",
 		slog.String("function", target.Name),
-		slog.Int("length", len(fullPrompt)))
+		slog.Int("length", len(fullPrompt)),
+		slog.Int("types_count", len(ctx.Types)),
+		slog.Int("imports_count", len(ctx.Imports)))
+
+	// Log imports separately for debugging
+	if len(ctx.Imports) > 0 {
+		log.Trace("context includes imports", slog.Any("imports", ctx.Imports))
+	}
 
 	return fullPrompt
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rail44/mantra/internal/analysis"
 	"github.com/rail44/mantra/internal/tools"
 )
 
@@ -221,7 +222,7 @@ func (t *SearchTool) searchInFile(file *ast.File, path, pattern, kind string) []
 						Kind:      "func",
 						Package:   file.Name.Name,
 						Location:  fmt.Sprintf("%s:%d", relPath, t.fset.Position(d.Pos()).Line),
-						Signature: buildFunctionSignatureFromDecl(d),
+						Signature: analysis.BuildFunctionSignatureFromDecl(d),
 					}
 					if d.Recv != nil {
 						result.Kind = "method"
