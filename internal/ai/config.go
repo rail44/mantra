@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"os"
 	"time"
 )
 
@@ -18,7 +17,7 @@ type Config struct {
 
 // ClientConfig represents the configuration for connecting to an AI provider
 type ClientConfig struct {
-	BaseURL  string        // Base URL for the API endpoint (e.g., "http://localhost:11434/v1" for Ollama)
+	URL      string        // URL for the API endpoint (e.g., "http://localhost:11434/v1" for Ollama)
 	APIKey   string        // API key for providers that require authentication
 	Model    string        // Model to use
 	Timeout  time.Duration // Request timeout
@@ -33,8 +32,6 @@ type GenerationConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Model:       "devstral",
-		Host:        getEnvOrDefault("OLLAMA_HOST", "http://localhost:11434"),
 		Timeout:     5 * time.Minute,
 		Temperature: 0.7,
 		SystemPrompt: `You are an expert Go developer generating function implementations.
@@ -63,23 +60,10 @@ Requirements:
 	}
 }
 
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
 // DefaultClientConfig returns default client configuration
 func DefaultClientConfig() *ClientConfig {
-	baseURL := os.Getenv("MANTRA_OPENAI_BASE_URL")
-	if baseURL == "" {
-		// Default to Ollama endpoint
-		baseURL = "http://localhost:11434/v1"
-	}
+	// No defaults in the simplified version - config is required
 	return &ClientConfig{
-		BaseURL:  baseURL,
-		Model:    "devstral",
 		Timeout:  5 * time.Minute,
 	}
 }

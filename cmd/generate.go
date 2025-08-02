@@ -12,21 +12,14 @@ import (
 	"log/slog"
 
 	"github.com/rail44/mantra/internal/ai"
+	"github.com/rail44/mantra/internal/config"
 	"github.com/rail44/mantra/internal/detector"
 	"github.com/rail44/mantra/internal/generator"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/prompt"
-	"github.com/rail44/mantra/internal/tools/setup"
 )
 
-var (
-	noStream    bool
-	outputDir   string
-	packageName string
-	useTools    bool
-	provider    string // OpenRouter provider specification
-)
 
 var generateCmd = &cobra.Command{
 	Use:   "generate [package-dir]",
@@ -45,6 +38,28 @@ their implementations based on the natural language instructions provided.`,
 			pkgDir = args[0]
 		}
 
+		// Load configuration
+		cfg, err := config.Load(pkgDir)
+		if err != nil {
+			log.Error("failed to load configuration", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+
+		// Set up logging
+		logLevel := cfg.LogLevel
+		if logLevel == "" {
+			logLevel = "info"
+		}
+		level, err := log.ParseLevel(logLevel)
+		if err != nil {
+			log.Error("invalid log level", slog.String("level", logLevel))
+			os.Exit(1)
+		}
+		if err := log.SetLevel(level); err != nil {
+			log.Error("failed to set log level", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+
 		// Ensure absolute path
 		absPkgDir, err := filepath.Abs(pkgDir)
 		if err != nil {
@@ -53,7 +68,7 @@ their implementations based on the natural language instructions provided.`,
 		}
 
 		// Run generation for package
-		if err := runPackageGeneration(absPkgDir); err != nil {
+		if err := runPackageGeneration(absPkgDir, cfg); err != nil {
 			log.Error("generation failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
@@ -62,18 +77,12 @@ their implementations based on the natural language instructions provided.`,
 
 func init() {
 	rootCmd.AddCommand(generateCmd)
-
-	generateCmd.Flags().BoolVar(&noStream, "no-stream", false, "Disable streaming output")
-	generateCmd.Flags().StringVar(&outputDir, "output-dir", "./generated", "Directory for generated files")
-	generateCmd.Flags().StringVar(&packageName, "package-name", "generated", "Package name for generated files")
-	generateCmd.Flags().BoolVar(&useTools, "use-tools", false, "Enable tool usage for dynamic code exploration")
-	generateCmd.Flags().StringVar(&provider, "provider", "", "OpenRouter provider (e.g., 'Cerebras' or 'Cerebras,DeepInfra')")
 }
 
-func runPackageGeneration(pkgDir string) error {
+func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	// Detect all targets and their status
 	log.Info("detecting targets in package", slog.String("package", pkgDir))
-	statuses, err := detector.DetectPackageTargets(pkgDir, outputDir)
+	statuses, err := detector.DetectPackageTargets(pkgDir, cfg.Dest)
 	if err != nil {
 		return fmt.Errorf("failed to detect targets: %w", err)
 	}
@@ -115,30 +124,21 @@ func runPackageGeneration(pkgDir string) error {
 		return nil
 	}
 
-	// Initialize components
-	clientConfig := ai.DefaultClientConfig()
-	if GetBaseURL() != "" {
-		clientConfig.BaseURL = GetBaseURL()
+	// Initialize AI client configuration
+	clientConfig := &ai.ClientConfig{
+		URL:     cfg.URL,
+		APIKey:  cfg.APIKey,
+		Model:   cfg.Model,
+		Timeout: 5 * time.Minute,
 	}
-	clientConfig.APIKey = GetAPIKey()
-	clientConfig.Model = GetModel()
 	
-	// Parse provider specification
-	providerSpec := provider
-	if providerSpec == "" {
-		providerSpec = os.Getenv("MANTRA_PROVIDER")
-	}
-	if providerSpec != "" {
-		clientConfig.Provider = strings.Split(providerSpec, ",")
+	// Set OpenRouter providers if configured
+	if cfg.OpenRouter != nil && len(cfg.OpenRouter.Providers) > 0 {
+		clientConfig.Provider = cfg.OpenRouter.Providers
 	}
 	
 	// Generation config uses defaults
 	generationConfig := ai.DefaultGenerationConfig()
-	
-	// Use tool-optimized system prompt if tools are enabled
-	if useTools {
-		generationConfig.SystemPrompt = ai.ToolEnabledSystemPrompt()
-	}
 	
 	aiClient, err := ai.NewClient(clientConfig, generationConfig)
 	if err != nil {
@@ -151,7 +151,7 @@ func runPackageGeneration(pkgDir string) error {
 	// Log which provider we're using
 	log.Info("using AI provider", 
 		slog.String("provider", aiClient.GetProviderName()),
-		slog.String("model", GetModel()))
+		slog.String("model", cfg.Model))
 
 	// Check if model is available
 	ctx := context.Background()
@@ -162,36 +162,11 @@ func runPackageGeneration(pkgDir string) error {
 	}
 
 	promptBuilder := prompt.NewBuilder()
-	promptBuilder.SetUseTools(useTools)
-	
-	// Initialize tools if enabled
-	if useTools {
-		toolRegistry := setup.InitializeRegistry(pkgDir)
-		toolExecutor := setup.DefaultExecutor(pkgDir)
-		
-		// Convert our tools to AI tools format
-		availableTools := toolRegistry.ListAvailable()
-		aiTools := make([]ai.Tool, len(availableTools))
-		for i, tool := range availableTools {
-			aiTools[i] = ai.Tool{
-				Type: "function",
-				Function: ai.ToolFunction{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  tool.Parameters,
-				},
-			}
-		}
-		
-		// Set tools on AI client
-		aiClient.SetTools(aiTools, toolExecutor)
-		
-		log.Info("tools enabled", slog.Int("count", len(aiTools)))
-	}
+	// Note: tools are currently disabled in the simplified version
 	
 	gen := generator.New(&generator.Config{
-		OutputDir:     outputDir,
-		PackageName:   packageName,
+		Dest:          cfg.Dest,
+		PackageName:   cfg.GetPackageName(),
 		SourcePackage: filepath.Base(pkgDir),
 	})
 
@@ -235,49 +210,40 @@ func runPackageGeneration(pkgDir string) error {
 			// Build prompt
 			p := promptBuilder.BuildForTarget(target, string(content))
 
-			// Generate with AI
+			// Generate with AI (always streaming in simplified version)
+			log.Info("generating implementation", slog.String("function", target.Name))
+			outputCh, errorCh := aiClient.GenerateStream(ctx, p)
+			var responseBuilder strings.Builder
+			charCount := 0
+
 			var implementation string
-			if useTools {
-				// Use tool-enabled generation
-				implementation, err = aiClient.GenerateWithTools(ctx, p)
-			} else if noStream {
-				implementation, err = aiClient.Generate(ctx, p)
-			} else {
-				// Streaming mode
-				log.Info("generating implementation (streaming)", slog.String("function", target.Name))
-				outputCh, errorCh := aiClient.GenerateStream(ctx, p)
-				var responseBuilder strings.Builder
-				charCount := 0
+			var genErr error
+			for {
+				select {
+				case chunk, ok := <-outputCh:
+					if !ok {
+						implementation = responseBuilder.String()
+						goto streamDone
+					}
+					responseBuilder.WriteString(chunk)
+					charCount += len(chunk)
+					log.Trace("streaming progress", 
+						slog.Int("chars_received", charCount),
+						slog.String("function", target.Name))
 
-				for {
-					select {
-					case chunk, ok := <-outputCh:
-						if !ok {
-							implementation = responseBuilder.String()
-							goto streamDone
-						}
-						responseBuilder.WriteString(chunk)
-						charCount += len(chunk)
-						log.Trace("streaming progress", 
-							slog.Int("chars_received", charCount),
-							slog.String("function", target.Name))
-
-					case err := <-errorCh:
-						if err != nil {
-							log.Error("failed to generate implementation",
-								slog.String("function", target.Name),
-								slog.String("error", err.Error()))
-							continue
-						}
+				case err := <-errorCh:
+					if err != nil {
+						genErr = err
+						goto streamDone
 					}
 				}
-			streamDone:
 			}
+			streamDone:
 
-			if err != nil {
+			if genErr != nil {
 				log.Error("failed to generate implementation",
 					slog.String("function", target.Name),
-					slog.String("error", err.Error()))
+					slog.String("error", genErr.Error()))
 				continue
 			}
 
@@ -295,7 +261,7 @@ func runPackageGeneration(pkgDir string) error {
 					slog.String("error", err.Error()))
 			} else {
 				log.Info("generated file",
-					slog.String("output", filepath.Join(outputDir, filepath.Base(filePath))))
+					slog.String("output", filepath.Join(cfg.Dest, filepath.Base(filePath))))
 			}
 		}
 	}

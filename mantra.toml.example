@@ -1,0 +1,29 @@
+# Mantra Configuration Example
+# This file should be placed in your project root or package directory
+
+# Model to use for code generation (required)
+model = "devstral"
+
+# API endpoint URL (required)
+# Examples:
+# - Ollama: "http://localhost:11434/v1"
+# - OpenAI: "https://api.openai.com/v1"
+# - OpenRouter: "https://openrouter.ai/api/v1"
+url = "http://localhost:11434/v1"
+
+# Output directory for generated files (required)
+# Package name will be derived from the directory name
+dest = "./generated"
+
+# API key for authentication (optional, depends on provider)
+# Supports environment variable expansion with ${VAR_NAME} syntax
+# api_key = "${OPENAI_API_KEY}"
+
+# Log level: error, warn, info, debug, trace (optional)
+# Default: info
+log_level = "info"
+
+# OpenRouter-specific configuration (optional)
+# Only needed when using OpenRouter
+# [openrouter]
+# providers = ["Cerebras"]  # Route to specific providers

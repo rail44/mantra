@@ -19,7 +19,7 @@ import (
 
 // Config holds configuration for code generation
 type Config struct {
-	OutputDir     string // Directory where generated files will be saved
+	Dest          string // Directory where generated files will be saved
 	PackageName   string // Package name for generated files
 	SourcePackage string // Original package name for import reference
 }
@@ -35,7 +35,7 @@ func New(config *Config) *Generator {
 // GenerateFile generates a complete file with implementations for all targets
 func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[string]string) error {
 	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(g.config.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(g.config.Dest, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -55,7 +55,7 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 
 	// Determine output file path
 	sourceFileName := filepath.Base(fileInfo.FilePath)
-	outputFile := filepath.Join(g.config.OutputDir, sourceFileName)
+	outputFile := filepath.Join(g.config.Dest, sourceFileName)
 
 	// Write the generated file
 	if err := os.WriteFile(outputFile, formatted, 0644); err != nil {

@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"fmt"
-	"os"
 )
 
 type Client struct {
@@ -29,18 +28,15 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 
 	// Unified OpenAI-compatible API for all providers
 	apiKey := clientConfig.APIKey
-	if apiKey == "" {
-		apiKey = os.Getenv("MANTRA_OPENAI_API_KEY")
-	}
 	
-	baseURL := clientConfig.BaseURL
-	if baseURL == "" {
-		return nil, fmt.Errorf("base URL is required")
+	url := clientConfig.URL
+	if url == "" {
+		return nil, fmt.Errorf("URL is required")
 	}
 
 	provider, err = NewOpenAIClient(
 		apiKey,
-		baseURL,
+		url,
 		clientConfig.Model,
 		generationConfig.Temperature,
 		generationConfig.SystemPrompt,

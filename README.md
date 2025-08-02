@@ -92,79 +92,107 @@ mantra generate main.go
 
 ## Configuration
 
-Configuration is handled via command-line flags:
+Mantra uses a TOML configuration file (`mantra.toml`) that should be placed in your project root or package directory. The tool searches for the configuration file starting from the target directory and moving up the directory tree.
 
-```bash
-# Use different model
-mantra generate --model qwen2.5-coder main.go
+### Basic Configuration
 
-# Use OpenAI
-mantra generate --base-url https://api.openai.com/v1 --api-key YOUR_KEY --model gpt-4 main.go
+Create a `mantra.toml` file:
 
-# Use deepinfra
-mantra generate --base-url https://api.deepinfra.com/v1/openai --api-key YOUR_KEY --model mistralai/Devstral-Small-2507 main.go
+```toml
+# Model to use for code generation (required)
+model = "devstral"
 
-# Use custom Ollama instance
-mantra generate --base-url http://192.168.1.100:11434/v1 main.go
+# API endpoint URL (required)
+url = "http://localhost:11434/v1"
 
-# Enable tool usage for better code understanding
-mantra generate --use-tools main.go
+# Output directory for generated files (required)
+# Package name will be derived from the directory name
+dest = "./generated"
+
+# API key for authentication (optional)
+# Supports environment variable expansion
+api_key = "${OPENAI_API_KEY}"
+
+# Log level: error, warn, info, debug, trace
+log_level = "info"
 ```
 
-Defaults:
-- Model: `devstral`
-- Base URL: `http://localhost:11434/v1` (Ollama)
+### Provider Examples
 
-### Environment Variables
+**Ollama (Local):**
+```toml
+model = "devstral"
+url = "http://localhost:11434/v1"
+dest = "./generated"
+```
 
-You can also configure Mantra using environment variables:
+**OpenAI:**
+```toml
+model = "gpt-4"
+url = "https://api.openai.com/v1"
+api_key = "${OPENAI_API_KEY}"
+dest = "./generated"
+```
 
-- `MANTRA_OPENAI_API_KEY`: API key for OpenAI-compatible providers
-- `MANTRA_OPENAI_BASE_URL`: Base URL for the API endpoint
+**deepinfra:**
+```toml
+model = "mistralai/Devstral-Small-2507"
+url = "https://api.deepinfra.com/v1/openai"
+api_key = "${DEEPINFRA_API_KEY}"
+dest = "./generated"
+```
+
+**OpenRouter:**
+```toml
+model = "anthropic/claude-3-sonnet"
+url = "https://openrouter.ai/api/v1"
+api_key = "${OPENROUTER_API_KEY}"
+dest = "./generated"
+
+[openrouter]
+providers = ["Cerebras"]  # Route to specific providers
+```
+
+### Environment Variable Expansion
+
+The configuration supports environment variable expansion using `${VAR_NAME}` syntax. This is particularly useful for API keys:
+
+```toml
+api_key = "${OPENAI_API_KEY}"
+```
+
+Set the environment variable before running Mantra:
+```bash
+export OPENAI_API_KEY="your-api-key"
+mantra generate .
+```
 
 ## Commands
 
 ### Generate
 ```bash
-mantra generate <file> [flags]
+mantra generate [package-dir]
 ```
 
-Generates implementations for all functions with `// mantra:` comments.
+Generates implementations for all functions with `// mantra:` comments in the specified package directory (defaults to current directory).
 
-**Flags:**
-- `--model string`: AI model to use (default: `devstral`)
-- `--base-url string`: Base URL for OpenAI-compatible API (defaults to Ollama URL)
-- `--api-key string`: API key for providers that require authentication
-- `--use-tools`: Enable tool usage for dynamic code exploration
-- `--no-stream`: Disable streaming output (faster for scripting)
-- `--log-level string`: Log level (error|warn|info|debug|trace) (default: `info`)
-- `--output-dir string`: Directory for generated files (default: `./generated`)
-- `--package-name string`: Package name for generated files (default: `generated`)
+The command:
+1. Searches for `mantra.toml` configuration file starting from the package directory and moving up
+2. Detects all functions marked with `// mantra:` comments
+3. Checks which implementations are new or outdated
+4. Generates code for pending targets
+5. Writes generated files to the configured output directory
 
-### Output Options
-
+**Examples:**
 ```bash
-# Default: generate to separate files (preserves original source)
-mantra generate main.go
+# Generate for current directory
+mantra generate
 
-# Generate to custom directory and package
-mantra generate main.go --output-dir ./impl --package-name impl
-```
+# Generate for specific package
+mantra generate ./pkg/user
 
-### Performance Options
-
-```bash
-# Default: streaming with progress indication
-mantra generate main.go
-
-# Non-streaming for scripting/CI
-mantra generate main.go --no-stream
-
-# Debug with detailed logs
-mantra generate main.go --log-level debug
-
-# Trace level for maximum verbosity
-mantra generate main.go --log-level trace
+# Generate with custom config location
+cd myproject && mantra generate ./internal/service
 ```
 
 ## Writing Effective Instructions
@@ -208,9 +236,9 @@ Mantra generates clean, idiomatic Go code with:
 - Best practices for the detected use case
 - Comprehensive implementations based on your instructions
 
-## Tool System
+## Tool System (Currently Disabled)
 
-When enabled with `--use-tools`, Mantra provides the AI with dynamic code inspection capabilities:
+Note: Tool support is temporarily disabled in the simplified version. The AI generates code based on the provided context without dynamic inspection capabilities.
 
 ### Available Tools
 
@@ -268,7 +296,7 @@ This shows:
 ## Examples
 
 See the `examples/` directory for more usage examples:
-- `user_service.go`: Database operations with Spanner
+- `user_service.go`: Database operations example (using Spanner)
 - `calculator.go`: General computation functions
 
 ## Troubleshooting

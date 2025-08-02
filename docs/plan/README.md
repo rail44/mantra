@@ -5,7 +5,7 @@ This directory contains design documents and plans for future features of Mantra
 ## Documents
 
 - [Learning System Design](./learning-system.md) - Seamless model improvement through daily usage
-- [Architecture Evolution](./architecture-evolution.md) - From Spanner-specific to generic tool (TBD)
+- [Architecture Evolution](./architecture-evolution.md) - Towards pluggable domain knowledge modules
 
 ## Purpose
 
