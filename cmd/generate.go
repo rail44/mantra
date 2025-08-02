@@ -80,11 +80,40 @@ func init() {
 }
 
 func runPackageGeneration(pkgDir string, cfg *config.Config) error {
-	// Detect all targets and their status
-	log.Info("detecting targets in package", slog.String("package", pkgDir))
-	statuses, err := detector.DetectPackageTargets(pkgDir, cfg.Dest)
+	// Detect targets and check if generation is needed
+	targetsToGenerate, err := detectAndSummarizeTargets(pkgDir, cfg.Dest)
 	if err != nil {
-		return fmt.Errorf("failed to detect targets: %w", err)
+		return err
+	}
+	if len(targetsToGenerate) == 0 {
+		log.Info("all targets are up-to-date, nothing to generate")
+		return nil
+	}
+
+	// Setup AI client and tools
+	aiClient, promptBuilder, gen, err := setupAIClient(cfg, pkgDir)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+
+	// Process targets grouped by file
+	err = processTargetsByFile(ctx, targetsToGenerate, aiClient, promptBuilder, gen, cfg.Dest)
+	if err != nil {
+		return err
+	}
+
+	log.Info("package generation complete")
+	return nil
+}
+
+// detectAndSummarizeTargets detects targets and provides logging summary
+func detectAndSummarizeTargets(pkgDir, destDir string) ([]*parser.Target, error) {
+	log.Info("detecting targets in package", slog.String("package", pkgDir))
+	statuses, err := detector.DetectPackageTargets(pkgDir, destDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect targets: %w", err)
 	}
 
 	// Summary of detection
@@ -118,12 +147,11 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 		slog.Int("total", len(statuses)))
 
 	// Filter targets that need generation
-	targetsToGenerate := detector.FilterTargetsToGenerate(statuses)
-	if len(targetsToGenerate) == 0 {
-		log.Info("all targets are up-to-date, nothing to generate")
-		return nil
-	}
+	return detector.FilterTargetsToGenerate(statuses), nil
+}
 
+// setupAIClient initializes AI client, tools, and related components
+func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Builder, *generator.Generator, error) {
 	// Initialize AI client configuration
 	clientConfig := &ai.ClientConfig{
 		URL:     cfg.URL,
@@ -142,7 +170,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 
 	aiClient, err := ai.NewClient(clientConfig, generationConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create AI client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	// Enable debug timing on AI client if requested
@@ -152,8 +180,6 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	log.Info("using AI provider",
 		slog.String("provider", aiClient.GetProviderName()),
 		slog.String("model", cfg.Model))
-
-	ctx := context.Background()
 
 	promptBuilder := prompt.NewBuilder()
 	promptBuilder.SetUseTools(true) // Enable tools
@@ -171,6 +197,11 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 		SourcePackage: filepath.Base(pkgDir),
 	})
 
+	return aiClient, promptBuilder, gen, nil
+}
+
+// processTargetsByFile groups targets by file and processes each file
+func processTargetsByFile(ctx context.Context, targetsToGenerate []*parser.Target, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
 	// Group targets by file
 	targetsByFile := make(map[string][]*parser.Target)
 	for _, target := range targetsToGenerate {
@@ -201,49 +232,10 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 			continue
 		}
 
-		// Generate implementations
-		implementations := make(map[string]string)
-		for _, target := range targets {
-			targetStart := time.Now()
-			log.Info("starting generation",
-				slog.String("function", target.Name))
-
-			// Build prompt
-			p, err := promptBuilder.BuildForTarget(target, string(content))
-			if err != nil {
-				log.Error("failed to build prompt",
-					slog.String("function", target.Name),
-					slog.String("error", err.Error()))
-				return err
-			}
-
-			// Generate with AI (try tools first, fallback to streaming)
-
-			var implementation string
-			var genErr error
-
-			// Generate implementation
-			log.Debug("attempting generation", slog.String("function", target.Name))
-			implementation, genErr = aiClient.Generate(ctx, p)
-			if genErr != nil {
-				log.Debug("generation error",
-					slog.String("function", target.Name),
-					slog.String("error", genErr.Error()))
-			} else {
-				log.Debug("generation succeeded", slog.String("function", target.Name))
-			}
-
-			if genErr != nil {
-				log.Error("failed to generate implementation",
-					slog.String("function", target.Name),
-					slog.String("error", genErr.Error()))
-				continue
-			}
-
-			implementations[target.Name] = implementation
-			log.Info("generated implementation",
-				slog.String("function", target.Name),
-				slog.Duration("duration", time.Since(targetStart)))
+		// Generate implementations for all targets in this file
+		implementations, err := generateImplementationsForTargets(ctx, targets, string(content), aiClient, promptBuilder)
+		if err != nil {
+			return fmt.Errorf("failed to generate implementations for file %s: %w", filePath, err)
 		}
 
 		// Generate file with all implementations
@@ -254,11 +246,55 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 					slog.String("error", err.Error()))
 			} else {
 				log.Info("generated file",
-					slog.String("output", filepath.Join(cfg.Dest, filepath.Base(filePath))))
+					slog.String("output", filepath.Join(destDir, filepath.Base(filePath))))
 			}
 		}
 	}
 
-	log.Info("package generation complete")
 	return nil
+}
+
+// generateImplementationsForTargets generates implementations for a list of targets from the same file
+func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client, promptBuilder *prompt.Builder) (map[string]string, error) {
+	implementations := make(map[string]string)
+
+	for _, target := range targets {
+		targetStart := time.Now()
+		log.Info("starting generation",
+			slog.String("function", target.Name))
+
+		// Build prompt
+		p, err := promptBuilder.BuildForTarget(target, fileContent)
+		if err != nil {
+			log.Error("failed to build prompt",
+				slog.String("function", target.Name),
+				slog.String("error", err.Error()))
+			return nil, err
+		}
+
+		// Generate implementation
+		log.Debug("attempting generation", slog.String("function", target.Name))
+		implementation, genErr := aiClient.Generate(ctx, p)
+		if genErr != nil {
+			log.Debug("generation error",
+				slog.String("function", target.Name),
+				slog.String("error", genErr.Error()))
+		} else {
+			log.Debug("generation succeeded", slog.String("function", target.Name))
+		}
+
+		if genErr != nil {
+			log.Error("failed to generate implementation",
+				slog.String("function", target.Name),
+				slog.String("error", genErr.Error()))
+			continue
+		}
+
+		implementations[target.Name] = implementation
+		log.Info("generated implementation",
+			slog.String("function", target.Name),
+			slog.Duration("duration", time.Since(targetStart)))
+	}
+
+	return implementations, nil
 }
