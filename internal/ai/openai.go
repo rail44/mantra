@@ -48,7 +48,7 @@ type ProviderSpec struct {
 // OpenAIMessage represents a message in the chat
 type OpenAIMessage struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
@@ -240,6 +240,9 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 	
+	// Debug: Log full request JSON for troubleshooting
+	log.Trace("request JSON", "json", string(jsonData))
+	
 	// Debug: Log request with provider info
 	if c.providerSpec != nil {
 		log.Debug("sending request with provider spec", "provider_spec", fmt.Sprintf("%+v", c.providerSpec))
@@ -305,6 +308,7 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
+	var providerLogged bool
 	for scanner.Scan() {
 		line := scanner.Text()
 		
@@ -322,9 +326,10 @@ func (c *OpenAIClient) makeStreamRequest(ctx context.Context, req OpenAIRequest,
 			continue // Skip malformed chunks
 		}
 		
-		// Log provider info if available (OpenRouter)
-		if chunk.Provider != "" {
+		// Log provider info only once (OpenRouter)
+		if chunk.Provider != "" && !providerLogged {
 			log.Debug("OpenRouter provider", "provider", chunk.Provider)
+			providerLogged = true
 		}
 
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
@@ -374,6 +379,13 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		if round > 0 {
 			log.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
 		}
+		
+		// Debug: Log message sequence before API call
+		log.Debug("message sequence before API call", "round", round+1)
+		for i, msg := range messages {
+			log.Debug("message", "index", i, "role", msg.Role, "has_tool_calls", len(msg.ToolCalls) > 0, "tool_call_id", msg.ToolCallID)
+		}
+		
 		// Build request with tools
 		req := OpenAIRequest{
 			Model:             c.model,
@@ -407,7 +419,14 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 			}
 		}
 		
-		messages = append(messages, responseMsg)
+		
+		// Create clean message with only required fields to avoid API compatibility issues
+		cleanMsg := OpenAIMessage{
+			Role:      responseMsg.Role,
+			Content:   responseMsg.Content,
+			ToolCalls: responseMsg.ToolCalls,
+		}
+		messages = append(messages, cleanMsg)
 
 		// Debug: Log response
 		log.Debug("model response", 
@@ -445,6 +464,12 @@ func (c *OpenAIClient) GenerateWithTools(ctx context.Context, prompt string, too
 		
 		// Add all tool responses to messages
 		messages = append(messages, toolResults...)
+		
+		// Debug: Log message sequence for Mistral debugging
+		log.Debug("message sequence after tool execution")
+		for i, msg := range messages {
+			log.Debug("message", "index", i, "role", msg.Role, "has_tool_calls", len(msg.ToolCalls) > 0, "tool_call_id", msg.ToolCallID)
+		}
 	}
 
 	return "", fmt.Errorf("exceeded maximum rounds of tool calls")

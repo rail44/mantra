@@ -18,6 +18,8 @@ import (
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/prompt"
+	"github.com/rail44/mantra/internal/tools"
+	"github.com/rail44/mantra/internal/tools/setup"
 )
 
 
@@ -127,7 +129,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	// Initialize AI client configuration
 	clientConfig := &ai.ClientConfig{
 		URL:     cfg.URL,
-		APIKey:  cfg.APIKey,
+		APIKey:  cfg.GetAPIKey(),
 		Model:   cfg.Model,
 		Timeout: 5 * time.Minute,
 	}
@@ -162,7 +164,14 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	}
 
 	promptBuilder := prompt.NewBuilder()
-	// Note: tools are currently disabled in the simplified version
+	promptBuilder.SetUseTools(true) // Enable tools
+	
+	// Setup tools for AI
+	toolRegistry := setup.InitializeRegistry(pkgDir)
+	toolExecutor := tools.NewExecutor(toolRegistry)
+	
+	// Set tools on AI client
+	aiClient.SetTools(toolRegistry.ListAvailable(), toolExecutor)
 	
 	gen := generator.New(&generator.Config{
 		Dest:          cfg.Dest,
@@ -204,41 +213,62 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 		implementations := make(map[string]string)
 		for _, target := range targets {
 			targetStart := time.Now()
-			log.Info("generating implementation",
+			log.Info("starting generation",
 				slog.String("function", target.Name))
 
 			// Build prompt
-			p := promptBuilder.BuildForTarget(target, string(content))
+			p, err := promptBuilder.BuildForTarget(target, string(content))
+			if err != nil {
+				log.Error("failed to build prompt", 
+					slog.String("function", target.Name),
+					slog.String("error", err.Error()))
+				return err
+			}
 
-			// Generate with AI (always streaming in simplified version)
-			log.Info("generating implementation", slog.String("function", target.Name))
-			outputCh, errorCh := aiClient.GenerateStream(ctx, p)
-			var responseBuilder strings.Builder
-			charCount := 0
-
+			// Generate with AI (try tools first, fallback to streaming)
+			
 			var implementation string
 			var genErr error
-			for {
-				select {
-				case chunk, ok := <-outputCh:
-					if !ok {
-						implementation = responseBuilder.String()
-						goto streamDone
-					}
-					responseBuilder.WriteString(chunk)
-					charCount += len(chunk)
-					log.Trace("streaming progress", 
-						slog.Int("chars_received", charCount),
-						slog.String("function", target.Name))
+			
+			// Try GenerateWithTools first
+			log.Debug("attempting GenerateWithTools", slog.String("function", target.Name))
+			implementation, genErr = aiClient.GenerateWithTools(ctx, p)
+			if genErr != nil {
+				log.Debug("GenerateWithTools error", 
+					slog.String("function", target.Name),
+					slog.String("error", genErr.Error()))
+				if genErr.Error() == "provider does not support tools" {
+				// Fallback to streaming for providers that don't support tools
+				log.Debug("provider does not support tools, falling back to streaming")
+				outputCh, errorCh := aiClient.GenerateStream(ctx, p)
+				var responseBuilder strings.Builder
+				charCount := 0
 
-				case err := <-errorCh:
-					if err != nil {
-						genErr = err
-						goto streamDone
+				for {
+					select {
+					case chunk, ok := <-outputCh:
+						if !ok {
+							implementation = responseBuilder.String()
+							goto streamDone
+						}
+						responseBuilder.WriteString(chunk)
+						charCount += len(chunk)
+						log.Trace("streaming progress", 
+							slog.Int("chars_received", charCount),
+							slog.String("function", target.Name))
+
+					case err := <-errorCh:
+						if err != nil {
+							genErr = err
+							goto streamDone
+						}
 					}
 				}
+				streamDone:
+				}
+			} else {
+				log.Debug("GenerateWithTools succeeded", slog.String("function", target.Name))
 			}
-			streamDone:
 
 			if genErr != nil {
 				log.Error("failed to generate implementation",

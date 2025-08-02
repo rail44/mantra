@@ -33,7 +33,7 @@ type ToolFunction struct {
 // ChatMessage represents a message in the conversation (extended for tools)
 type ChatMessage struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
@@ -66,3 +66,4 @@ func (ToolChoiceNone) MarshalJSON() ([]byte, error) {
 func (ToolChoiceRequired) MarshalJSON() ([]byte, error) {
 	return json.Marshal("required")
 }
+

@@ -44,13 +44,15 @@ func Load(targetPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Expand environment variables
-	expandedData := expandEnvVars(string(configData))
-
 	// Parse TOML
 	var cfg Config
-	if _, err := toml.Decode(expandedData, &cfg); err != nil {
+	if _, err := toml.Decode(string(configData), &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Validate and warn about hardcoded API keys (before expansion)
+	if cfg.APIKey != "" && !strings.Contains(cfg.APIKey, "${") && strings.HasPrefix(cfg.APIKey, "sk-") {
+		fmt.Fprintf(os.Stderr, "Warning: API key appears to be hardcoded in mantra.toml. Consider using environment variables: api_key = \"${OPENROUTER_API_KEY}\"\n")
 	}
 
 	// Validate required fields
@@ -134,19 +136,19 @@ func (c *Config) validate() error {
 
 	// Check for unexpanded environment variables
 	if strings.Contains(c.APIKey, "${") {
-		// Extract variable name for better error message
-		re := regexp.MustCompile(`\$\{([^}]+)\}`)
-		matches := re.FindStringSubmatch(c.APIKey)
-		if len(matches) > 1 {
-			return fmt.Errorf("environment variable %s is not set (required by api_key in mantra.toml)", matches[1])
+		// Try to expand and check if the environment variable exists
+		expanded := expandEnvVars(c.APIKey)
+		if strings.Contains(expanded, "${") {
+			// Still contains ${}, so the env var is not set
+			re := regexp.MustCompile(`\$\{([^}]+)\}`)
+			matches := re.FindStringSubmatch(c.APIKey)
+			if len(matches) > 1 {
+				return fmt.Errorf("environment variable %s is not set (required by api_key in mantra.toml)", matches[1])
+			}
 		}
 	}
 
-	// Warn if API key is directly in config
-	if c.APIKey != "" && !strings.Contains(c.APIKey, "${") && strings.HasPrefix(c.APIKey, "sk-") {
-		// This is a warning, not an error
-		fmt.Fprintf(os.Stderr, "Warning: API key appears to be hardcoded in mantra.toml. Consider using environment variables: api_key = \"${OPENAI_API_KEY}\"\n")
-	}
+	// API key warning is already handled in LoadConfig
 
 	if len(errors) > 0 {
 		return fmt.Errorf("invalid configuration: %s", strings.Join(errors, ", "))
@@ -166,4 +168,14 @@ func normalizePath(path, configDir string) string {
 // GetPackageName returns the package name based on the destination directory
 func (c *Config) GetPackageName() string {
 	return filepath.Base(c.Dest)
+}
+
+// GetAPIKey returns the API key with environment variables expanded
+func (c *Config) GetAPIKey() string {
+	if c.APIKey == "" {
+		return ""
+	}
+	
+	// Expand environment variables
+	return expandEnvVars(c.APIKey)
 }

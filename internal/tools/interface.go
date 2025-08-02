@@ -20,9 +20,3 @@ type Tool interface {
 	Execute(ctx context.Context, params map[string]interface{}) (interface{}, error)
 }
 
-// ToolDefinition represents the metadata about a tool
-type ToolDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-}

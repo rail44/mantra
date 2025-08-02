@@ -28,22 +28,16 @@ func (b *Builder) SetUseTools(useTools bool) {
 }
 
 // BuildForTarget creates a prompt for a specific generation target
-func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) string {
+func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) (string, error) {
 	// Use project-wide context extraction by default
 	projectCtx, err := context.ExtractProjectContext(target.FilePath, target)
 	if err != nil {
-		log.Warn("failed to extract project context, falling back to file-only context", 
-			slog.String("error", err.Error()))
-		// Fallback to file-only context extraction
-		ctx, err := context.ExtractRelevantContext(fileContent, target)
-		if err != nil {
-			// Fallback to basic prompt if context extraction fails
-			return b.buildBasicPrompt(target)
-		}
-		return b.buildPromptWithContext(ctx, target)
+		log.Error("package has compilation errors", slog.String("error", err.Error()))
+		log.Error("fix compilation errors before running generation")
+		return "", fmt.Errorf("package compilation failed: %w", err)
 	}
 
-	return b.buildPromptWithContext(&projectCtx.RelevantContext, target)
+	return b.buildPromptWithContext(&projectCtx.RelevantContext, target), nil
 }
 
 // buildPromptWithContext builds a prompt using the extracted context
