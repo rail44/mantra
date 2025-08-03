@@ -73,15 +73,12 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	fullPrompt := prompt.String()
 
 	// Log the generated prompt at trace level for debugging
-	log.Trace("generated prompt",
-		slog.String("function", target.Name),
-		slog.Int("length", len(fullPrompt)),
-		slog.Int("types_count", len(ctx.Types)),
-		slog.Int("imports_count", len(ctx.Imports)))
+	log.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d imports",
+		target.Name, len(fullPrompt), len(ctx.Types), len(ctx.Imports)))
 
 	// Log imports separately for debugging
 	if len(ctx.Imports) > 0 {
-		log.Trace("context includes imports", slog.Any("imports", ctx.Imports))
+		log.Trace(fmt.Sprintf("         imports: %v", ctx.Imports))
 	}
 
 	return fullPrompt

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -129,9 +130,26 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	return nil
 }
 
+// formatPath shortens a path for display by showing relative path from current directory
+func formatPath(path string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return filepath.Base(path)
+	}
+	relPath, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return filepath.Base(path)
+	}
+	// If relative path is longer than absolute, just use basename
+	if len(relPath) > len(path) {
+		return filepath.Base(path)
+	}
+	return relPath
+}
+
 // detectAndSummarizeTargets detects targets and provides logging summary
 func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectionResult, error) {
-	log.Info("detecting targets in package", slog.String("package", pkgDir))
+	log.Info("detecting targets in package", slog.String("package", formatPath(pkgDir)))
 	results, err := detector.DetectPackageTargets(pkgDir, destDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect targets: %w", err)
@@ -142,8 +160,7 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectio
 	for _, result := range results {
 		if len(result.Statuses) == 0 {
 			filesWithoutTargets++
-			log.Debug("file without mantra targets",
-				slog.String("file", filepath.Base(result.FileInfo.FilePath)))
+			log.Debug(fmt.Sprintf("[FILE] No targets: %s", filepath.Base(result.FileInfo.FilePath)))
 			continue
 		}
 
@@ -163,19 +180,32 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectio
 					slog.String("new_checksum", status.CurrentChecksum))
 			case detector.StatusCurrent:
 				current++
-				log.Debug("up-to-date target",
-					slog.String("function", status.Target.Name),
-					slog.String("file", filepath.Base(status.Target.FilePath)))
+				log.Debug(fmt.Sprintf("[SKIP] Up-to-date: %s.%s", filepath.Base(status.Target.FilePath), status.Target.Name))
 			}
 		}
 	}
 
-	log.Info("detection summary",
-		slog.Int("ungenerated", ungenerated),
-		slog.Int("outdated", outdated),
-		slog.Int("current", current),
-		slog.Int("files_without_targets", filesWithoutTargets),
-		slog.Int("total_files", len(results)))
+	// Build summary message
+	var summaryParts []string
+	if ungenerated > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d new", ungenerated))
+	}
+	if outdated > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d outdated", outdated))
+	}
+	if current > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d current", current))
+	}
+	if filesWithoutTargets > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d files without targets", filesWithoutTargets))
+	}
+
+	summary := fmt.Sprintf("Found: %s", strings.Join(summaryParts, ", "))
+	if ungenerated == 0 && outdated == 0 && filesWithoutTargets == 0 {
+		summary = "All targets up-to-date"
+	}
+
+	log.Info(summary)
 
 	// Return all results (including files without targets)
 	return results, nil
@@ -240,17 +270,13 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 
 		// Handle files without mantra targets
 		if len(result.Statuses) == 0 {
-			log.Info("copying file without mantra targets",
-				slog.String("file", filepath.Base(filePath)))
-
 			// Simply copy the file with package name change
 			if err := gen.GenerateFile(fileInfo, make(map[string]string)); err != nil {
 				log.Error("failed to copy file without mantra targets",
 					slog.String("file", filePath),
 					slog.String("error", err.Error()))
 			} else {
-				log.Info("copied file",
-					slog.String("output", filepath.Join(destDir, filepath.Base(filePath))))
+				log.Info(fmt.Sprintf("Copied: %s", filepath.Base(filePath)))
 			}
 			continue
 		}
@@ -318,8 +344,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 					slog.String("file", filePath),
 					slog.String("error", err.Error()))
 			} else {
-				log.Info("generated file",
-					slog.String("output", filepath.Join(destDir, filepath.Base(filePath))))
+				log.Info(fmt.Sprintf("Generated: %s", filepath.Base(filePath)))
 			}
 		}
 	}
@@ -331,10 +356,9 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client, promptBuilder *prompt.Builder) (map[string]string, error) {
 	implementations := make(map[string]string)
 
-	for _, target := range targets {
+	for i, target := range targets {
 		targetStart := time.Now()
-		log.Info("starting generation",
-			slog.String("function", target.Name))
+		log.Info(fmt.Sprintf("[%d/%d] Generating %s...", i+1, len(targets), target.Name))
 
 		// Build prompt
 		p, err := promptBuilder.BuildForTarget(target, fileContent)
@@ -346,27 +370,15 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		}
 
 		// Generate implementation
-		log.Debug("attempting generation", slog.String("function", target.Name))
 		implementation, genErr := aiClient.Generate(ctx, p)
-		if genErr != nil {
-			log.Debug("generation error",
-				slog.String("function", target.Name),
-				slog.String("error", genErr.Error()))
-		} else {
-			log.Debug("generation succeeded", slog.String("function", target.Name))
-		}
 
 		if genErr != nil {
-			log.Error("failed to generate implementation",
-				slog.String("function", target.Name),
-				slog.String("error", genErr.Error()))
+			log.Error(fmt.Sprintf("[%d/%d] Failed: %s - %s", i+1, len(targets), target.Name, genErr.Error()))
 			continue
 		}
 
 		implementations[target.Name] = implementation
-		log.Info("generated implementation",
-			slog.String("function", target.Name),
-			slog.Duration("duration", time.Since(targetStart)))
+		log.Info(fmt.Sprintf("[%d/%d] Generated: %s (%s)", i+1, len(targets), target.Name, time.Since(targetStart).Round(time.Millisecond)))
 	}
 
 	return implementations, nil

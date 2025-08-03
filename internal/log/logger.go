@@ -126,3 +126,8 @@ func Trace(msg string, args ...any) {
 func IsDebugEnabled() bool {
 	return currentLevel <= slog.LevelDebug
 }
+
+// IsTraceEnabled returns true if trace logging is enabled
+func IsTraceEnabled() bool {
+	return currentLevel <= slog.LevelDebug-4
+}

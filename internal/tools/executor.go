@@ -39,8 +39,7 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 	defer cancel()
 
 	// Log the execution
-	log.Debug("executing tool",
-		slog.String("tool", toolName),
+	log.Debug(fmt.Sprintf("[TOOL] Execute: %s", toolName),
 		slog.Any("params", params))
 
 	// Execute the tool
@@ -57,9 +56,7 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		return nil, err
 	}
 
-	log.Debug("tool execution completed",
-		slog.String("tool", toolName),
-		slog.Duration("duration", duration))
+	log.Debug(fmt.Sprintf("[TOOL] Complete: %s (%s)", toolName, duration.Round(time.Millisecond)))
 
 	return result, nil
 }

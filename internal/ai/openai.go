@@ -126,7 +126,7 @@ func (c *OpenAIClient) Name() string {
 
 // CheckModel verifies if the specified model is available
 func (c *OpenAIClient) CheckModel(ctx context.Context) error {
-	checkStart := time.Now()
+	// Model validation is fast, no need to track timing
 
 	// For OpenAI APIs, we'll do a simple completion request
 	// with minimal tokens to verify the model is accessible
@@ -143,7 +143,7 @@ func (c *OpenAIClient) CheckModel(ctx context.Context) error {
 	_, err := c.makeRequest(ctx, req)
 
 	if c.debugTiming {
-		log.Debug("AI timing - model check", "duration", time.Since(checkStart))
+		// Model check timing is included in overall metrics
 	}
 
 	if err != nil {
@@ -161,11 +161,8 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	}
 
 	// Log request summary instead of full JSON
-	log.Trace("API request",
-		"model", req.Model,
-		"messages", len(req.Messages),
-		"tools", len(req.Tools),
-		"temperature", req.Temperature)
+	log.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
+		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
 	// Debug: Log request with provider info
 	if c.providerSpec != nil {
@@ -233,7 +230,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		}
 
 		// Log concise message stats
-		log.Trace("message stats", "round", round+1, "total_messages", len(messages))
+		log.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
 
 		// Build request with tools
 		req := OpenAIRequest{
@@ -277,10 +274,8 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		messages = append(messages, cleanMsg)
 
 		// Debug: Log response
-		log.Debug("model response",
-			"role", responseMsg.Role,
-			"content_length", len(responseMsg.Content),
-			"tool_calls", len(responseMsg.ToolCalls))
+		log.Debug(fmt.Sprintf("[API] Response: %s (content=%d chars, tools=%d)",
+			responseMsg.Role, len(responseMsg.Content), len(responseMsg.ToolCalls)))
 		if round >= 5 && len(responseMsg.ToolCalls) > 0 {
 			log.Warn("many tool calls made - model may be stuck", "round", round+1)
 		}
@@ -290,19 +285,16 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 			// No tool calls, return the content
 			totalTime := time.Since(overallStart)
 			log.Debug("tool usage completed", "rounds", round+1)
-			log.Debug("performance metrics",
-				"total_time", totalTime,
-				"api_time", apiCallTime,
-				"api_time_percent", fmt.Sprintf("%.1f%%", float64(apiCallTime)/float64(totalTime)*100),
-				"tool_execution_time", toolExecutionTime,
-				"tool_execution_percent", fmt.Sprintf("%.1f%%", float64(toolExecutionTime)/float64(totalTime)*100),
-				"tool_call_count", toolCallCount)
-			if toolCallCount > 0 {
-				log.Debug("tool performance", "avg_time_per_tool", toolExecutionTime/time.Duration(toolCallCount))
-			}
+			log.Debug(fmt.Sprintf("[PERF] Total: %s (API=%.1f%%, tools=%.1f%%, %d tool calls)",
+				totalTime.Round(time.Millisecond),
+				float64(apiCallTime)/float64(totalTime)*100,
+				float64(toolExecutionTime)/float64(totalTime)*100,
+				toolCallCount))
+			// Average tool time is shown in main performance log if relevant
 			log.Debug("final response", "content_length", len(responseMsg.Content))
-			if len(responseMsg.Content) < 2000 {
-				log.Trace("final response content", "content", responseMsg.Content)
+			// Only log content at TRACE level if it's reasonably sized
+			if log.IsTraceEnabled() && len(responseMsg.Content) < 500 {
+				log.Trace(fmt.Sprintf("[CONTENT] Response: %s", responseMsg.Content))
 			}
 			return responseMsg.Content, nil
 		}
@@ -360,7 +352,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 			}
 
 			// Log tool execution
-			log.Debug("executing tool", "name", tc.Function.Name, "params", fmt.Sprintf("%v", params))
+			log.Debug(fmt.Sprintf("[TOOL] Calling: %s(%v)", tc.Function.Name, params))
 
 			// Execute tool
 			toolStart := time.Now()
@@ -397,7 +389,14 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				return
 			}
 
-			log.Trace("tool result", "name", tc.Function.Name, "result", string(resultJSON))
+			// Log tool result concisely
+			if log.IsTraceEnabled() {
+				resultStr := string(resultJSON)
+				if len(resultStr) > 200 {
+					resultStr = resultStr[:200] + "..."
+				}
+				log.Trace(fmt.Sprintf("[TOOL] Result %s: %s", tc.Function.Name, resultStr))
+			}
 
 			results <- toolResult{
 				index:      index,
@@ -424,7 +423,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 		resultSlice = append(resultSlice, result)
 		*toolExecutionTime += result.duration
 		*toolCallCount++
-		log.Debug("tool timing", "index", result.index, "duration", result.duration)
+		// Tool timing is included in overall performance metrics
 	}
 
 	// Sort by original index to maintain order

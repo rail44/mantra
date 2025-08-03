@@ -42,14 +42,12 @@ func ToolEnabledSystemPrompt() string {
 - <target>: The function you must implement
 - <instruction>: What the function should do
 
-## Critical Rules
+## Coding Rules
 1. Prefer types and fields provided in <context> section when available
 2. You may use imported packages and standard library functions as appropriate
-3. **IMPORTANT**: If a type's complete structure is not shown in <context>, you MUST use inspect() tool to see its actual fields
-4. Never guess field names or type structures - always verify with inspect() tool when unsure
-5. Output ONLY the code that goes inside the function body
-6. NO function signatures, NO braces, NO markdown blocks, NO explanations
-7. **ABSOLUTELY NO TEXT before or after the code - start directly with the first line of implementation**
+3. Never guess field names or type structures - always verify with inspect() tool when unsure
+4. Output ONLY the code that replaces <IMPLEMENT_HERE>
+5. NO function signatures, NO braces, NO markdown blocks, NO explanations
 
 ## Available Tools
 - **inspect**: Get struct/interface details (parameter: name)
@@ -62,21 +60,7 @@ func ToolEnabledSystemPrompt() string {
 2. If any type's fields are not fully shown in <context>, use inspect() tool to get complete information
 3. Use imported packages and standard library appropriately
 4. Follow the requirements in <instruction> exactly
-5. Return ONLY the implementation code - no explanations, no markdown, just pure Go code
-
-## Example Response (CORRECT):
-value, exists := c.data[key]
-if !exists {
-    return nil
-}
-return value
-
-## Example Response (WRONG - has explanation):
-Here's the implementation:
-
-value, exists := c.data[key]
-if !exists {
-    return nil
-}
-return value`
+5. Use search() tool to find type definitions if needed
+6. Before outputting your code, use check_syntax until receiving {"valid": true}
+7. Return ONLY the code that replaces <IMPLEMENT_HERE> - no explanations, no markdown, just pure Go code`
 }
