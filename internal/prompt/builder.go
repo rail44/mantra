@@ -12,12 +12,19 @@ import (
 
 // Builder creates prompts for code generation
 type Builder struct {
-	useTools bool
+	useTools          bool
+	additionalContext string
 }
 
 // NewBuilder creates a new prompt builder
 func NewBuilder() *Builder {
 	return &Builder{}
+}
+
+// WithAdditionalContext sets additional context to be included in the prompt
+func (b *Builder) WithAdditionalContext(context string) *Builder {
+	b.additionalContext = context
+	return b
 }
 
 // SetUseTools enables or disables tool usage instructions in prompts
@@ -69,6 +76,13 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	prompt.WriteString("<instruction>\n")
 	prompt.WriteString(fmt.Sprintf("%s\n", target.Instruction))
 	prompt.WriteString("</instruction>\n")
+
+	// Add additional context if provided
+	if b.additionalContext != "" {
+		prompt.WriteString("\n<additional_context>\n")
+		prompt.WriteString(b.additionalContext)
+		prompt.WriteString("\n</additional_context>\n")
+	}
 
 	fullPrompt := prompt.String()
 

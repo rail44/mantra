@@ -64,3 +64,13 @@ func (p *ImplementationPhase) GetPromptBuilder() *prompt.Builder {
 	builder.SetUseTools(true) // Still uses tools (check_syntax)
 	return builder
 }
+
+// GetPromptBuilderWithContext returns a prompt builder with additional context from previous phase
+func (p *ImplementationPhase) GetPromptBuilderWithContext(contextResult string) *prompt.Builder {
+	builder := prompt.NewBuilder()
+	builder.SetUseTools(true)
+
+	// Format the context result appropriately
+	formattedContext := "## Additional Context from Exploration:\n" + contextResult
+	return builder.WithAdditionalContext(formattedContext)
+}

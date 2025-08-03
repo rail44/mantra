@@ -326,9 +326,10 @@ func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase) {
 	aiClient.SetTemperature(p.GetTemperature())
 	aiClient.SetSystemPrompt(p.GetSystemPrompt())
 
-	// Convert tools.Tool to ai.Tool and set them
-	aiTools := ai.ConvertToAITools(p.GetTools())
-	executor := tools.NewExecutor(p.GetTools())
+	// Get tools once and convert/create executor
+	phaseTools := p.GetTools()
+	aiTools := ai.ConvertToAITools(phaseTools)
+	executor := tools.NewExecutor(phaseTools)
 	aiClient.SetTools(aiTools, executor)
 }
 
@@ -386,8 +387,14 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 	configureAIClientForPhase(aiClient, implPhase)
 
 	// Build implementation prompt with context from phase 1
-	// TODO: Consider moving this prompt combination logic to a more appropriate place
-	implPrompt := initialPrompt + "\n\n## Additional Context from Exploration:\n" + contextResult
+	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResult)
+	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
+	if err != nil {
+		log.Error("failed to build implementation prompt",
+			slog.String("function", target.Name),
+			slog.String("error", err.Error()))
+		return "", err
+	}
 
 	// Generate implementation
 	implementation, err := aiClient.Generate(ctx, implPrompt)
