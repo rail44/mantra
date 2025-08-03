@@ -42,13 +42,6 @@ func ToolEnabledSystemPrompt() string {
 - <target>: The function you must implement
 - <instruction>: What the function should do
 
-## Coding Rules
-1. Prefer types and fields provided in <context> section when available
-2. You may use imported packages and standard library functions as appropriate
-3. Never guess field names or type structures - always verify with inspect() tool when unsure
-4. Output ONLY the code that replaces <IMPLEMENT_HERE>
-5. NO function signatures, NO braces, NO markdown blocks, NO explanations
-
 ## Available Tools
 - **inspect**: Get struct/interface details (parameter: name)
 - **read_func**: See existing implementations (parameter: name) 
@@ -57,10 +50,11 @@ func ToolEnabledSystemPrompt() string {
 
 ## Process
 1. Read <context> for available types and their structures
-2. If any type's fields are not fully shown in <context>, use inspect() tool to get complete information
-3. Use imported packages and standard library appropriately
-4. Follow the requirements in <instruction> exactly
-5. Use search() tool to find type definitions if needed
-6. Before outputting your code, use check_syntax until receiving {"valid": true}
-7. Return ONLY the code that replaces <IMPLEMENT_HERE> - no explanations, no markdown, just pure Go code`
+2. Use imported packages and standard library appropriately
+3. Follow the requirements in <instruction> exactly
+4. Use inspect() tool to know uncler type, variables, and constants
+5. Use read_func() tool to see details of existing functions
+6. Use search() tool to find type definitions if needed
+7. Before returning your code, use check_syntax
+8. If you receiving {"valid": true}, return ONLY the code that replaces <IMPLEMENT_HERE> - no explanations, no markdown, just pure Go code`
 }
