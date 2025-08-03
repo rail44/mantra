@@ -213,8 +213,6 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Ge
 		return nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
-	// Enable debug timing on AI client if requested
-	aiClient.SetDebugTiming(log.IsDebugEnabled())
 
 	// Log which provider we're using
 	log.Info("using AI provider",

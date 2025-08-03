@@ -18,7 +18,6 @@ type ClientConfig struct {
 type Client struct {
 	provider     Provider
 	clientConfig *ClientConfig
-	debugTiming  bool
 	tools        []Tool
 	toolExecutor ToolExecutor
 }
@@ -60,24 +59,12 @@ func NewClient(clientConfig *ClientConfig) (*Client, error) {
 	}, nil
 }
 
-// SetDebugTiming enables detailed timing information
-func (c *Client) SetDebugTiming(enabled bool) {
-	c.debugTiming = enabled
-	// Pass through to provider if it supports debug timing
-	if debuggable, ok := c.provider.(interface{ SetDebugTiming(bool) }); ok {
-		debuggable.SetDebugTiming(enabled)
-	}
-}
 
 // Generate sends a prompt to the AI with tool support
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	return c.provider.Generate(ctx, prompt, c.tools, c.toolExecutor)
 }
 
-// CheckModel verifies if the specified model is available
-func (c *Client) CheckModel(ctx context.Context) error {
-	return c.provider.CheckModel(ctx)
-}
 
 // GetProviderName returns the name of the current provider
 func (c *Client) GetProviderName() string {

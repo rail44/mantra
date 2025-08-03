@@ -23,7 +23,6 @@ type OpenAIClient struct {
 	currentTemperature float32  // Current temperature to use
 	systemPrompt      string   // Current system prompt
 	httpClient        *http.Client
-	debugTiming       bool
 	providerSpec      *ProviderSpec // OpenRouter-specific provider routing
 }
 
@@ -106,10 +105,6 @@ func NewOpenAIClient(apiKey, baseURL, model string) (*OpenAIClient, error) {
 	}, nil
 }
 
-// SetDebugTiming enables detailed timing information
-func (c *OpenAIClient) SetDebugTiming(enabled bool) {
-	c.debugTiming = enabled
-}
 
 // SetProviderSpec sets OpenRouter provider routing specification
 func (c *OpenAIClient) SetProviderSpec(providers []string) {
@@ -136,34 +131,6 @@ func (c *OpenAIClient) Name() string {
 	return "OpenAI API"
 }
 
-// CheckModel verifies if the specified model is available
-func (c *OpenAIClient) CheckModel(ctx context.Context) error {
-	// Model validation is fast, no need to track timing
-
-	// For OpenAI APIs, we'll do a simple completion request
-	// with minimal tokens to verify the model is accessible
-	req := OpenAIRequest{
-		Model: c.model,
-		Messages: []OpenAIMessage{
-			{Role: "user", Content: "test"},
-		},
-		Temperature: 0,
-		Stream:      false,
-		Provider:    c.providerSpec,
-	}
-
-	_, err := c.makeRequest(ctx, req)
-
-	if c.debugTiming {
-		// Model check timing is included in overall metrics
-	}
-
-	if err != nil {
-		return fmt.Errorf("model %s check failed: %w", c.model, err)
-	}
-
-	return nil
-}
 
 // makeRequest makes a non-streaming request to the API
 func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*OpenAIResponse, error) {
