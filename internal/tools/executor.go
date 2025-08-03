@@ -11,23 +11,27 @@ import (
 
 // Executor handles tool execution with context and logging
 type Executor struct {
-	registry *Registry
-	timeout  time.Duration
+	tools   map[string]Tool
+	timeout time.Duration
 }
 
 // NewExecutor creates a new tool executor
-func NewExecutor(registry *Registry) *Executor {
+func NewExecutor(tools []Tool) *Executor {
+	toolMap := make(map[string]Tool)
+	for _, tool := range tools {
+		toolMap[tool.Name()] = tool
+	}
 	return &Executor{
-		registry: registry,
-		timeout:  30 * time.Second, // Default timeout
+		tools:   toolMap,
+		timeout: 30 * time.Second, // Default timeout
 	}
 }
 
 // Execute runs a tool by name with the given parameters
 func (e *Executor) Execute(ctx context.Context, toolName string, params map[string]interface{}) (interface{}, error) {
-	// Get the tool from registry
-	tool, err := e.registry.Get(toolName)
-	if err != nil {
+	// Get the tool from map
+	tool, exists := e.tools[toolName]
+	if !exists {
 		return nil, &ToolError{
 			Code:    "tool_not_found",
 			Message: fmt.Sprintf("Tool %q not found", toolName),

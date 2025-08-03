@@ -20,7 +20,6 @@ import (
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
-	"github.com/rail44/mantra/internal/tools/setup"
 )
 
 var generateCmd = &cobra.Command{
@@ -114,7 +113,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	}
 
 	// Setup AI client and tools
-	aiClient, promptBuilder, gen, toolRegistry, toolExecutor, err := setupAIClient(cfg, pkgDir)
+	aiClient, promptBuilder, gen, err := setupAIClient(cfg, pkgDir)
 	if err != nil {
 		return err
 	}
@@ -122,7 +121,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	ctx := context.Background()
 
 	// Process all files
-	err = processTargetsByFile(ctx, results, aiClient, promptBuilder, gen, toolRegistry, toolExecutor, cfg.Dest)
+	err = processTargetsByFile(ctx, results, aiClient, promptBuilder, gen, cfg.Dest)
 	if err != nil {
 		return err
 	}
@@ -213,7 +212,7 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectio
 }
 
 // setupAIClient initializes AI client, tools, and related components
-func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Builder, *generator.Generator, *tools.Registry, *tools.Executor, error) {
+func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Builder, *generator.Generator, error) {
 	// Initialize AI client configuration
 	clientConfig := &ai.ClientConfig{
 		URL:     cfg.URL,
@@ -229,7 +228,7 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 
 	aiClient, err := ai.NewClient(clientConfig)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("failed to create AI client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	// Enable debug timing on AI client if requested
@@ -243,11 +242,7 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 	promptBuilder := prompt.NewBuilder()
 	promptBuilder.SetUseTools(true) // Enable tools
 
-	// Setup tools for AI
-	toolRegistry := setup.InitializeRegistry(pkgDir)
-	toolExecutor := tools.NewExecutor(toolRegistry)
-
-	// Don't set tools on AI client here - they will be set per phase
+	// Don't create tools here - they will be created per phase
 
 	gen := generator.New(&generator.Config{
 		Dest:          cfg.Dest,
@@ -255,11 +250,11 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 		SourcePackage: filepath.Base(pkgDir),
 	})
 
-	return aiClient, promptBuilder, gen, toolRegistry, toolExecutor, nil
+	return aiClient, promptBuilder, gen, nil
 }
 
 // processTargetsByFile processes all files, generating implementations for targets and copying files without targets
-func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, toolRegistry *tools.Registry, toolExecutor *tools.Executor, destDir string) error {
+func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
 	// Process each file
 	for _, result := range results {
 		fileInfo := result.FileInfo
@@ -320,7 +315,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 		}
 
 		// Generate new implementations
-		newImplementations, err := generateImplementationsForTargets(ctx, targetsToGenerate, string(content), aiClient, promptBuilder, toolRegistry, toolExecutor)
+		newImplementations, err := generateImplementationsForTargets(ctx, targetsToGenerate, string(content), aiClient, promptBuilder)
 		if err != nil {
 			return fmt.Errorf("failed to generate implementations for file %s: %w", filePath, err)
 		}
@@ -350,8 +345,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 }
 
 // generateImplementationsForTargets generates implementations for a list of targets from the same file
-// generateImplementationsForTargets generates implementations for a list of targets from the same file
-func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client, promptBuilder *prompt.Builder, toolRegistry *tools.Registry, toolExecutor *tools.Executor) (map[string]string, error) {
+func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client, promptBuilder *prompt.Builder) (map[string]string, error) {
 	implementations := make(map[string]string)
 
 	// Get project root from the first target's file path
@@ -386,7 +380,8 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		
 		// Convert tools.Tool to ai.Tool and set them
 		contextTools := ai.ConvertToAITools(contextPhase.GetTools())
-		aiClient.SetTools(contextTools, toolExecutor)
+		contextExecutor := tools.NewExecutor(contextPhase.GetTools())
+		aiClient.SetTools(contextTools, contextExecutor)
 		
 		// Build initial prompt for context gathering
 		p, err := promptBuilder.BuildForTarget(target, fileContent)
@@ -420,7 +415,8 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		
 		// Convert tools and set them
 		implTools := ai.ConvertToAITools(implPhase.GetTools())
-		aiClient.SetTools(implTools, toolExecutor)
+		implExecutor := tools.NewExecutor(implPhase.GetTools())
+		aiClient.SetTools(implTools, implExecutor)
 		
 		// Build implementation prompt with context from phase 1
 		// For now, we'll combine the original prompt with the context gathering result
