@@ -238,22 +238,42 @@ func (g *Generator) parseImplementationAsBlockWithFileSet(implementation string,
 func cleanCode(response string) string {
 	response = strings.TrimSpace(response)
 
-	// Remove markdown code blocks
-	if strings.HasPrefix(response, "```") {
-		lines := strings.Split(response, "\n")
-		var cleaned []string
-		inCodeBlock := false
+	// First, check if the response contains markdown code blocks
+	if strings.Contains(response, "```") {
+		// Find the content between ```go or ``` and the closing ```
+		startMarkers := []string{"```go\n", "```go\r\n", "```\n", "```\r\n"}
+		endMarker := "```"
 
-		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), "```") {
-				inCodeBlock = !inCodeBlock
-				continue
-			}
-			if inCodeBlock || (!strings.HasPrefix(line, "```") && len(cleaned) > 0) {
-				cleaned = append(cleaned, line)
+		for _, startMarker := range startMarkers {
+			startIdx := strings.Index(response, startMarker)
+			if startIdx != -1 {
+				// Found a code block, extract content
+				startIdx += len(startMarker)
+				endIdx := strings.Index(response[startIdx:], endMarker)
+				if endIdx != -1 {
+					response = response[startIdx : startIdx+endIdx]
+					break
+				}
 			}
 		}
-		response = strings.Join(cleaned, "\n")
+	}
+
+	// Remove any remaining markdown artifacts
+	response = strings.TrimSpace(response)
+
+	// Remove common explanatory prefixes
+	explanatoryPrefixes := []string{
+		"Here's the implementation:",
+		"Here is the implementation:",
+		"The implementation:",
+		"Implementation:",
+	}
+
+	for _, prefix := range explanatoryPrefixes {
+		if strings.HasPrefix(response, prefix) {
+			response = strings.TrimPrefix(response, prefix)
+			response = strings.TrimSpace(response)
+		}
 	}
 
 	// Check if response contains function signature and extract body
@@ -261,16 +281,38 @@ func cleanCode(response string) string {
 		// Find the first opening brace
 		braceIdx := strings.Index(response, "{")
 		if braceIdx != -1 {
-			// Find the last closing brace
-			lastBrace := strings.LastIndex(response, "}")
-			if lastBrace > braceIdx {
-				// Extract only the body between braces
-				response = response[braceIdx+1 : lastBrace]
+			// Find the matching closing brace
+			braceCount := 1
+			i := braceIdx + 1
+			for i < len(response) && braceCount > 0 {
+				switch response[i] {
+				case '{':
+					braceCount++
+				case '}':
+					braceCount--
+				}
+				i++
+			}
+
+			// Extract the body (excluding the braces)
+			if braceCount == 0 && braceIdx+1 < i-1 {
+				body := response[braceIdx+1 : i-1]
+				// Remove leading/trailing whitespace but preserve internal indentation
+				lines := strings.Split(body, "\n")
+				if len(lines) > 0 {
+					// Remove empty first and last lines
+					if strings.TrimSpace(lines[0]) == "" && len(lines) > 1 {
+						lines = lines[1:]
+					}
+					if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+						lines = lines[:len(lines)-1]
+					}
+				}
+				return strings.Join(lines, "\n")
 			}
 		}
 	}
 
-	response = strings.TrimSpace(response)
 	return response
 }
 

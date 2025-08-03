@@ -81,22 +81,33 @@ func init() {
 
 func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	// Detect targets and check if generation is needed
-	statuses, err := detectAndSummarizeTargets(pkgDir, cfg.Dest)
+	results, err := detectAndSummarizeTargets(pkgDir, cfg.Dest)
 	if err != nil {
 		return err
 	}
 
-	// Check if any targets need generation
-	needsGeneration := false
-	for _, status := range statuses {
-		if status.Status != detector.StatusCurrent {
-			needsGeneration = true
+	// Check if any targets need generation or any files need copying
+	needsProcessing := false
+	for _, result := range results {
+		// Files without targets need to be copied
+		if len(result.Statuses) == 0 {
+			needsProcessing = true
+			break
+		}
+		// Check if any target needs generation
+		for _, status := range result.Statuses {
+			if status.Status != detector.StatusCurrent {
+				needsProcessing = true
+				break
+			}
+		}
+		if needsProcessing {
 			break
 		}
 	}
 
-	if !needsGeneration {
-		log.Info("all targets are up-to-date, nothing to generate")
+	if !needsProcessing {
+		log.Info("all files are up-to-date, nothing to generate")
 		return nil
 	}
 
@@ -108,8 +119,8 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 
 	ctx := context.Background()
 
-	// Process targets grouped by file
-	err = processTargetsByFile(ctx, statuses, aiClient, promptBuilder, gen, cfg.Dest)
+	// Process all files
+	err = processTargetsByFile(ctx, results, aiClient, promptBuilder, gen, cfg.Dest)
 	if err != nil {
 		return err
 	}
@@ -119,34 +130,43 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 }
 
 // detectAndSummarizeTargets detects targets and provides logging summary
-func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.TargetStatus, error) {
+func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectionResult, error) {
 	log.Info("detecting targets in package", slog.String("package", pkgDir))
-	statuses, err := detector.DetectPackageTargets(pkgDir, destDir)
+	results, err := detector.DetectPackageTargets(pkgDir, destDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect targets: %w", err)
 	}
 
 	// Summary of detection
-	var ungenerated, outdated, current int
-	for _, status := range statuses {
-		switch status.Status {
-		case detector.StatusUngenerated:
-			ungenerated++
-			log.Info("new target found",
-				slog.String("function", status.Target.Name),
-				slog.String("file", filepath.Base(status.Target.FilePath)))
-		case detector.StatusOutdated:
-			outdated++
-			log.Info("outdated target found",
-				slog.String("function", status.Target.Name),
-				slog.String("file", filepath.Base(status.Target.FilePath)),
-				slog.String("old_checksum", status.ExistingChecksum),
-				slog.String("new_checksum", status.CurrentChecksum))
-		case detector.StatusCurrent:
-			current++
-			log.Debug("up-to-date target",
-				slog.String("function", status.Target.Name),
-				slog.String("file", filepath.Base(status.Target.FilePath)))
+	var ungenerated, outdated, current, filesWithoutTargets int
+	for _, result := range results {
+		if len(result.Statuses) == 0 {
+			filesWithoutTargets++
+			log.Debug("file without mantra targets",
+				slog.String("file", filepath.Base(result.FileInfo.FilePath)))
+			continue
+		}
+
+		for _, status := range result.Statuses {
+			switch status.Status {
+			case detector.StatusUngenerated:
+				ungenerated++
+				log.Info("new target found",
+					slog.String("function", status.Target.Name),
+					slog.String("file", filepath.Base(status.Target.FilePath)))
+			case detector.StatusOutdated:
+				outdated++
+				log.Info("outdated target found",
+					slog.String("function", status.Target.Name),
+					slog.String("file", filepath.Base(status.Target.FilePath)),
+					slog.String("old_checksum", status.ExistingChecksum),
+					slog.String("new_checksum", status.CurrentChecksum))
+			case detector.StatusCurrent:
+				current++
+				log.Debug("up-to-date target",
+					slog.String("function", status.Target.Name),
+					slog.String("file", filepath.Base(status.Target.FilePath)))
+			}
 		}
 	}
 
@@ -154,10 +174,11 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.TargetStatus
 		slog.Int("ungenerated", ungenerated),
 		slog.Int("outdated", outdated),
 		slog.Int("current", current),
-		slog.Int("total", len(statuses)))
+		slog.Int("files_without_targets", filesWithoutTargets),
+		slog.Int("total_files", len(results)))
 
-	// Return all statuses (including current ones with existing implementations)
-	return statuses, nil
+	// Return all results (including files without targets)
+	return results, nil
 }
 
 // setupAIClient initializes AI client, tools, and related components
@@ -210,19 +231,33 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 	return aiClient, promptBuilder, gen, nil
 }
 
-// processTargetsByFile groups targets by file and processes each file
-func processTargetsByFile(ctx context.Context, statuses []*detector.TargetStatus, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
-	// Group statuses by file
-	statusesByFile := make(map[string][]*detector.TargetStatus)
-	for _, status := range statuses {
-		statusesByFile[status.Target.FilePath] = append(statusesByFile[status.Target.FilePath], status)
-	}
-
+// processTargetsByFile processes all files, generating implementations for targets and copying files without targets
+func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
 	// Process each file
-	for filePath, fileStatuses := range statusesByFile {
+	for _, result := range results {
+		fileInfo := result.FileInfo
+		filePath := fileInfo.FilePath
+
+		// Handle files without mantra targets
+		if len(result.Statuses) == 0 {
+			log.Info("copying file without mantra targets",
+				slog.String("file", filepath.Base(filePath)))
+
+			// Simply copy the file with package name change
+			if err := gen.GenerateFile(fileInfo, make(map[string]string)); err != nil {
+				log.Error("failed to copy file without mantra targets",
+					slog.String("file", filePath),
+					slog.String("error", err.Error()))
+			} else {
+				log.Info("copied file",
+					slog.String("output", filepath.Join(destDir, filepath.Base(filePath))))
+			}
+			continue
+		}
+
 		// Count targets that need generation
 		targetsNeedingGeneration := 0
-		for _, status := range fileStatuses {
+		for _, status := range result.Statuses {
 			if status.Status != detector.StatusCurrent {
 				targetsNeedingGeneration++
 			}
@@ -236,7 +271,7 @@ func processTargetsByFile(ctx context.Context, statuses []*detector.TargetStatus
 		log.Info("processing file",
 			slog.String("file", filepath.Base(filePath)),
 			slog.Int("targets_to_generate", targetsNeedingGeneration),
-			slog.Int("total_targets", len(fileStatuses)))
+			slog.Int("total_targets", len(result.Statuses)))
 
 		// Read file content
 		content, err := os.ReadFile(filePath)
@@ -247,20 +282,11 @@ func processTargetsByFile(ctx context.Context, statuses []*detector.TargetStatus
 			continue
 		}
 
-		// Parse file info
-		fileInfo, err := parser.ParseFileInfo(filePath)
-		if err != nil {
-			log.Error("failed to parse file",
-				slog.String("file", filePath),
-				slog.String("error", err.Error()))
-			continue
-		}
-
 		// Generate implementations only for targets that need it
 		var targetsToGenerate []*parser.Target
 		existingImplementations := make(map[string]string)
 
-		for _, status := range fileStatuses {
+		for _, status := range result.Statuses {
 			if status.Status == detector.StatusCurrent {
 				// Use existing implementation
 				existingImplementations[status.Target.Name] = status.ExistingImpl

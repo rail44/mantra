@@ -22,6 +22,15 @@ const (
 	StatusCurrent                   // Generated and up-to-date
 )
 
+// FileDetectionResult represents detection results for a single file.
+// It includes both the file information and any mantra targets found within it.
+// Files without mantra targets will have an empty Statuses slice, but still
+// need to be processed for copying to the destination directory.
+type FileDetectionResult struct {
+	FileInfo *parser.FileInfo
+	Statuses []*TargetStatus // Empty if no mantra targets in file
+}
+
 // TargetStatus holds a target and its generation status
 type TargetStatus struct {
 	Target           *parser.Target
@@ -31,15 +40,15 @@ type TargetStatus struct {
 	ExistingImpl     string // Existing implementation (if checksum matches)
 }
 
-// DetectPackageTargets analyzes all Go files in a package directory and returns targets with their status
-func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStatus, error) {
+// DetectPackageTargets analyzes all Go files in a package directory and returns detection results for all files
+func DetectPackageTargets(packageDir string, generatedDir string) ([]*FileDetectionResult, error) {
 	// Find all Go files in the package
 	files, err := filepath.Glob(filepath.Join(packageDir, "*.go"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob files: %w", err)
 	}
 
-	var allStatuses []*TargetStatus
+	var allResults []*FileDetectionResult
 
 	// Process each source file
 	for _, sourceFile := range files {
@@ -66,6 +75,12 @@ func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStat
 			}
 		}
 
+		// Create FileDetectionResult for this file
+		fileResult := &FileDetectionResult{
+			FileInfo: fileInfo,
+			Statuses: []*TargetStatus{},
+		}
+
 		// Check status of each target
 		for _, target := range fileInfo.Targets {
 			// Process all targets with mantra comments (remove HasPanic check)
@@ -88,7 +103,7 @@ func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStat
 				status = StatusUngenerated
 			}
 
-			allStatuses = append(allStatuses, &TargetStatus{
+			fileResult.Statuses = append(fileResult.Statuses, &TargetStatus{
 				Target:           target,
 				Status:           status,
 				CurrentChecksum:  currentChecksum,
@@ -96,9 +111,12 @@ func DetectPackageTargets(packageDir string, generatedDir string) ([]*TargetStat
 				ExistingImpl:     existingBody,
 			})
 		}
+
+		// Add file result even if it has no targets
+		allResults = append(allResults, fileResult)
 	}
 
-	return allStatuses, nil
+	return allResults, nil
 }
 
 // ImplementationInfo holds checksum and implementation for a function
