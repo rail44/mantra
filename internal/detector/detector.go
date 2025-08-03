@@ -214,14 +214,3 @@ func extractFunctionBody(source string, funcDecl *ast.FuncDecl, fset *token.File
 
 	return strings.Join(bodyLines, "\n")
 }
-
-// FilterTargetsToGenerate returns only targets that need generation (ungenerated or outdated)
-func FilterTargetsToGenerate(statuses []*TargetStatus) []*parser.Target {
-	var targets []*parser.Target
-	for _, status := range statuses {
-		if status.Status != StatusCurrent {
-			targets = append(targets, status.Target)
-		}
-	}
-	return targets
-}

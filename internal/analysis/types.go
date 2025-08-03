@@ -29,7 +29,7 @@ func ExtractTypeString(expr ast.Expr) string {
 	case *ast.InterfaceType:
 		return "interface{}"
 	case *ast.FuncType:
-		return "func" // TODO: Full function type
+		return FormatFuncType(t)
 	default:
 		return "interface{}"
 	}

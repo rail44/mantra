@@ -14,10 +14,3 @@ func (e *ToolError) Error() string {
 	return e.Message
 }
 
-// NewToolError creates a new tool error
-func NewToolError(code, message string) *ToolError {
-	return &ToolError{
-		Code:    code,
-		Message: message,
-	}
-}

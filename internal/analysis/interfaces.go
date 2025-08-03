@@ -53,7 +53,6 @@ func ExtractInterfaceMethods(i *ast.InterfaceType) []MethodInfo {
 				})
 			}
 		}
-		// TODO: Handle embedded interfaces
 	}
 
 	return methods

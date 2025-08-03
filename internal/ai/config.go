@@ -13,14 +13,6 @@ type ClientConfig struct {
 	Provider []string      // OpenRouter provider specification (e.g., ["Cerebras"])
 }
 
-// DefaultClientConfig returns default client configuration
-func DefaultClientConfig() *ClientConfig {
-	// No defaults in the simplified version - config is required
-	return &ClientConfig{
-		Timeout: 5 * time.Minute,
-	}
-}
-
 // ToolEnabledSystemPrompt returns a system prompt optimized for tool usage
 func ToolEnabledSystemPrompt() string {
 	return `You are an expert Go developer. Your task: generate ONLY the code that replaces <IMPLEMENT_HERE>.
