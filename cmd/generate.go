@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
 	"log/slog"
+
+	"github.com/spf13/cobra"
 
 	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/config"
@@ -320,6 +321,85 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 	return nil
 }
 
+// configureAIClientForPhase configures the AI client with phase-specific settings
+func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase) {
+	aiClient.SetTemperature(p.GetTemperature())
+	aiClient.SetSystemPrompt(p.GetSystemPrompt())
+
+	// Convert tools.Tool to ai.Tool and set them
+	aiTools := ai.ConvertToAITools(p.GetTools())
+	executor := tools.NewExecutor(p.GetTools())
+	aiClient.SetTools(aiTools, executor)
+}
+
+// findProjectRoot finds the project root by looking for go.mod
+func findProjectRoot(startPath string) string {
+	projectRoot := startPath
+	for {
+		if _, err := os.Stat(filepath.Join(projectRoot, "go.mod")); err == nil {
+			return projectRoot
+		}
+		parent := filepath.Dir(projectRoot)
+		if parent == projectRoot {
+			// Reached root without finding go.mod
+			return startPath
+		}
+		projectRoot = parent
+	}
+}
+
+// generateImplementationForTarget generates implementation for a single target using two-phase approach
+func generateImplementationForTarget(ctx context.Context, target *parser.Target, fileContent string, aiClient *ai.Client, projectRoot string, targetNum, totalTargets int) (string, error) {
+	targetStart := time.Now()
+	log.Info(fmt.Sprintf("[%d/%d] Generating %s...", targetNum, totalTargets, target.Name))
+
+	// Phase 1: Context Gathering
+	log.Debug("Starting context gathering phase", slog.String("function", target.Name))
+	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot)
+	configureAIClientForPhase(aiClient, contextPhase)
+
+	// Build initial prompt
+	contextPromptBuilder := contextPhase.GetPromptBuilder()
+	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
+	if err != nil {
+		log.Error("failed to build prompt",
+			slog.String("function", target.Name),
+			slog.String("error", err.Error()))
+		return "", err
+	}
+
+	// Execute context gathering
+	contextResult, err := aiClient.Generate(ctx, initialPrompt)
+	if err != nil {
+		log.Error(fmt.Sprintf("[%d/%d] Context gathering failed: %s - %s", targetNum, totalTargets, target.Name, err.Error()))
+		return "", err
+	}
+
+	log.Debug("Context gathering result",
+		slog.String("function", target.Name),
+		slog.Int("length", len(contextResult)),
+		slog.String("content", contextResult))
+
+	// Phase 2: Implementation
+	log.Debug("Starting implementation phase", slog.String("function", target.Name))
+	implPhase := phase.NewImplementationPhase(0.2)
+	configureAIClientForPhase(aiClient, implPhase)
+
+	// Build implementation prompt with context from phase 1
+	// TODO: Consider moving this prompt combination logic to a more appropriate place
+	implPrompt := initialPrompt + "\n\n## Additional Context from Exploration:\n" + contextResult
+
+	// Generate implementation
+	implementation, err := aiClient.Generate(ctx, implPrompt)
+	if err != nil {
+		log.Error(fmt.Sprintf("[%d/%d] Implementation failed: %s - %s", targetNum, totalTargets, target.Name, err.Error()))
+		return "", err
+	}
+
+	log.Info(fmt.Sprintf("[%d/%d] Generated: %s (%s)", targetNum, totalTargets, target.Name, time.Since(targetStart).Round(time.Millisecond)))
+	return implementation, nil
+}
+
 // generateImplementationsForTargets generates implementations for a list of targets from the same file
 func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client) (map[string]string, error) {
 	implementations := make(map[string]string)
@@ -327,88 +407,16 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 	// Get project root from the first target's file path
 	var projectRoot string
 	if len(targets) > 0 {
-		projectRoot = filepath.Dir(targets[0].FilePath)
-		// Walk up to find go.mod
-		for {
-			if _, err := os.Stat(filepath.Join(projectRoot, "go.mod")); err == nil {
-				break
-			}
-			parent := filepath.Dir(projectRoot)
-			if parent == projectRoot {
-				// Reached root without finding go.mod
-				break
-			}
-			projectRoot = parent
-		}
+		projectRoot = findProjectRoot(filepath.Dir(targets[0].FilePath))
 	}
 
 	for i, target := range targets {
-		targetStart := time.Now()
-		log.Info(fmt.Sprintf("[%d/%d] Generating %s...", i+1, len(targets), target.Name))
-
-		// Phase 1: Context Gathering
-		log.Debug("Starting context gathering phase", slog.String("function", target.Name))
-		contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot)
-
-		// Configure AI client for context gathering
-		aiClient.SetTemperature(contextPhase.GetTemperature())
-		aiClient.SetSystemPrompt(contextPhase.GetSystemPrompt())
-
-		// Convert tools.Tool to ai.Tool and set them
-		contextTools := ai.ConvertToAITools(contextPhase.GetTools())
-		contextExecutor := tools.NewExecutor(contextPhase.GetTools())
-		aiClient.SetTools(contextTools, contextExecutor)
-
-		// Build initial prompt for context gathering
-		contextPromptBuilder := contextPhase.GetPromptBuilder()
-		p, err := contextPromptBuilder.BuildForTarget(target, fileContent)
+		implementation, err := generateImplementationForTarget(ctx, target, fileContent, aiClient, projectRoot, i+1, len(targets))
 		if err != nil {
-			log.Error("failed to build prompt",
-				slog.String("function", target.Name),
-				slog.String("error", err.Error()))
-			return nil, err
-		}
-
-		// Execute context gathering
-		contextResult, err := aiClient.Generate(ctx, p)
-		if err != nil {
-			log.Error(fmt.Sprintf("[%d/%d] Context gathering failed: %s - %s", i+1, len(targets), target.Name, err.Error()))
+			// Error already logged in generateImplementationForTarget
 			continue
 		}
-
-		// Log the context gathering result
-		log.Debug("Context gathering result",
-			slog.String("function", target.Name),
-			slog.Int("length", len(contextResult)),
-			slog.String("content", contextResult))
-
-		// Phase 2: Implementation
-		log.Debug("Starting implementation phase", slog.String("function", target.Name))
-		implPhase := phase.NewImplementationPhase(0.2)
-
-		// Configure AI client for implementation
-		aiClient.SetTemperature(implPhase.GetTemperature())
-		aiClient.SetSystemPrompt(implPhase.GetSystemPrompt())
-
-		// Convert tools and set them
-		implTools := ai.ConvertToAITools(implPhase.GetTools())
-		implExecutor := tools.NewExecutor(implPhase.GetTools())
-		aiClient.SetTools(implTools, implExecutor)
-
-		// Build implementation prompt with context from phase 1
-		// For now, we'll combine the original prompt with the context gathering result
-		// This might need refinement based on testing
-		implPrompt := p + "\n\n## Additional Context from Exploration:\n" + contextResult
-
-		// Generate implementation
-		implementation, genErr := aiClient.Generate(ctx, implPrompt)
-		if genErr != nil {
-			log.Error(fmt.Sprintf("[%d/%d] Implementation failed: %s - %s", i+1, len(targets), target.Name, genErr.Error()))
-			continue
-		}
-
 		implementations[target.Name] = implementation
-		log.Info(fmt.Sprintf("[%d/%d] Generated: %s (%s)", i+1, len(targets), target.Name, time.Since(targetStart).Round(time.Millisecond)))
 	}
 
 	return implementations, nil
