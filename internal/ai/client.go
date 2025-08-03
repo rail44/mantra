@@ -3,7 +3,17 @@ package ai
 import (
 	"context"
 	"fmt"
+	"time"
 )
+
+// ClientConfig represents the configuration for connecting to an AI provider
+type ClientConfig struct {
+	URL      string        // URL for the API endpoint (e.g., "http://localhost:11434/v1" for Ollama)
+	APIKey   string        // API key for providers that require authentication
+	Model    string        // Model to use
+	Timeout  time.Duration // Request timeout
+	Provider []string      // OpenRouter provider specification (e.g., ["Cerebras"])
+}
 
 type Client struct {
 	provider     Provider

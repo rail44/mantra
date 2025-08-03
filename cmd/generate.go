@@ -18,7 +18,6 @@ import (
 	"github.com/rail44/mantra/internal/generator"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
-	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 )
 
@@ -113,7 +112,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	}
 
 	// Setup AI client and tools
-	aiClient, promptBuilder, gen, err := setupAIClient(cfg, pkgDir)
+	aiClient, gen, err := setupAIClient(cfg, pkgDir)
 	if err != nil {
 		return err
 	}
@@ -121,7 +120,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	ctx := context.Background()
 
 	// Process all files
-	err = processTargetsByFile(ctx, results, aiClient, promptBuilder, gen, cfg.Dest)
+	err = processTargetsByFile(ctx, results, aiClient, gen, cfg.Dest)
 	if err != nil {
 		return err
 	}
@@ -130,26 +129,9 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	return nil
 }
 
-// formatPath shortens a path for display by showing relative path from current directory
-func formatPath(path string) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return filepath.Base(path)
-	}
-	relPath, err := filepath.Rel(cwd, path)
-	if err != nil {
-		return filepath.Base(path)
-	}
-	// If relative path is longer than absolute, just use basename
-	if len(relPath) > len(path) {
-		return filepath.Base(path)
-	}
-	return relPath
-}
-
 // detectAndSummarizeTargets detects targets and provides logging summary
 func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectionResult, error) {
-	log.Info("detecting targets in package", slog.String("package", formatPath(pkgDir)))
+	log.Info("detecting targets in package", slog.String("package", filepath.Base(pkgDir)))
 	results, err := detector.DetectPackageTargets(pkgDir, destDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect targets: %w", err)
@@ -212,7 +194,7 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectio
 }
 
 // setupAIClient initializes AI client, tools, and related components
-func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Builder, *generator.Generator, error) {
+func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Generator, error) {
 	// Initialize AI client configuration
 	clientConfig := &ai.ClientConfig{
 		URL:     cfg.URL,
@@ -228,7 +210,7 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 
 	aiClient, err := ai.NewClient(clientConfig)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create AI client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	// Enable debug timing on AI client if requested
@@ -239,9 +221,6 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 		slog.String("provider", aiClient.GetProviderName()),
 		slog.String("model", cfg.Model))
 
-	promptBuilder := prompt.NewBuilder()
-	promptBuilder.SetUseTools(true) // Enable tools
-
 	// Don't create tools here - they will be created per phase
 
 	gen := generator.New(&generator.Config{
@@ -250,11 +229,11 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *prompt.Build
 		SourcePackage: filepath.Base(pkgDir),
 	})
 
-	return aiClient, promptBuilder, gen, nil
+	return aiClient, gen, nil
 }
 
 // processTargetsByFile processes all files, generating implementations for targets and copying files without targets
-func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, promptBuilder *prompt.Builder, gen *generator.Generator, destDir string) error {
+func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, destDir string) error {
 	// Process each file
 	for _, result := range results {
 		fileInfo := result.FileInfo
@@ -315,7 +294,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 		}
 
 		// Generate new implementations
-		newImplementations, err := generateImplementationsForTargets(ctx, targetsToGenerate, string(content), aiClient, promptBuilder)
+		newImplementations, err := generateImplementationsForTargets(ctx, targetsToGenerate, string(content), aiClient)
 		if err != nil {
 			return fmt.Errorf("failed to generate implementations for file %s: %w", filePath, err)
 		}
@@ -345,7 +324,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 }
 
 // generateImplementationsForTargets generates implementations for a list of targets from the same file
-func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client, promptBuilder *prompt.Builder) (map[string]string, error) {
+func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client) (map[string]string, error) {
 	implementations := make(map[string]string)
 
 	// Get project root from the first target's file path
@@ -384,7 +363,8 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		aiClient.SetTools(contextTools, contextExecutor)
 		
 		// Build initial prompt for context gathering
-		p, err := promptBuilder.BuildForTarget(target, fileContent)
+		contextPromptBuilder := contextPhase.GetPromptBuilder()
+		p, err := contextPromptBuilder.BuildForTarget(target, fileContent)
 		if err != nil {
 			log.Error("failed to build prompt",
 				slog.String("function", target.Name),

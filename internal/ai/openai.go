@@ -99,7 +99,7 @@ func NewOpenAIClient(apiKey, baseURL, model string) (*OpenAIClient, error) {
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
 		model:             model,
 		currentTemperature: 0.7, // Default temperature
-		systemPrompt:      ToolEnabledSystemPrompt(), // Default system prompt
+		systemPrompt:      "",   // Will be set by phase
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
