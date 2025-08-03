@@ -13,4 +13,3 @@ func (e *ToolError) Error() string {
 	}
 	return e.Message
 }
-

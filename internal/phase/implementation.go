@@ -18,7 +18,7 @@ func NewImplementationPhase(temperature float32) *ImplementationPhase {
 	tools := []tools.Tool{
 		impl.NewCheckSyntaxTool(),
 	}
-	
+
 	return &ImplementationPhase{
 		temperature: temperature,
 		tools:       tools,

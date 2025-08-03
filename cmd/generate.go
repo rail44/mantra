@@ -13,11 +13,11 @@ import (
 
 	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/config"
-	"github.com/rail44/mantra/internal/phase"
 	"github.com/rail44/mantra/internal/detector"
 	"github.com/rail44/mantra/internal/generator"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
+	"github.com/rail44/mantra/internal/phase"
 	"github.com/rail44/mantra/internal/tools"
 )
 
@@ -213,7 +213,6 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Ge
 		return nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
-
 	// Log which provider we're using
 	log.Info("using AI provider",
 		slog.String("provider", aiClient.GetProviderName()),
@@ -350,16 +349,16 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		// Phase 1: Context Gathering
 		log.Debug("Starting context gathering phase", slog.String("function", target.Name))
 		contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot)
-		
+
 		// Configure AI client for context gathering
 		aiClient.SetTemperature(contextPhase.GetTemperature())
 		aiClient.SetSystemPrompt(contextPhase.GetSystemPrompt())
-		
+
 		// Convert tools.Tool to ai.Tool and set them
 		contextTools := ai.ConvertToAITools(contextPhase.GetTools())
 		contextExecutor := tools.NewExecutor(contextPhase.GetTools())
 		aiClient.SetTools(contextTools, contextExecutor)
-		
+
 		// Build initial prompt for context gathering
 		contextPromptBuilder := contextPhase.GetPromptBuilder()
 		p, err := contextPromptBuilder.BuildForTarget(target, fileContent)
@@ -369,38 +368,38 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 				slog.String("error", err.Error()))
 			return nil, err
 		}
-		
+
 		// Execute context gathering
 		contextResult, err := aiClient.Generate(ctx, p)
 		if err != nil {
 			log.Error(fmt.Sprintf("[%d/%d] Context gathering failed: %s - %s", i+1, len(targets), target.Name, err.Error()))
 			continue
 		}
-		
+
 		// Log the context gathering result
-		log.Debug("Context gathering result", 
+		log.Debug("Context gathering result",
 			slog.String("function", target.Name),
 			slog.Int("length", len(contextResult)),
 			slog.String("content", contextResult))
-		
+
 		// Phase 2: Implementation
 		log.Debug("Starting implementation phase", slog.String("function", target.Name))
 		implPhase := phase.NewImplementationPhase(0.2)
-		
+
 		// Configure AI client for implementation
 		aiClient.SetTemperature(implPhase.GetTemperature())
 		aiClient.SetSystemPrompt(implPhase.GetSystemPrompt())
-		
+
 		// Convert tools and set them
 		implTools := ai.ConvertToAITools(implPhase.GetTools())
 		implExecutor := tools.NewExecutor(implPhase.GetTools())
 		aiClient.SetTools(implTools, implExecutor)
-		
+
 		// Build implementation prompt with context from phase 1
 		// For now, we'll combine the original prompt with the context gathering result
 		// This might need refinement based on testing
 		implPrompt := p + "\n\n## Additional Context from Exploration:\n" + contextResult
-		
+
 		// Generate implementation
 		implementation, genErr := aiClient.Generate(ctx, implPrompt)
 		if genErr != nil {

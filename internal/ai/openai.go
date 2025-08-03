@@ -17,13 +17,13 @@ import (
 
 // OpenAIClient implements Provider for OpenAI API and compatible services
 type OpenAIClient struct {
-	apiKey            string
-	baseURL           string
-	model             string
-	currentTemperature float32  // Current temperature to use
-	systemPrompt      string   // Current system prompt
-	httpClient        *http.Client
-	providerSpec      *ProviderSpec // OpenRouter-specific provider routing
+	apiKey             string
+	baseURL            string
+	model              string
+	currentTemperature float32 // Current temperature to use
+	systemPrompt       string  // Current system prompt
+	httpClient         *http.Client
+	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
 }
 
 // OpenAIRequest represents a chat completion request
@@ -94,17 +94,16 @@ func NewOpenAIClient(apiKey, baseURL, model string) (*OpenAIClient, error) {
 	}
 
 	return &OpenAIClient{
-		apiKey:            apiKey,
-		baseURL:           strings.TrimSuffix(baseURL, "/"),
-		model:             model,
+		apiKey:             apiKey,
+		baseURL:            strings.TrimSuffix(baseURL, "/"),
+		model:              model,
 		currentTemperature: 0.7, // Default temperature
-		systemPrompt:      "",   // Will be set by phase
+		systemPrompt:       "",  // Will be set by phase
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
 	}, nil
 }
-
 
 // SetProviderSpec sets OpenRouter provider routing specification
 func (c *OpenAIClient) SetProviderSpec(providers []string) {
@@ -130,7 +129,6 @@ func (c *OpenAIClient) Name() string {
 	// Return a simple name based on the model being used
 	return "OpenAI API"
 }
-
 
 // makeRequest makes a non-streaming request to the API
 func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*OpenAIResponse, error) {
@@ -186,7 +184,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	var toolExecutionTime time.Duration
 	var apiCallTime time.Duration
 	var toolCallCount int
-	
 
 	// Build initial messages with system prompt
 	messages := []OpenAIMessage{
@@ -281,7 +278,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		}
 
 		// Mark that we've used tools in this session
-		
 
 		// Execute tool calls in parallel
 		toolResults := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)

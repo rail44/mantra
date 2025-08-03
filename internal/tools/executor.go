@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rail44/mantra/internal/log"
 	"log/slog"
+
+	"github.com/rail44/mantra/internal/log"
 )
 
 // Executor handles tool execution with context and logging

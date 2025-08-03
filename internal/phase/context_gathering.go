@@ -20,7 +20,7 @@ func NewContextGatheringPhase(temperature float32, projectRoot string) *ContextG
 		impl.NewSearchTool(projectRoot),
 		impl.NewReadFuncTool(projectRoot),
 	}
-	
+
 	return &ContextGatheringPhase{
 		temperature: temperature,
 		tools:       tools,

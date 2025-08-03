@@ -59,12 +59,10 @@ func NewClient(clientConfig *ClientConfig) (*Client, error) {
 	}, nil
 }
 
-
 // Generate sends a prompt to the AI with tool support
 func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	return c.provider.Generate(ctx, prompt, c.tools, c.toolExecutor)
 }
-
 
 // GetProviderName returns the name of the current provider
 func (c *Client) GetProviderName() string {
