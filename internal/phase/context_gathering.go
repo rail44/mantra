@@ -48,31 +48,34 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 
 ## Available Tools
 - inspect: Get struct/interface definitions (parameter: name)
-- search: Find code patterns (parameter: pattern)
+- search: Find code patterns in current package (parameter: pattern)
 - read_func: Read function implementations (parameter: name)
 
 ## Process
-1. Look at the target function and identify all types mentioned
-2. For each type, use inspect to get its definition
-3. Use search to find methods and related code
-4. Use read_func for similar function implementations
+1. Use search() tool to find type definitions if needed
+2. Use inspect() tool to get unclear types, variables, and constants
+3. Use read_func() tool to see details of existing functions
+4. Continue above steps until you have enough context
+5. Return your findings in the format below
+6. Do not return any other text or explanations
 
 ## Output Format
-Output the actual Go code found, organized in sections:
 
+` + "```" + `markdown
 ### Types Found:
-(paste type definitions here)
+<found types>
 
 ### Functions Found:
-(paste function implementations here)
+<found functions>
 
 ### Constants/Variables Found:
-(paste constants and variables here)
+<found constants/variables>
 
 ### Additional Imports Required:
-(paste import statements here)
+<found additional imports>
+` + "```" + `
 
-Start your response directly with "### Types Found:"`
+Each section should be formatted as Go code blocks.`
 }
 
 // GetPromptBuilder returns a prompt builder configured for context gathering
