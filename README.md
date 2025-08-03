@@ -1,4 +1,4 @@
-# 🔮 Mantra
+# 🕉️ Mantra
 
 > **⚠️ Work in Progress (WIP)**: This project is under active development and is not suitable for production use. APIs, features, and generated code quality may change significantly without notice. Use at your own risk for experimentation and development purposes only.
 
