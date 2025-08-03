@@ -69,14 +69,21 @@ mantra generate main.go
 
 ## How It Works
 
-1. **Comment Detection**: Mantra finds functions marked with `// mantra:` comments
-2. **Context Analysis**: Analyzes function signatures and surrounding code
-3. **Example Learning**: Learns from previously generated implementations to maintain consistency
-4. **AI Generation**: Sends context and instructions to your AI model
-5. **Tool Usage** (Optional): When enabled with `--use-tools`, the AI can dynamically inspect code
-6. **Real-time Streaming**: Shows generation progress with live feedback
-7. **Code Generation**: Generates implementations based on your output preference
-8. **Format & Save**: Formats the code and saves to target location
+Mantra uses a two-phase approach for intelligent code generation:
+
+### Phase 1: Context Gathering (Temperature: 0.6)
+1. **Comment Detection**: Finds functions marked with `// mantra:` comments
+2. **Dynamic Exploration**: AI actively explores your codebase using tools:
+   - `search`: Finds relevant types and patterns
+   - `inspect`: Gets detailed struct/interface definitions
+   - `read_func`: Examines existing function implementations
+3. **Context Building**: Gathers all necessary type definitions, functions, and imports
+
+### Phase 2: Implementation (Temperature: 0.2)
+1. **Focused Generation**: Uses gathered context to generate precise implementations
+2. **Syntax Validation**: AI validates generated code with `check_syntax` tool
+3. **Code Writing**: Produces clean, idiomatic Go code
+4. **Format & Save**: Formats and saves to the configured output directory
 
 ### Output Modes
 
@@ -121,7 +128,7 @@ log_level = "info"
 
 **Ollama (Local):**
 ```toml
-model = "devstral"
+model = "qwen2.5-coder:32b"
 url = "http://localhost:11434/v1"
 dest = "./generated"
 ```
@@ -136,7 +143,7 @@ dest = "./generated"
 
 **deepinfra:**
 ```toml
-model = "mistralai/Devstral-Small-2507"
+model = "mistralai/mistral-large-latest"
 url = "https://api.deepinfra.com/v1/openai"
 api_key = "${DEEPINFRA_API_KEY}"
 dest = "./generated"
@@ -236,54 +243,50 @@ Mantra generates clean, idiomatic Go code with:
 - Best practices for the detected use case
 - Comprehensive implementations based on your instructions
 
-## Tool System
+## Two-Phase Architecture
 
-The tool system is now enabled by default. The AI can dynamically inspect your codebase during generation for better accuracy and understanding.
+Mantra employs a sophisticated two-phase approach to ensure accurate and context-aware code generation:
 
-### Available Tools
+### Phase 1: Context Gathering
+- **Higher Temperature (0.6)**: Encourages exploration and discovery
+- **Available Tools**:
+  - `search`: Find type definitions and patterns in the codebase
+  - `inspect`: Get detailed struct/interface information
+  - `read_func`: Examine existing function implementations
+- **Output**: Structured context with types, functions, constants, and imports
 
-1. **inspect**: Get detailed information about any Go declaration (structs, interfaces, functions, etc.)
-2. **search**: Search for declarations using pattern matching
-3. **read_func**: Read the implementation of functions and methods
-4. **check_syntax**: Validate Go syntax before generating code
+### Phase 2: Implementation
+- **Lower Temperature (0.2)**: Ensures precise, deterministic code generation
+- **Available Tools**:
+  - `check_syntax`: Validate generated Go code before returning
+- **Input**: Original prompt enhanced with discovered context
+- **Output**: Clean, working Go implementation
 
-### Benefits
-
-- **Better Understanding**: AI can explore your codebase dynamically
-- **Higher Accuracy**: AI verifies types and interfaces before using them
-- **Smarter Generation**: AI learns from existing patterns in your code
-
-### Usage
-
-```bash
-# Tools are enabled by default for accurate generation
-mantra generate main.go
-```
+This architecture ensures that the AI has all necessary information before generating code, resulting in more accurate and complete implementations.
 
 ## Performance Features
 
-### Streaming Output
-By default, Mantra shows real-time progress as AI generates your code:
-- See dots appear as tokens are generated
-- Get immediate feedback that generation is working
-- Cancel if generation seems to be going wrong
+### Phase-Based Optimization
+- **Parallel Processing**: Multiple targets can be processed concurrently
+- **Smart Caching**: Project root detection is cached per file batch
+- **Efficient Tool Usage**: Tools are loaded only for the phases that need them
 
-### Optimized Prompts
-Mantra automatically chooses the right prompt complexity:
-- **Simple functions**: Minimal prompts for faster generation
-- **Complex functions**: Detailed prompts with full context
+### Real-time Feedback
+- Progress indicators for each phase
+- Detailed timing information for performance analysis
+- Clear error messages if generation fails
 
-### Performance Analysis
-Use debug or trace log levels to identify performance bottlenecks:
+### Performance Monitoring
+Use debug or trace log levels to analyze performance:
 ```bash
-mantra generate main.go --log-level debug
+mantra generate . --log-level debug
 ```
 
-This shows:
-- Time spent parsing
-- AI model loading time
-- Generation time per function
-- Total execution time
+This reveals:
+- Context gathering time vs implementation time
+- Tool execution metrics
+- API call timings
+- Overall generation performance
 
 ## Best Practices
 
