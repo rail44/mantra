@@ -17,6 +17,7 @@ type SimpleCache struct {
 }
 
 // mantra: キャッシュから値を取得する。存在しない場合はnilを返す。有効期限が切れている場合もnilを返す。RLockを使用すること
+// 期限切れのアイテムは削除しない
 func (c *SimpleCache) Get(key string) interface{} {
 	panic("not implemented")
 }

@@ -6,20 +6,16 @@ import (
 )
 
 type Client struct {
-	provider         Provider
-	clientConfig     *ClientConfig
-	generationConfig *GenerationConfig
-	debugTiming      bool
-	tools            []Tool
-	toolExecutor     ToolExecutor
+	provider     Provider
+	clientConfig *ClientConfig
+	debugTiming  bool
+	tools        []Tool
+	toolExecutor ToolExecutor
 }
 
-func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (*Client, error) {
+func NewClient(clientConfig *ClientConfig) (*Client, error) {
 	if clientConfig == nil {
 		return nil, fmt.Errorf("clientConfig is required")
-	}
-	if generationConfig == nil {
-		return nil, fmt.Errorf("generationConfig is required")
 	}
 
 	// Determine provider based on configuration
@@ -38,7 +34,6 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 		apiKey,
 		url,
 		clientConfig.Model,
-		generationConfig.Temperature,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI client: %w", err)
@@ -50,9 +45,8 @@ func NewClient(clientConfig *ClientConfig, generationConfig *GenerationConfig) (
 	}
 
 	return &Client{
-		provider:         provider,
-		clientConfig:     clientConfig,
-		generationConfig: generationConfig,
+		provider:     provider,
+		clientConfig: clientConfig,
 	}, nil
 }
 
@@ -84,4 +78,14 @@ func (c *Client) GetProviderName() string {
 func (c *Client) SetTools(tools []Tool, executor ToolExecutor) {
 	c.tools = tools
 	c.toolExecutor = executor
+}
+
+// SetTemperature sets the temperature for generation
+func (c *Client) SetTemperature(temperature float32) {
+	c.provider.SetTemperature(temperature)
+}
+
+// SetSystemPrompt sets the system prompt
+func (c *Client) SetSystemPrompt(systemPrompt string) {
+	c.provider.SetSystemPrompt(systemPrompt)
 }

@@ -3,8 +3,6 @@ package tools
 import (
 	"fmt"
 	"sync"
-
-	"github.com/rail44/mantra/internal/ai"
 )
 
 // Registry manages available tools
@@ -47,21 +45,14 @@ func (r *Registry) Get(name string) (Tool, error) {
 	return tool, nil
 }
 
-// ListAvailable returns all available tool definitions in OpenAI format
-func (r *Registry) ListAvailable() []ai.Tool {
+// ListAvailable returns all registered tools
+func (r *Registry) ListAvailable() []Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	tools := make([]ai.Tool, 0, len(r.tools))
+	tools := make([]Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
-		tools = append(tools, ai.Tool{
-			Type: "function",
-			Function: ai.ToolFunction{
-				Name:        tool.Name(),
-				Description: tool.Description(),
-				Parameters:  tool.ParametersSchema(),
-			},
-		})
+		tools = append(tools, tool)
 	}
 
 	return tools

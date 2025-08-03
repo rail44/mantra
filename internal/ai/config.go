@@ -13,23 +13,11 @@ type ClientConfig struct {
 	Provider []string      // OpenRouter provider specification (e.g., ["Cerebras"])
 }
 
-// GenerationConfig represents the configuration for content generation
-type GenerationConfig struct {
-	Temperature float32 // Temperature for generation (0.0 to 1.0)
-}
-
 // DefaultClientConfig returns default client configuration
 func DefaultClientConfig() *ClientConfig {
 	// No defaults in the simplified version - config is required
 	return &ClientConfig{
 		Timeout: 5 * time.Minute,
-	}
-}
-
-// DefaultGenerationConfig returns default generation configuration
-func DefaultGenerationConfig() *GenerationConfig {
-	return &GenerationConfig{
-		Temperature: 0.7,
 	}
 }
 

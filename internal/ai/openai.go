@@ -17,13 +17,14 @@ import (
 
 // OpenAIClient implements Provider for OpenAI API and compatible services
 type OpenAIClient struct {
-	apiKey       string
-	baseURL      string
-	model        string
-	temperature  float32
-	httpClient   *http.Client
-	debugTiming  bool
-	providerSpec *ProviderSpec // OpenRouter-specific provider routing
+	apiKey            string
+	baseURL           string
+	model             string
+	currentTemperature float32  // Current temperature to use
+	systemPrompt      string   // Current system prompt
+	httpClient        *http.Client
+	debugTiming       bool
+	providerSpec      *ProviderSpec // OpenRouter-specific provider routing
 }
 
 // OpenAIRequest represents a chat completion request
@@ -87,17 +88,18 @@ type OpenAIStreamResponse struct {
 }
 
 // NewOpenAIClient creates a new OpenAI API client
-func NewOpenAIClient(apiKey, baseURL, model string, temperature float32) (*OpenAIClient, error) {
+func NewOpenAIClient(apiKey, baseURL, model string) (*OpenAIClient, error) {
 	// API key is optional for some providers (e.g., local Ollama)
 	if baseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
 
 	return &OpenAIClient{
-		apiKey:      apiKey,
-		baseURL:     strings.TrimSuffix(baseURL, "/"),
-		model:       model,
-		temperature: temperature,
+		apiKey:            apiKey,
+		baseURL:           strings.TrimSuffix(baseURL, "/"),
+		model:             model,
+		currentTemperature: 0.7, // Default temperature
+		systemPrompt:      ToolEnabledSystemPrompt(), // Default system prompt
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
@@ -116,6 +118,16 @@ func (c *OpenAIClient) SetProviderSpec(providers []string) {
 			Only: providers,
 		}
 	}
+}
+
+// SetTemperature sets the temperature for generation
+func (c *OpenAIClient) SetTemperature(temperature float32) {
+	c.currentTemperature = temperature
+}
+
+// SetSystemPrompt sets the system prompt
+func (c *OpenAIClient) SetSystemPrompt(systemPrompt string) {
+	c.systemPrompt = systemPrompt
 }
 
 // Name returns the provider name
@@ -207,13 +219,13 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	var toolExecutionTime time.Duration
 	var apiCallTime time.Duration
 	var toolCallCount int
+	
 
 	// Build initial messages with system prompt
-	systemPrompt := ToolEnabledSystemPrompt()
 	messages := []OpenAIMessage{
 		{
 			Role:    "system",
-			Content: systemPrompt,
+			Content: c.systemPrompt,
 		},
 		{
 			Role:    "user",
@@ -232,11 +244,13 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		// Log concise message stats
 		log.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
 
-		// Build request with tools
+		// Use the current temperature set by the phase
+		temperature := c.currentTemperature
+
 		req := OpenAIRequest{
 			Model:             c.model,
 			Messages:          messages,
-			Temperature:       c.temperature,
+			Temperature:       temperature,
 			Stream:            false,
 			Tools:             tools,
 			ToolChoice:        "auto",
@@ -298,6 +312,9 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 			}
 			return responseMsg.Content, nil
 		}
+
+		// Mark that we've used tools in this session
+		
 
 		// Execute tool calls in parallel
 		toolResults := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)

@@ -12,6 +12,12 @@ type Provider interface {
 
 	// Name returns the provider name
 	Name() string
+
+	// SetTemperature sets the temperature for generation
+	SetTemperature(temperature float32)
+
+	// SetSystemPrompt sets the system prompt
+	SetSystemPrompt(systemPrompt string)
 }
 
 // ToolExecutor executes tool calls
