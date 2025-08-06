@@ -131,3 +131,8 @@ func IsDebugEnabled() bool {
 func IsTraceEnabled() bool {
 	return currentLevel <= slog.LevelDebug-4
 }
+
+// GetCurrentLevel returns the current log level
+func GetCurrentLevel() slog.Level {
+	return currentLevel
+}

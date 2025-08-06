@@ -2,7 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
+
+	"github.com/rail44/mantra/internal/log"
 )
 
 // TargetLogger provides logging for a specific generation target
@@ -31,6 +34,30 @@ func newTargetLogger(program *Program, name string, index int) *targetLogger {
 }
 
 func (l *targetLogger) log(level, msg string, args ...any) {
+	// Check if this log level should be displayed
+	currentLevel := log.GetCurrentLevel()
+	var logLevel slog.Level
+	
+	switch level {
+	case "ERROR":
+		logLevel = slog.LevelError
+	case "WARN":
+		logLevel = slog.LevelWarn
+	case "INFO":
+		logLevel = slog.LevelInfo
+	case "DEBUG":
+		logLevel = slog.LevelDebug
+	case "TRACE":
+		logLevel = slog.LevelDebug - 4
+	default:
+		logLevel = slog.LevelInfo
+	}
+	
+	// Skip if log level is too verbose for current setting
+	if logLevel < currentLevel {
+		return
+	}
+	
 	// Format message with args if provided
 	formattedMsg := msg
 	if len(args) > 0 {

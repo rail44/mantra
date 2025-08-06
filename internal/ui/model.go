@@ -135,25 +135,8 @@ func (m *Model) View() string {
 	sections = append(sections, summary)
 	sections = append(sections, strings.Repeat("=", 60))
 	
-	// Active targets are running or pending
-	activeCount := running + pending
-	
-	// Calculate log height based on active targets
-	maxLogHeight := 8 // Maximum lines per active target
-	minLogHeight := 3 // Minimum lines per active target
-	
-	if m.height > 0 && activeCount > 0 {
-		// Distribute available height among active targets
-		availableHeight := m.height - (len(m.targets) * 2) // Reserve 2 lines per target for header
-		logHeightPerActive := availableHeight / activeCount
-		
-		if logHeightPerActive > maxLogHeight {
-			logHeightPerActive = maxLogHeight
-		} else if logHeightPerActive < minLogHeight {
-			logHeightPerActive = minLogHeight
-		}
-		maxLogHeight = logHeightPerActive
-	}
+	// Fixed height for each target (header + divider + 2 log lines = 4 lines total)
+	logHeight := 2 // 2 lines for logs, plus header and divider makes 4 lines total
 
 	for _, target := range m.targets {
 		// Status icon
@@ -178,17 +161,11 @@ func (m *Model) View() string {
 		// Expanded view for active targets
 		divider := strings.Repeat("-", 60)
 
-		// Determine log height for this target
-		logHeight := maxLogHeight
-		if target.Status == "pending" {
-			logHeight = 2 // Minimal height for pending targets
-		}
-
 		// Logs
 		target.mu.RLock()
 		logs := target.Logs
-		// Only show recent logs for active targets
-		if m.height > 0 && len(logs) > logHeight {
+		// Only show recent 2 logs
+		if len(logs) > logHeight {
 			logs = logs[len(logs)-logHeight:]
 		}
 		
@@ -207,11 +184,9 @@ func (m *Model) View() string {
 		}
 		target.mu.RUnlock()
 
-		// Pad to target height only in interactive mode for active targets
-		if m.height > 0 && target.Status == "running" {
-			for len(logLines) < logHeight {
-				logLines = append(logLines, "")
-			}
+		// Always pad to exactly 2 lines for consistent display
+		for len(logLines) < logHeight {
+			logLines = append(logLines, "")
 		}
 
 		// Build section
