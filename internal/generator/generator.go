@@ -111,15 +111,12 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 		return iStartLine > jStartLine // Descending order
 	})
 
-	// Replace each mantra function with its implementation (from bottom to top)
-	for _, target := range targetsToProcess {
-		// Always use original file content and line numbers for each replacement
-		newContent, err := g.replaceFunctionBodyWithChecksum(content, target, target.Implementation)
-		if err != nil {
-			return "", fmt.Errorf("failed to replace function %s: %w", target.Name, err)
-		}
-		content = newContent
+	// Replace all mantra functions with their implementations in a single AST pass
+	newContent, err := g.replaceAllFunctionsWithChecksum(content, targetsToProcess, fileInfo.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to replace functions: %w", err)
 	}
+	content = newContent
 
 	// Analyze required imports from all implementations
 	var requiredImports []string
@@ -136,77 +133,154 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	return content, nil
 }
 
-// replaceFunctionBodyWithChecksum replaces a function body with generated implementation and adds checksum comment
-func (g *Generator) replaceFunctionBodyWithChecksum(content string, target *parser.Target, implementation string) (string, error) {
-	// First, replace the function body
-	newContent, err := g.replaceFunctionBody(content, target, implementation)
-	if err != nil {
-		return "", err
+// replaceAllFunctionsWithChecksum replaces all target functions and adds checksums
+func (g *Generator) replaceAllFunctionsWithChecksum(content string, targets []*parser.Target, filePath string) (string, error) {
+	if len(targets) == 0 {
+		return content, nil
 	}
 
-	// Then add checksum comment
-	return g.addChecksumComment(newContent, target)
-}
-
-// replaceFunctionBody replaces a function body with generated implementation using AST manipulation.
-// It parses both the original content and the implementation with the same FileSet to ensure
-// consistent position information and avoid formatting issues.
-func (g *Generator) replaceFunctionBody(content string, target *parser.Target, implementation string) (string, error) {
-	// Parse the original content as AST
+	// Parse the original content as AST once
 	fset := token.NewFileSet()
-	node, err := goparser.ParseFile(fset, target.FilePath, content, goparser.ParseComments)
+	node, err := goparser.ParseFile(fset, filePath, content, goparser.ParseComments)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse file content: %w", err)
 	}
 
-	// Parse the implementation as a function body
-	cleanedImpl := cleanCode(implementation)
-	implBody, err := g.parseImplementationAsBlockWithFileSet(cleanedImpl, fset)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse implementation: %w", err)
+	// targetData holds all data needed for replacing a target function
+	type targetData struct {
+		sourceTarget *parser.Target // Original source file's target
+		implBody     *ast.BlockStmt
+		checksum     string
 	}
 
-	// Find and replace the target function in the AST
-	var targetFound bool
+	// Prepare implementation bodies and checksums for all targets
+	sourceTargetData := make(map[string]*targetData)
+
+	for _, target := range targets {
+		// Parse the implementation as a function body
+		cleanedImpl := cleanCode(target.Implementation)
+		implBody, err := g.parseImplementationAsBlockWithFileSet(cleanedImpl, fset)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse implementation for %s: %w", target.Name, err)
+		}
+
+		// Calculate checksum for the comment
+		cs := checksum.Calculate(target)
+		checksumComment := checksum.FormatComment(cs)
+
+		// Create a unique key for the target
+		key := g.getTargetKey(target)
+		sourceTargetData[key] = &targetData{
+			sourceTarget: target,
+			implBody:     implBody,
+			checksum:     checksumComment,
+		}
+	}
+
+	// Find and update all target functions in the AST in a single pass
+	processedCount := 0
 	ast.Inspect(node, func(n ast.Node) bool {
 		if funcDecl, ok := n.(*ast.FuncDecl); ok {
-			// Check if this is our target function (compare by name and receiver)
-			if funcDecl.Name.Name == target.Name {
-				// For methods, also check receiver type matches
-				if target.Receiver != nil && funcDecl.Recv != nil {
-					if len(funcDecl.Recv.List) > 0 {
-						receiverType := analysis.ExtractTypeString(funcDecl.Recv.List[0].Type)
-						if receiverType == target.Receiver.Type {
-							targetFound = true
+			// Try to match this function with any of our targets
+			for key, data := range sourceTargetData {
+				if g.isTargetFunction(funcDecl, data.sourceTarget) {
+					processedCount++
+
+					// Replace function body with the new implementation
+					funcDecl.Body = data.implBody
+
+					// Remove old doc from file's Comments list if exists
+					if funcDecl.Doc != nil {
+						for i, cg := range node.Comments {
+							if cg == funcDecl.Doc {
+								node.Comments = append(node.Comments[:i], node.Comments[i+1:]...)
+								break
+							}
 						}
 					}
-				} else if target.Receiver == nil && funcDecl.Recv == nil {
-					// Both are functions (no receiver)
-					targetFound = true
-				}
 
-				if targetFound {
-					// Replace function body with the new implementation
-					funcDecl.Body = implBody
-					return false // Stop traversing this branch
+					// Build new comments: original + checksum
+					var comments []*ast.Comment
+					pos := funcDecl.Pos() - 1
+
+					// Copy original comments from source
+					if data.sourceTarget.FuncDecl.Doc != nil {
+						for i, c := range data.sourceTarget.FuncDecl.Doc.List {
+							comments = append(comments, &ast.Comment{
+								Slash: pos - token.Pos(len(data.sourceTarget.FuncDecl.Doc.List)-i),
+								Text:  c.Text,
+							})
+						}
+					}
+
+					// Add checksum
+					comments = append(comments, &ast.Comment{
+						Slash: pos,
+						Text:  data.checksum,
+					})
+
+					// Create and set new doc
+					newDoc := &ast.CommentGroup{List: comments}
+					funcDecl.Doc = newDoc
+					node.Comments = append(node.Comments, newDoc)
+
+					// Remove from map to avoid processing again
+					delete(sourceTargetData, key)
+					break
 				}
 			}
 		}
 		return true
 	})
 
-	if !targetFound {
-		return "", fmt.Errorf("target function %s not found in AST", target.Name)
+	if processedCount != len(targets) {
+		// List unprocessed functions for better debugging
+		unprocessed := make([]string, 0, len(sourceTargetData))
+		for key := range sourceTargetData {
+			unprocessed = append(unprocessed, key)
+		}
+		return "", fmt.Errorf("expected to process %d functions but processed %d (unprocessed: %v)",
+			len(targets), processedCount, unprocessed)
 	}
 
-	// Format the modified AST back to source code
+	// Comments have been added to node.Comments during processing
+
+	// Format the modified AST back to source code once
 	var buf strings.Builder
 	if err := format.Node(&buf, fset, node); err != nil {
 		return "", fmt.Errorf("failed to format modified AST: %w", err)
 	}
 
-	// Don't apply formatting here - let the final stage handle it
 	return buf.String(), nil
+}
+
+// getTargetKey creates a unique key for a target function
+func (g *Generator) getTargetKey(target *parser.Target) string {
+	if target.Receiver != nil {
+		return fmt.Sprintf("%s.%s", target.Receiver.Type, target.Name)
+	}
+	return target.Name
+}
+
+// isTargetFunction checks if the given function declaration matches the target
+func (g *Generator) isTargetFunction(funcDecl *ast.FuncDecl, target *parser.Target) bool {
+	// Check function name
+	if funcDecl.Name.Name != target.Name {
+		return false
+	}
+
+	// Check receiver for methods
+	if target.Receiver != nil {
+		if funcDecl.Recv == nil || len(funcDecl.Recv.List) == 0 {
+			return false
+		}
+
+		receiverType := analysis.ExtractTypeString(funcDecl.Recv.List[0].Type)
+		return receiverType == target.Receiver.Type
+	}
+
+	// For functions (no receiver), ensure funcDecl also has no receiver
+	return funcDecl.Recv == nil
 }
 
 // parseImplementationAsBlockWithFileSet parses implementation code as a block statement.
@@ -314,53 +388,4 @@ func cleanCode(response string) string {
 	}
 
 	return response
-}
-
-// addChecksumComment adds a checksum comment before the generated function
-func (g *Generator) addChecksumComment(content string, target *parser.Target) (string, error) {
-	lines := strings.Split(content, "\n")
-
-	// Calculate checksum
-	cs := checksum.Calculate(target)
-	checksumComment := checksum.FormatComment(cs)
-
-	// Find the function declaration
-	var functionFound bool
-	var insertIndex int
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Look for the function declaration
-		if strings.HasPrefix(trimmed, "func ") && strings.Contains(line, target.Name) {
-			// Verify this is the correct function (not just a similar name)
-			if target.Receiver != nil {
-				// For methods, check receiver is present
-				if strings.Contains(line, target.Receiver.Name) || strings.Contains(line, target.Receiver.Type) {
-					functionFound = true
-					insertIndex = i
-					break
-				}
-			} else {
-				// For functions, ensure no receiver
-				if !strings.Contains(line, ") "+target.Name) {
-					functionFound = true
-					insertIndex = i
-					break
-				}
-			}
-		}
-	}
-
-	if !functionFound {
-		return "", fmt.Errorf("could not find function %s in generated content", target.Name)
-	}
-
-	// Insert checksum comment before function
-	newLines := make([]string, 0, len(lines)+1)
-	newLines = append(newLines, lines[:insertIndex]...)
-	newLines = append(newLines, checksumComment)
-	newLines = append(newLines, lines[insertIndex:]...)
-
-	return strings.Join(newLines, "\n"), nil
 }

@@ -1,7 +1,6 @@
 package complex
 
 import (
-	"context"
 	"sync"
 	"time"
 )
@@ -19,8 +18,7 @@ type CacheService struct {
 
 // mantra: キーに対応する値をキャッシュから取得する
 // 存在しない場合や期限切れの場合はエラーを返す
-// destはポインタである必要がある
-func (c *CacheService) Get(key string, dest interface{}) error {
+func (c *CacheService) Get(key string) interface{} {
 	panic("not implemented")
 }
 
@@ -32,6 +30,6 @@ func (c *CacheService) Set(key string, value interface{}, ttl time.Duration) err
 
 // mantra: キーをキャッシュから削除する
 // 存在しないキーの場合はエラーを返さない
-func (c *CacheService) Delete(ctx context.Context, key string) error {
+func (c *CacheService) Delete(key string) error {
 	panic("not implemented")
 }
