@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // TargetView represents the view state for a single target
@@ -102,18 +101,6 @@ func (m *Model) View() string {
 		return "Initializing..."
 	}
 
-	// Styles
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("86"))
-
-	dividerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("244"))
-		
-	summaryStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("214")).
-		Bold(true)
-
 	var sections []string
 	
 	// Count targets by status
@@ -135,7 +122,7 @@ func (m *Model) View() string {
 	}
 	
 	// Add summary header
-	summary := fmt.Sprintf("📊 Progress: %d/%d completed", completed, len(m.targets))
+	summary := fmt.Sprintf("Progress: %d/%d completed", completed, len(m.targets))
 	if running > 0 {
 		summary += fmt.Sprintf(", %d running", running)
 	}
@@ -145,8 +132,8 @@ func (m *Model) View() string {
 	if failed > 0 {
 		summary += fmt.Sprintf(", %d failed", failed)
 	}
-	sections = append(sections, summaryStyle.Render(summary))
-	sections = append(sections, dividerStyle.Render(strings.Repeat("═", 60)))
+	sections = append(sections, summary)
+	sections = append(sections, strings.Repeat("=", 60))
 	
 	// Active targets are running or pending
 	activeCount := running + pending
@@ -184,12 +171,12 @@ func (m *Model) View() string {
 		
 		// For collapsed targets, only show header
 		if isCollapsed && m.height > 0 { // Only collapse in interactive mode
-			sections = append(sections, headerStyle.Render(header))
+			sections = append(sections, header)
 			continue
 		}
 
 		// Expanded view for active targets
-		divider := strings.Repeat("─", 60)
+		divider := strings.Repeat("-", 60)
 
 		// Determine log height for this target
 		logHeight := maxLogHeight
@@ -228,8 +215,8 @@ func (m *Model) View() string {
 		}
 
 		// Build section
-		section := headerStyle.Render(header) + "\n" +
-			dividerStyle.Render(divider) + "\n" +
+		section := header + "\n" +
+			divider + "\n" +
 			strings.Join(logLines, "\n")
 
 		sections = append(sections, section)
@@ -241,15 +228,15 @@ func (m *Model) View() string {
 func (m *Model) getStatusIcon(status string) string {
 	switch status {
 	case "pending":
-		return "⏳"
+		return "[PENDING]"
 	case "running":
-		return "🔄"
+		return "[RUNNING]"
 	case "completed":
-		return "✅"
+		return "[DONE]"
 	case "failed":
-		return "❌"
+		return "[FAILED]"
 	default:
-		return "❓"
+		return "[UNKNOWN]"
 	}
 }
 
