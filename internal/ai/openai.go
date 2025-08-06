@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -24,6 +25,7 @@ type OpenAIClient struct {
 	systemPrompt       string  // Current system prompt
 	httpClient         *http.Client
 	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
+	logger             log.Logger
 }
 
 // OpenAIRequest represents a chat completion request
@@ -87,10 +89,14 @@ type OpenAIStreamResponse struct {
 }
 
 // NewOpenAIClient creates a new OpenAI API client
-func NewOpenAIClient(apiKey, baseURL, model string) (*OpenAIClient, error) {
+func NewOpenAIClient(apiKey, baseURL, model string, logger log.Logger) (*OpenAIClient, error) {
 	// API key is optional for some providers (e.g., local Ollama)
 	if baseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
+	}
+	
+	if logger == nil {
+		logger = log.Default()
 	}
 
 	return &OpenAIClient{
@@ -102,6 +108,7 @@ func NewOpenAIClient(apiKey, baseURL, model string) (*OpenAIClient, error) {
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
+		logger: logger,
 	}, nil
 }
 
@@ -138,12 +145,12 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	}
 
 	// Log request summary instead of full JSON
-	log.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
+	c.logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
 		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
 	// Debug: Log request with provider info
 	if c.providerSpec != nil {
-		log.Debug("sending request with provider spec", "provider_spec", fmt.Sprintf("%+v", c.providerSpec))
+		c.logger.Debug("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
@@ -177,7 +184,7 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 
 	// Log provider info if available (OpenRouter)
 	if result.Provider != "" {
-		log.Debug("OpenRouter provider", "provider", result.Provider)
+		c.logger.Debug("OpenRouter provider", "provider", result.Provider)
 	}
 
 	return &result, nil
@@ -207,11 +214,11 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 	for round := 0; round < maxRounds; round++ {
 		if round > 0 {
-			log.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
+			c.logger.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
 		}
 
 		// Log concise message stats
-		log.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
+		c.logger.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
 
 		// Use the current temperature set by the phase
 		temperature := c.currentTemperature
@@ -257,27 +264,27 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		messages = append(messages, cleanMsg)
 
 		// Debug: Log response
-		log.Debug(fmt.Sprintf("[API] Response: %s (content=%d chars, tools=%d)",
+		c.logger.Debug(fmt.Sprintf("[API] Response: %s (content=%d chars, tools=%d)",
 			responseMsg.Role, len(responseMsg.Content), len(responseMsg.ToolCalls)))
 		if round >= 5 && len(responseMsg.ToolCalls) > 0 {
-			log.Warn("many tool calls made - model may be stuck", "round", round+1)
+			c.logger.Warn("many tool calls made - model may be stuck", "round", round+1)
 		}
 
 		// Check if we have tool calls
 		if len(responseMsg.ToolCalls) == 0 {
 			// No tool calls, return the content
 			totalTime := time.Since(overallStart)
-			log.Debug("tool usage completed", "rounds", round+1)
-			log.Debug(fmt.Sprintf("[PERF] Total: %s (API=%.1f%%, tools=%.1f%%, %d tool calls)",
+			c.logger.Debug("tool usage completed", "rounds", round+1)
+			c.logger.Debug(fmt.Sprintf("[PERF] Total: %s (API=%.1f%%, tools=%.1f%%, %d tool calls)",
 				totalTime.Round(time.Millisecond),
 				float64(apiCallTime)/float64(totalTime)*100,
 				float64(toolExecutionTime)/float64(totalTime)*100,
 				toolCallCount))
 			// Average tool time is shown in main performance log if relevant
-			log.Debug("final response", "content_length", len(responseMsg.Content))
+			c.logger.Debug("final response", "content_length", len(responseMsg.Content))
 			// Only log content at TRACE level if it's reasonably sized
 			if log.IsTraceEnabled() && len(responseMsg.Content) < 500 {
-				log.Trace(fmt.Sprintf("[CONTENT] Response: %s", responseMsg.Content))
+				c.logger.Trace(fmt.Sprintf("[CONTENT] Response: %s", responseMsg.Content))
 			}
 			return responseMsg.Content, nil
 		}
@@ -337,7 +344,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 			}
 
 			// Log tool execution
-			log.Debug(fmt.Sprintf("[TOOL] Calling: %s(%v)", tc.Function.Name, params))
+			c.logger.Debug(fmt.Sprintf("[TOOL] Calling: %s(%v)", tc.Function.Name, params))
 
 			// Execute tool
 			toolStart := time.Now()
@@ -380,7 +387,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				if len(resultStr) > 200 {
 					resultStr = resultStr[:200] + "..."
 				}
-				log.Trace(fmt.Sprintf("[TOOL] Result %s: %s", tc.Function.Name, resultStr))
+				c.logger.Trace(fmt.Sprintf("[TOOL] Result %s: %s", tc.Function.Name, resultStr))
 			}
 
 			results <- toolResult{

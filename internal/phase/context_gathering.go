@@ -1,6 +1,7 @@
 package phase
 
 import (
+	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 	"github.com/rail44/mantra/internal/tools/impl"
@@ -10,10 +11,15 @@ import (
 type ContextGatheringPhase struct {
 	temperature float32
 	tools       []tools.Tool
+	logger      log.Logger
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
-func NewContextGatheringPhase(temperature float32, projectRoot string) *ContextGatheringPhase {
+func NewContextGatheringPhase(temperature float32, projectRoot string, logger log.Logger) *ContextGatheringPhase {
+	if logger == nil {
+		logger = log.Default()
+	}
+	
 	// Initialize tools for context gathering
 	tools := []tools.Tool{
 		impl.NewInspectTool(),
@@ -24,6 +30,7 @@ func NewContextGatheringPhase(temperature float32, projectRoot string) *ContextG
 	return &ContextGatheringPhase{
 		temperature: temperature,
 		tools:       tools,
+		logger:      logger,
 	}
 }
 
@@ -80,7 +87,7 @@ Each section should be formatted as Go code blocks.`
 
 // GetPromptBuilder returns a prompt builder configured for context gathering
 func (p *ContextGatheringPhase) GetPromptBuilder() *prompt.Builder {
-	builder := prompt.NewBuilder()
+	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true)
 	return builder
 }

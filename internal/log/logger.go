@@ -26,6 +26,9 @@ var (
 
 	// Current log level
 	currentLevel slog.Level
+	
+	// Silent mode - disables all global logging
+	silentMode bool
 )
 
 func init() {

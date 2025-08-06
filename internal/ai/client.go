@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/rail44/mantra/internal/log"
 )
 
 // ClientConfig represents the configuration for connecting to an AI provider
@@ -20,11 +22,17 @@ type Client struct {
 	clientConfig *ClientConfig
 	tools        []Tool
 	toolExecutor ToolExecutor
+	logger       log.Logger
 }
 
-func NewClient(clientConfig *ClientConfig) (*Client, error) {
+func NewClient(clientConfig *ClientConfig, logger log.Logger) (*Client, error) {
 	if clientConfig == nil {
 		return nil, fmt.Errorf("clientConfig is required")
+	}
+
+	// Use default logger if not provided
+	if logger == nil {
+		logger = log.Default()
 	}
 
 	// Determine provider based on configuration
@@ -43,6 +51,7 @@ func NewClient(clientConfig *ClientConfig) (*Client, error) {
 		apiKey,
 		url,
 		clientConfig.Model,
+		logger,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI client: %w", err)
@@ -56,6 +65,7 @@ func NewClient(clientConfig *ClientConfig) (*Client, error) {
 	return &Client{
 		provider:     provider,
 		clientConfig: clientConfig,
+		logger:       logger,
 	}, nil
 }
 
@@ -83,4 +93,18 @@ func (c *Client) SetTemperature(temperature float32) {
 // SetSystemPrompt sets the system prompt
 func (c *Client) SetSystemPrompt(systemPrompt string) {
 	c.provider.SetSystemPrompt(systemPrompt)
+}
+
+// SetLogger sets the logger for the client
+func (c *Client) SetLogger(logger log.Logger) {
+	c.logger = logger
+	// Also update provider's logger if it's an OpenAIClient
+	if openaiClient, ok := c.provider.(*OpenAIClient); ok {
+		openaiClient.logger = logger
+	}
+}
+
+// GetConfig returns the client configuration
+func (c *Client) GetConfig() *ClientConfig {
+	return c.clientConfig
 }

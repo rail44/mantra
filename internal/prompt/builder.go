@@ -14,11 +14,17 @@ import (
 type Builder struct {
 	useTools          bool
 	additionalContext string
+	logger            log.Logger
 }
 
 // NewBuilder creates a new prompt builder
-func NewBuilder() *Builder {
-	return &Builder{}
+func NewBuilder(logger log.Logger) *Builder {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return &Builder{
+		logger: logger,
+	}
 }
 
 // WithAdditionalContext sets additional context to be included in the prompt
@@ -37,7 +43,7 @@ func (b *Builder) BuildForTarget(target *parser.Target, fileContent string) (str
 	// Use function-focused context extraction for reliable type information
 	ctx, err := context.ExtractFunctionContext(target.FilePath, target)
 	if err != nil {
-		log.Error("context extraction failed", slog.String("error", err.Error()))
+		b.logger.Error("context extraction failed", slog.String("error", err.Error()))
 		return "", fmt.Errorf("context extraction failed: %w", err)
 	}
 
@@ -87,12 +93,12 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	fullPrompt := prompt.String()
 
 	// Log the generated prompt at trace level for debugging
-	log.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d imports",
+	b.logger.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d imports",
 		target.Name, len(fullPrompt), len(ctx.Types), len(ctx.Imports)))
 
 	// Log imports separately for debugging
 	if len(ctx.Imports) > 0 {
-		log.Trace(fmt.Sprintf("         imports: %v", ctx.Imports))
+		b.logger.Trace(fmt.Sprintf("         imports: %v", ctx.Imports))
 	}
 
 	return fullPrompt

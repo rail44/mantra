@@ -14,10 +14,15 @@ import (
 type Executor struct {
 	tools   map[string]Tool
 	timeout time.Duration
+	logger  log.Logger
 }
 
 // NewExecutor creates a new tool executor
-func NewExecutor(tools []Tool) *Executor {
+func NewExecutor(tools []Tool, logger log.Logger) *Executor {
+	if logger == nil {
+		logger = log.Default()
+	}
+	
 	toolMap := make(map[string]Tool)
 	for _, tool := range tools {
 		toolMap[tool.Name()] = tool
@@ -25,6 +30,7 @@ func NewExecutor(tools []Tool) *Executor {
 	return &Executor{
 		tools:   toolMap,
 		timeout: 30 * time.Second, // Default timeout
+		logger:  logger,
 	}
 }
 
@@ -44,7 +50,7 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 	defer cancel()
 
 	// Log the execution
-	log.Debug(fmt.Sprintf("[TOOL] Execute: %s", toolName),
+	e.logger.Debug(fmt.Sprintf("[TOOL] Execute: %s", toolName),
 		slog.Any("params", params))
 
 	// Execute the tool
@@ -54,14 +60,14 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 
 	// Log the result
 	if err != nil {
-		log.Error("tool execution failed",
+		e.logger.Error("tool execution failed",
 			slog.String("tool", toolName),
 			slog.Duration("duration", duration),
 			slog.String("error", err.Error()))
 		return nil, err
 	}
 
-	log.Debug(fmt.Sprintf("[TOOL] Complete: %s (%s)", toolName, duration.Round(time.Millisecond)))
+	e.logger.Debug(fmt.Sprintf("[TOOL] Complete: %s (%s)", toolName, duration.Round(time.Millisecond)))
 
 	return result, nil
 }

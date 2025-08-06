@@ -22,6 +22,7 @@ import (
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/phase"
 	"github.com/rail44/mantra/internal/tools"
+	"github.com/rail44/mantra/internal/ui"
 )
 
 var generateCmd = &cobra.Command{
@@ -211,7 +212,7 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Ge
 		clientConfig.Provider = cfg.OpenRouter.Providers
 	}
 
-	aiClient, err := ai.NewClient(clientConfig)
+	aiClient, err := ai.NewClient(clientConfig, log.Default())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
@@ -265,10 +266,11 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 			continue
 		}
 
-		log.Info("processing file",
-			slog.String("file", filepath.Base(filePath)),
-			slog.Int("targets_to_generate", targetsNeedingGeneration),
-			slog.Int("total_targets", len(result.Statuses)))
+		// Don't log here as TUI will handle display
+		// log.Info("processing file",
+		// 	slog.String("file", filepath.Base(filePath)),
+		// 	slog.Int("targets_to_generate", targetsNeedingGeneration),
+		// 	slog.Int("total_targets", len(result.Statuses)))
 
 		// Read file content
 		content, err := os.ReadFile(filePath)
@@ -324,14 +326,14 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 }
 
 // configureAIClientForPhase configures the AI client with phase-specific settings
-func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase) {
+func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Logger) {
 	aiClient.SetTemperature(p.GetTemperature())
 	aiClient.SetSystemPrompt(p.GetSystemPrompt())
 
 	// Get tools once and convert/create executor
 	phaseTools := p.GetTools()
 	aiTools := ai.ConvertToAITools(phaseTools)
-	executor := tools.NewExecutor(phaseTools)
+	executor := tools.NewExecutor(phaseTools, logger)
 	aiClient.SetTools(aiTools, executor)
 }
 
@@ -366,8 +368,8 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 
 	// Phase 1: Context Gathering
 	log.Debug("starting context gathering phase", logAttrs...)
-	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot)
-	configureAIClientForPhase(aiClient, contextPhase)
+	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot, log.Default())
+	configureAIClientForPhase(aiClient, contextPhase, log.Default())
 
 	// Build initial prompt
 	contextPromptBuilder := contextPhase.GetPromptBuilder()
@@ -393,8 +395,8 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 
 	// Phase 2: Implementation
 	log.Debug("starting implementation phase", logAttrs...)
-	implPhase := phase.NewImplementationPhase(0.2)
-	configureAIClientForPhase(aiClient, implPhase)
+	implPhase := phase.NewImplementationPhase(0.2, log.Default())
+	configureAIClientForPhase(aiClient, implPhase, log.Default())
 
 	// Build implementation prompt with context from phase 1
 	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResult)
@@ -428,41 +430,139 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 	// Get project root from the first target's file path
 	projectRoot := findProjectRoot(filepath.Dir(targets[0].FilePath))
 
+	// Create TUI program for parallel execution
+	uiProgram := ui.NewProgram()
+
 	// Thread-safe map for collecting results
 	var mu sync.Mutex
 	implementations := make(map[string]string)
+	
+	// Channel to signal completion
+	done := make(chan struct{})
 
-	// Use errgroup with limited concurrency (max 16)
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(16)
+	// Start generation in background
+	go func() {
+		// Use errgroup with limited concurrency (max 16)
+		g, ctx := errgroup.WithContext(ctx)
+		g.SetLimit(16)
 
-	// Process each target in parallel
-	for i, target := range targets {
-		// Capture loop variables
-		index := i + 1
-		total := len(targets)
-		t := target
+		// Process each target in parallel
+		for i, target := range targets {
+			// Capture loop variables
+			index := i + 1
+			total := len(targets)
+			t := target
 
-		g.Go(func() error {
-			impl, err := generateImplementationForTarget(ctx, t, fileContent, aiClient, projectRoot, index, total)
-			if err != nil {
-				// Error already logged in generateImplementationForTarget
-				return nil // Continue processing other targets
-			}
+			g.Go(func() error {
+				impl, err := generateImplementationForTargetWithUI(ctx, t, fileContent, aiClient, projectRoot, index, total, uiProgram)
+				if err != nil {
+					// Error already logged in generateImplementationForTarget
+					return nil // Continue processing other targets
+				}
 
-			if impl != "" {
-				mu.Lock()
-				implementations[t.Name] = impl
-				mu.Unlock()
-			}
-			return nil
-		})
-	}
+				if impl != "" {
+					mu.Lock()
+					implementations[t.Name] = impl
+					mu.Unlock()
+				}
+				
+				return nil
+			})
+		}
 
-	// Wait for all goroutines to complete
-	if err := g.Wait(); err != nil {
-		return nil, err
+		// Wait for all goroutines to complete
+		g.Wait()
+		
+		// Signal completion
+		close(done)
+	}()
+	
+	// Run the TUI program in the main thread (blocks until quit)
+	go func() {
+		// Wait for completion
+		<-done
+		// Give time for final render
+		time.Sleep(100 * time.Millisecond)
+		// Stop the UI
+		uiProgram.Quit()
+	}()
+	
+	// Start the TUI (this blocks until Quit is called)
+	if err := uiProgram.Start(); err != nil {
+		// If TUI fails, still wait for generation to complete
+		<-done
 	}
 
 	return implementations, nil
+}
+
+// generateImplementationForTargetWithUI generates implementation with TUI logger
+func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) (string, error) {
+	targetStart := time.Now()
+	
+	// Create a target-specific logger
+	logger := uiProgram.CreateTargetLogger(target.Name, targetNum, totalTargets)
+	
+	// Create a new AI client with the target-specific logger
+	// This avoids concurrent access issues with shared client
+	aiClient, err := ai.NewClient(baseAIClient.GetConfig(), logger)
+	if err != nil {
+		logger.Error("Failed to create AI client", "error", err.Error())
+		uiProgram.Fail(targetNum)
+		return "", err
+	}
+	
+	logger.Info("Starting generation")
+
+	// Phase 1: Context Gathering
+	logger.Debug("Starting context gathering phase")
+	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot, logger)
+	configureAIClientForPhase(aiClient, contextPhase, logger)
+
+	// Build initial prompt
+	contextPromptBuilder := contextPhase.GetPromptBuilder()
+	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
+	if err != nil {
+		logger.Error("Failed to build prompt", "error", err.Error())
+		uiProgram.Fail(targetNum)
+		return "", err
+	}
+
+	// Execute context gathering
+	contextResult, err := aiClient.Generate(ctx, initialPrompt)
+	if err != nil {
+		logger.Error("Context gathering failed", "error", err.Error())
+		uiProgram.Fail(targetNum)
+		return "", err
+	}
+
+	logger.Debug("Context gathering result", "length", len(contextResult))
+
+	// Phase 2: Implementation
+	logger.Debug("Starting implementation phase")
+	implPhase := phase.NewImplementationPhase(0.2, logger)
+	configureAIClientForPhase(aiClient, implPhase, logger)
+
+	// Build implementation prompt with context from phase 1
+	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResult)
+	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
+	if err != nil {
+		logger.Error("Failed to build implementation prompt", "error", err.Error())
+		uiProgram.Fail(targetNum)
+		return "", err
+	}
+
+	// Generate implementation
+	implementation, err := aiClient.Generate(ctx, implPrompt)
+	if err != nil {
+		logger.Error("Implementation failed", "error", err.Error())
+		uiProgram.Fail(targetNum)
+		return "", err
+	}
+
+	duration := time.Since(targetStart).Round(time.Millisecond)
+	logger.Info("Generation completed", "duration", duration)
+	uiProgram.Complete(targetNum)
+	
+	return implementation, nil
 }

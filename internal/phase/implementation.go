@@ -1,6 +1,7 @@
 package phase
 
 import (
+	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 	"github.com/rail44/mantra/internal/tools/impl"
@@ -10,10 +11,15 @@ import (
 type ImplementationPhase struct {
 	temperature float32
 	tools       []tools.Tool
+	logger      log.Logger
 }
 
 // NewImplementationPhase creates a new implementation phase
-func NewImplementationPhase(temperature float32) *ImplementationPhase {
+func NewImplementationPhase(temperature float32, logger log.Logger) *ImplementationPhase {
+	if logger == nil {
+		logger = log.Default()
+	}
+	
 	// Initialize tools for implementation/validation
 	tools := []tools.Tool{
 		impl.NewCheckSyntaxTool(),
@@ -22,6 +28,7 @@ func NewImplementationPhase(temperature float32) *ImplementationPhase {
 	return &ImplementationPhase{
 		temperature: temperature,
 		tools:       tools,
+		logger:      logger,
 	}
 }
 
@@ -60,14 +67,14 @@ No explanations, no markdown code blocks, no comments - just pure Go code that d
 
 // GetPromptBuilder returns a prompt builder configured for implementation
 func (p *ImplementationPhase) GetPromptBuilder() *prompt.Builder {
-	builder := prompt.NewBuilder()
+	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true) // Still uses tools (check_syntax)
 	return builder
 }
 
 // GetPromptBuilderWithContext returns a prompt builder with additional context from previous phase
 func (p *ImplementationPhase) GetPromptBuilderWithContext(contextResult string) *prompt.Builder {
-	builder := prompt.NewBuilder()
+	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true)
 
 	// Format the context result appropriately
