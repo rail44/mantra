@@ -110,9 +110,6 @@ func (m *Model) View() string {
 	dividerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("244"))
 		
-	collapsedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240"))
-		
 	summaryStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("214")).
 		Bold(true)
@@ -185,27 +182,9 @@ func (m *Model) View() string {
 		// Check if this target should be collapsed
 		isCollapsed := target.Status == "completed" || target.Status == "failed"
 		
-		// For collapsed targets, only show header with summary
+		// For collapsed targets, only show header
 		if isCollapsed && m.height > 0 { // Only collapse in interactive mode
-			target.mu.RLock()
-			logCount := len(target.Logs)
-			lastMessage := ""
-			if logCount > 0 {
-				lastLog := target.Logs[logCount-1]
-				if len(lastLog.Message) > 50 {
-					lastMessage = lastLog.Message[:47] + "..."
-				} else {
-					lastMessage = lastLog.Message
-				}
-			}
-			target.mu.RUnlock()
-			
-			// Collapsed view: header + summary on same line
-			section := headerStyle.Render(header)
-			if lastMessage != "" {
-				section += collapsedStyle.Render(fmt.Sprintf(" → %s", lastMessage))
-			}
-			sections = append(sections, section)
+			sections = append(sections, headerStyle.Render(header))
 			continue
 		}
 
