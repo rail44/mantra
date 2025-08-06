@@ -95,15 +95,6 @@ func (c *Client) SetSystemPrompt(systemPrompt string) {
 	c.provider.SetSystemPrompt(systemPrompt)
 }
 
-// SetLogger sets the logger for the client
-func (c *Client) SetLogger(logger log.Logger) {
-	c.logger = logger
-	// Also update provider's logger if it's an OpenAIClient
-	if openaiClient, ok := c.provider.(*OpenAIClient); ok {
-		openaiClient.logger = logger
-	}
-}
-
 // GetConfig returns the client configuration
 func (c *Client) GetConfig() *ClientConfig {
 	return c.clientConfig

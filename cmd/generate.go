@@ -266,11 +266,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 			continue
 		}
 
-		// Don't log here as TUI will handle display
-		// log.Info("processing file",
-		// 	slog.String("file", filepath.Base(filePath)),
-		// 	slog.Int("targets_to_generate", targetsNeedingGeneration),
-		// 	slog.Int("total_targets", len(result.Statuses)))
+		// TUI will handle display for parallel generation
 
 		// Read file content
 		content, err := os.ReadFile(filePath)
@@ -477,20 +473,16 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		close(done)
 	}()
 	
-	// Run the TUI program in the main thread (blocks until quit)
+	// Stop TUI after completion
 	go func() {
-		// Wait for completion
 		<-done
-		// Give time for final render
-		time.Sleep(100 * time.Millisecond)
-		// Stop the UI
+		time.Sleep(100 * time.Millisecond) // Allow final render
 		uiProgram.Quit()
 	}()
 	
-	// Start the TUI (this blocks until Quit is called)
+	// Run TUI (blocks until Quit is called)
 	if err := uiProgram.Start(); err != nil {
-		// If TUI fails, still wait for generation to complete
-		<-done
+		<-done // Ensure generation completes even if TUI fails
 	}
 
 	return implementations, nil

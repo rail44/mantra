@@ -55,7 +55,6 @@ func (m *Model) addTarget(name string, index, total int) {
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
-	// Initial render to show TUI is active
 	// Refresh display periodically
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -120,7 +119,7 @@ func (m *Model) View() string {
 
 	var sections []string
 	
-	// Add summary header
+	// Count targets by status
 	completed := 0
 	failed := 0
 	running := 0
@@ -138,6 +137,7 @@ func (m *Model) View() string {
 		}
 	}
 	
+	// Add summary header
 	summary := fmt.Sprintf("📊 Progress: %d/%d completed", completed, len(m.targets))
 	if running > 0 {
 		summary += fmt.Sprintf(", %d running", running)
@@ -151,13 +151,8 @@ func (m *Model) View() string {
 	sections = append(sections, summaryStyle.Render(summary))
 	sections = append(sections, dividerStyle.Render(strings.Repeat("═", 60)))
 	
-	// Count active (running/pending) targets
-	activeCount := 0
-	for _, target := range m.targets {
-		if target.Status == "running" || target.Status == "pending" {
-			activeCount++
-		}
-	}
+	// Active targets are running or pending
+	activeCount := running + pending
 	
 	// Calculate log height based on active targets
 	maxLogHeight := 8 // Maximum lines per active target
