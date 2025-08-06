@@ -6,11 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/config"
@@ -409,21 +411,47 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 
 // generateImplementationsForTargets generates implementations for a list of targets from the same file
 func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client) (map[string]string, error) {
-	implementations := make(map[string]string)
-
-	// Get project root from the first target's file path
-	var projectRoot string
-	if len(targets) > 0 {
-		projectRoot = findProjectRoot(filepath.Dir(targets[0].FilePath))
+	if len(targets) == 0 {
+		return make(map[string]string), nil
 	}
 
+	// Get project root from the first target's file path
+	projectRoot := findProjectRoot(filepath.Dir(targets[0].FilePath))
+
+	// Thread-safe map for collecting results
+	var mu sync.Mutex
+	implementations := make(map[string]string)
+
+	// Use errgroup with limited concurrency (max 16)
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(16)
+
+	// Process each target in parallel
 	for i, target := range targets {
-		implementation, err := generateImplementationForTarget(ctx, target, fileContent, aiClient, projectRoot, i+1, len(targets))
-		if err != nil {
-			// Error already logged in generateImplementationForTarget
-			continue
-		}
-		implementations[target.Name] = implementation
+		// Capture loop variables
+		index := i + 1
+		total := len(targets)
+		t := target
+
+		g.Go(func() error {
+			impl, err := generateImplementationForTarget(ctx, t, fileContent, aiClient, projectRoot, index, total)
+			if err != nil {
+				// Error already logged in generateImplementationForTarget
+				return nil // Continue processing other targets
+			}
+
+			if impl != "" {
+				mu.Lock()
+				implementations[t.Name] = impl
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	// Wait for all goroutines to complete
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	return implementations, nil
