@@ -49,9 +49,25 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 	execCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 
-	// Log the execution
-	e.logger.Debug(fmt.Sprintf("[TOOL] Execute: %s", toolName),
-		slog.Any("params", params))
+	// Log the tool execution in a user-friendly way
+	switch toolName {
+	case "search":
+		if pattern, ok := params["pattern"].(string); ok {
+			e.logger.Debug(fmt.Sprintf("Searching for: %s", pattern))
+		}
+	case "inspect":
+		if symbol, ok := params["symbol"].(string); ok {
+			e.logger.Debug(fmt.Sprintf("Inspecting symbol: %s", symbol))
+		}
+	case "read_func":
+		if name, ok := params["name"].(string); ok {
+			e.logger.Debug(fmt.Sprintf("Reading function: %s", name))
+		}
+	case "check_syntax":
+		e.logger.Debug("Validating generated code syntax")
+	default:
+		e.logger.Debug(fmt.Sprintf("Executing tool: %s", toolName))
+	}
 
 	// Execute the tool
 	start := time.Now()
@@ -60,14 +76,13 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 
 	// Log the result
 	if err != nil {
-		e.logger.Error("tool execution failed",
-			slog.String("tool", toolName),
-			slog.Duration("duration", duration),
-			slog.String("error", err.Error()))
+		e.logger.Error(fmt.Sprintf("Tool '%s' failed", toolName),
+			slog.String("error", err.Error()),
+			slog.Duration("duration", duration))
 		return nil, err
 	}
 
-	e.logger.Debug(fmt.Sprintf("[TOOL] Complete: %s (%s)", toolName, duration.Round(time.Millisecond)))
+	e.logger.Trace(fmt.Sprintf("Tool '%s' completed (%s)", toolName, duration.Round(time.Millisecond)))
 
 	return result, nil
 }

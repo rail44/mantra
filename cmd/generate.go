@@ -515,7 +515,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	logger.Info("Starting generation")
 
 	// Phase 1: Context Gathering
-	logger.Debug("Starting context gathering phase")
+	logger.Info("Analyzing codebase context...")
 	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot, logger)
 	configureAIClientForPhase(aiClient, contextPhase, logger)
 
@@ -539,7 +539,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	logger.Debug("Context gathering result", "length", len(contextResult))
 
 	// Phase 2: Implementation
-	logger.Debug("Starting implementation phase")
+	logger.Info("Generating implementation...")
 	implPhase := phase.NewImplementationPhase(0.2, logger)
 	configureAIClientForPhase(aiClient, implPhase, logger)
 
@@ -561,7 +561,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	}
 
 	duration := time.Since(targetStart).Round(time.Millisecond)
-	logger.Info("Generation completed", "duration", duration)
+	logger.Info("Successfully generated implementation", "duration", duration)
 	uiProgram.Complete(targetNum)
 	
 	return implementation, nil
