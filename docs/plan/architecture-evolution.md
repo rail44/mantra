@@ -1,12 +1,12 @@
-# Mantra Architecture Evolution: Towards Pluggable Domain Knowledge
+# mantra Architecture Evolution: Towards Pluggable Domain Knowledge
 
 ## Overview
 
-This document outlines the evolution of Mantra from its current generic Go code generation tool to a framework with pluggable domain knowledge modules.
+This document outlines the evolution of mantra from its current generic Go code generation tool to a framework with pluggable domain knowledge modules.
 
 ## Current State (v1.0)
 
-Mantra is now a generic Go code generation tool that:
+mantra is now a generic Go code generation tool that:
 - Generates implementations for any Go function based on natural language instructions
 - Works with any domain (not limited to Spanner or databases)
 - Uses general-purpose prompts without domain-specific assumptions

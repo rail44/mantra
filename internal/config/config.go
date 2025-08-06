@@ -10,7 +10,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config represents the complete configuration for Mantra
+// Config represents the complete configuration for mantra
 type Config struct {
 	// Required fields
 	Model string `toml:"model"`

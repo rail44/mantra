@@ -10,7 +10,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "mantra",
 	Short: "AI-powered Go code generator",
-	Long: `Mantra is a local-first interactive development tool that generates
+	Long: `mantra is a local-first interactive development tool that generates
 AI-powered Go code implementations from natural language instructions.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,

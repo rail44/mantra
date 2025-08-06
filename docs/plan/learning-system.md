@@ -1,8 +1,8 @@
-# Mantra Learning System Design
+# mantra Learning System Design
 
 ## Overview
 
-This document outlines the future design for Mantra's learning system, which will enable the tool to improve its code generation quality based on user behavior without requiring explicit training actions.
+This document outlines the future design for mantra's learning system, which will enable the tool to improve its code generation quality based on user behavior without requiring explicit training actions.
 
 ## Goals
 
@@ -80,7 +80,7 @@ SYSTEM """Customized based on user's coding patterns..."""
 ### Normal Usage (No Learning Awareness)
 
 ```bash
-# User just uses Mantra normally
+# User just uses mantra normally
 mantra generate user_queries.go
 mantra watch api_handlers.go
 

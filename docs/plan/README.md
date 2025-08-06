@@ -1,6 +1,6 @@
-# Mantra Planning Documents
+# mantra Planning Documents
 
-This directory contains design documents and plans for future features of Mantra.
+This directory contains design documents and plans for future features of mantra.
 
 ## Documents
 

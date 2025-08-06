@@ -154,6 +154,11 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
+	// Add app identification headers (primarily for OpenRouter, but safe for all providers)
+	// These headers help with app discovery on platforms that support them
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/rail44/mantra")
+	httpReq.Header.Set("X-Title", "mantra")
+
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)

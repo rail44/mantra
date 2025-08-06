@@ -1,8 +1,8 @@
-# 🕉️ Mantra
+# 🕉️ mantra
 
 > **⚠️ Work in Progress (WIP)**: This project is under active development and is not suitable for production use. APIs, features, and generated code quality may change significantly without notice. Use at your own risk for experimentation and development purposes only.
 
-Mantra is a local-first AI-powered Go code generation tool that transforms natural language instructions into working implementations.
+mantra is a local-first AI-powered Go code generation tool that transforms natural language instructions into working implementations.
 
 ## Features
 
@@ -63,7 +63,7 @@ mantra generate .
 
 ## How It Works
 
-Mantra uses a two-phase approach:
+mantra uses a two-phase approach:
 
 1. **Context Gathering**: AI explores your codebase to understand types and patterns
 2. **Implementation**: Generates code using the gathered context

@@ -1,8 +1,8 @@
-# Mantra Tool System Design
+# mantra Tool System Design
 
 ## Overview
 
-The Mantra Tool System enables LLMs to dynamically retrieve information during code generation, replacing the current static context extraction approach with an interactive, tool-based system.
+The mantra Tool System enables LLMs to dynamically retrieve information during code generation, replacing the current static context extraction approach with an interactive, tool-based system.
 
 ## Tools
 
