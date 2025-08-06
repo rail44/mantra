@@ -321,3 +321,11 @@ func (t *Target) GetFunctionSignature() string {
 
 	return sig.String()
 }
+
+// GetDisplayName returns a display name for the target (e.g., "(*Repository).GetUser" for methods)
+func (t *Target) GetDisplayName() string {
+	if t.Receiver != nil {
+		return fmt.Sprintf("(%s).%s", t.Receiver.Type, t.Name)
+	}
+	return t.Name
+}

@@ -101,117 +101,175 @@ func (m *Model) View() string {
 		return "Initializing..."
 	}
 
-	var sections []string
+	var lines []string
 	
 	// Count targets by status
 	completed := 0
 	failed := 0
 	running := 0
 	pending := 0
+	
+	// Calculate elapsed time from the first started target
+	var earliestStart time.Time
+	var latestEnd time.Time
+	
 	for _, target := range m.targets {
 		switch target.Status {
 		case "completed":
 			completed++
+			if earliestStart.IsZero() || target.StartTime.Before(earliestStart) {
+				earliestStart = target.StartTime
+			}
+			if target.EndTime.After(latestEnd) {
+				latestEnd = target.EndTime
+			}
 		case "failed":
 			failed++
+			if earliestStart.IsZero() || target.StartTime.Before(earliestStart) {
+				earliestStart = target.StartTime
+			}
+			if !target.EndTime.IsZero() && target.EndTime.After(latestEnd) {
+				latestEnd = target.EndTime
+			}
 		case "running":
 			running++
+			if earliestStart.IsZero() || target.StartTime.Before(earliestStart) {
+				earliestStart = target.StartTime
+			}
 		case "pending":
 			pending++
 		}
 	}
 	
-	// Add summary header
-	summary := fmt.Sprintf("Progress: %d/%d completed", completed, len(m.targets))
-	if running > 0 {
-		summary += fmt.Sprintf(", %d running", running)
+	// Calculate total elapsed time
+	var totalDuration time.Duration
+	if !earliestStart.IsZero() {
+		if running > 0 {
+			// If tasks are still running, calculate from start to now
+			totalDuration = time.Since(earliestStart)
+		} else if !latestEnd.IsZero() {
+			// All tasks completed, calculate from start to last end
+			totalDuration = latestEnd.Sub(earliestStart)
+		}
 	}
-	if pending > 0 {
-		summary += fmt.Sprintf(", %d pending", pending)
-	}
-	if failed > 0 {
-		summary += fmt.Sprintf(", %d failed", failed)
-	}
-	sections = append(sections, summary)
-	sections = append(sections, strings.Repeat("=", 60))
 	
-	// Fixed height for each target (header + divider + 2 log lines = 4 lines total)
-	logHeight := 2 // 2 lines for logs, plus header and divider makes 4 lines total
+	// Build progress bar
+	total := len(m.targets)
+	progressWidth := 30
+	filledWidth := (completed * progressWidth) / total
+	if filledWidth > progressWidth {
+		filledWidth = progressWidth
+	}
+	
+	progressBar := "["
+	for i := 0; i < progressWidth; i++ {
+		if i < filledWidth {
+			progressBar += "="
+		} else if i == filledWidth && running > 0 {
+			progressBar += ">"
+		} else {
+			progressBar += " "
+		}
+	}
+	progressBar += "]"
+	
+	// Add header with progress bar
+	percentage := (completed * 100) / total
+	header := fmt.Sprintf("%s %3d%% | %d/%d", progressBar, percentage, completed, total)
+	
+	// Add timing info
+	if totalDuration > 0 {
+		header += fmt.Sprintf(" | %s", totalDuration.Round(time.Millisecond))
+	}
+	
+	// Add status counts
+	if failed > 0 {
+		header += fmt.Sprintf(" | FAILED: %d", failed)
+	}
+	
+	lines = append(lines, header)
+	lines = append(lines, "")
 
+	// Show active targets (running/pending) in detail
+	activeTargets := []string{}
+	completedTargets := []string{}
+	
 	for _, target := range m.targets {
-		// Status icon
-		icon := m.getStatusIcon(target.Status)
+		// Format target line based on status
+		var targetLine string
+		spinner := m.getSpinner(target.Status)
 		
-		// Header
-		header := fmt.Sprintf("%s [%d/%d] %s", icon, target.Index, target.Total, target.Name)
-		if target.Status == "completed" || target.Status == "failed" {
-			duration := target.EndTime.Sub(target.StartTime).Round(time.Millisecond)
-			header += fmt.Sprintf(" (%s)", duration)
-		}
-		
-		// Check if this target should be collapsed
-		isCollapsed := target.Status == "completed" || target.Status == "failed"
-		
-		// For collapsed targets, only show header
-		if isCollapsed && m.height > 0 { // Only collapse in interactive mode
-			sections = append(sections, header)
-			continue
-		}
-
-		// Expanded view for active targets
-		divider := strings.Repeat("-", 60)
-
-		// Logs
-		target.mu.RLock()
-		logs := target.Logs
-		// Only show recent 2 logs
-		if len(logs) > logHeight {
-			logs = logs[len(logs)-logHeight:]
-		}
-		
-		var logLines []string
-		for _, log := range logs {
-			line := fmt.Sprintf("[%s] %-5s: %s",
-				log.Timestamp.Format("15:04:05"),
-				log.Level,
-				log.Message)
+		if target.Status == "running" || target.Status == "pending" {
+			// Active target - show with current status
+			targetLine = fmt.Sprintf("%s %s", spinner, target.Name)
 			
-			// Truncate long lines in interactive mode
-			if m.height > 0 && len(line) > 80 {
-				line = line[:77] + "..."
+			// Add most recent log message if available
+			target.mu.RLock()
+			if len(target.Logs) > 0 {
+				lastLog := target.Logs[len(target.Logs)-1]
+				targetLine += fmt.Sprintf(" - %s", lastLog.Message)
 			}
-			logLines = append(logLines, line)
+			target.mu.RUnlock()
+			
+			activeTargets = append(activeTargets, targetLine)
+		} else {
+			// Completed/failed - show in compact form
+			icon := m.getCompletionIcon(target.Status)
+			duration := target.EndTime.Sub(target.StartTime).Round(time.Millisecond)
+			targetLine = fmt.Sprintf("%s %s (%s)", icon, target.Name, duration)
+			completedTargets = append(completedTargets, targetLine)
 		}
-		target.mu.RUnlock()
-
-		// Always pad to exactly 2 lines for consistent display
-		for len(logLines) < logHeight {
-			logLines = append(logLines, "")
+	}
+	
+	// Show active targets first
+	if len(activeTargets) > 0 {
+		lines = append(lines, "Active:")
+		for _, line := range activeTargets {
+			lines = append(lines, "  "+line)
 		}
-
-		// Build section
-		section := header + "\n" +
-			divider + "\n" +
-			strings.Join(logLines, "\n")
-
-		sections = append(sections, section)
+		lines = append(lines, "")
+	}
+	
+	// Show completed targets in compact form
+	if len(completedTargets) > 0 {
+		lines = append(lines, "Completed:")
+		// Show up to 5 most recent completed, rest collapsed
+		showCount := len(completedTargets)
+		if showCount > 5 && m.height > 0 {
+			showCount = 5
+		}
+		for i := 0; i < showCount; i++ {
+			lines = append(lines, "  "+completedTargets[i])
+		}
+		if len(completedTargets) > showCount {
+			lines = append(lines, fmt.Sprintf("  ... and %d more", len(completedTargets)-showCount))
+		}
 	}
 
-	return strings.Join(sections, "\n\n")
+	return strings.Join(lines, "\n")
 }
 
-func (m *Model) getStatusIcon(status string) string {
+func (m *Model) getSpinner(status string) string {
+	if status == "running" {
+		// Simple text spinner animation using ASCII
+		frames := []string{"|", "/", "-", "\\"}
+		// Use time to determine frame
+		frame := (time.Now().UnixMilli() / 200) % int64(len(frames))
+		return frames[frame]
+	} else if status == "pending" {
+		return "."
+	}
+	return " "
+}
+
+func (m *Model) getCompletionIcon(status string) string {
 	switch status {
-	case "pending":
-		return "[PENDING]"
-	case "running":
-		return "[RUNNING]"
 	case "completed":
-		return "[DONE]"
+		return "[OK]"
 	case "failed":
-		return "[FAILED]"
+		return "[FAIL]"
 	default:
-		return "[UNKNOWN]"
+		return "[?]"
 	}
 }
 

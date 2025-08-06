@@ -155,18 +155,18 @@ func detectAndSummarizeTargets(pkgDir, destDir string) ([]*detector.FileDetectio
 			case detector.StatusUngenerated:
 				ungenerated++
 				log.Info("new target found",
-					slog.String("function", status.Target.Name),
+					slog.String("function", status.Target.GetDisplayName()),
 					slog.String("file", filepath.Base(status.Target.FilePath)))
 			case detector.StatusOutdated:
 				outdated++
 				log.Info("outdated target found",
-					slog.String("function", status.Target.Name),
+					slog.String("function", status.Target.GetDisplayName()),
 					slog.String("file", filepath.Base(status.Target.FilePath)),
 					slog.String("old_checksum", status.ExistingChecksum),
 					slog.String("new_checksum", status.CurrentChecksum))
 			case detector.StatusCurrent:
 				current++
-				log.Debug(fmt.Sprintf("[SKIP] Up-to-date: %s.%s", filepath.Base(status.Target.FilePath), status.Target.Name))
+				log.Debug(fmt.Sprintf("[SKIP] Up-to-date: %s.%s", filepath.Base(status.Target.FilePath), status.Target.GetDisplayName()))
 			}
 		}
 	}
@@ -500,8 +500,8 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) (string, error) {
 	targetStart := time.Now()
 	
-	// Create a target-specific logger
-	logger := uiProgram.CreateTargetLogger(target.Name, targetNum, totalTargets)
+	// Create a target-specific logger with display name (includes receiver for methods)
+	logger := uiProgram.CreateTargetLogger(target.GetDisplayName(), targetNum, totalTargets)
 	
 	// Create a new AI client with the target-specific logger
 	// This avoids concurrent access issues with shared client
