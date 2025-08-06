@@ -354,10 +354,18 @@ func findProjectRoot(startPath string) string {
 // generateImplementationForTarget generates implementation for a single target using two-phase approach
 func generateImplementationForTarget(ctx context.Context, target *parser.Target, fileContent string, aiClient *ai.Client, projectRoot string, targetNum, totalTargets int) (string, error) {
 	targetStart := time.Now()
-	log.Info(fmt.Sprintf("[%d/%d] Generating %s...", targetNum, totalTargets, target.Name))
+	
+	// Common log attributes for this generation task
+	logAttrs := []any{
+		slog.String("function", target.Name),
+		slog.Int("index", targetNum),
+		slog.Int("total", totalTargets),
+	}
+	
+	log.Info("starting generation", logAttrs...)
 
 	// Phase 1: Context Gathering
-	log.Debug("Starting context gathering phase", slog.String("function", target.Name))
+	log.Debug("starting context gathering phase", logAttrs...)
 	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot)
 	configureAIClientForPhase(aiClient, contextPhase)
 
@@ -366,25 +374,25 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
 	if err != nil {
 		log.Error("failed to build prompt",
-			slog.String("function", target.Name),
-			slog.String("error", err.Error()))
+			append(logAttrs, slog.String("error", err.Error()))...)
 		return "", err
 	}
 
 	// Execute context gathering
 	contextResult, err := aiClient.Generate(ctx, initialPrompt)
 	if err != nil {
-		log.Error(fmt.Sprintf("[%d/%d] Context gathering failed: %s - %s", targetNum, totalTargets, target.Name, err.Error()))
+		log.Error("context gathering failed",
+			append(logAttrs, slog.String("error", err.Error()))...)
 		return "", err
 	}
 
-	log.Debug("Context gathering result",
-		slog.String("function", target.Name),
-		slog.Int("length", len(contextResult)),
-		slog.String("content", contextResult))
+	log.Debug("context gathering result",
+		append(logAttrs, 
+			slog.Int("length", len(contextResult)),
+			slog.String("content", contextResult))...)
 
 	// Phase 2: Implementation
-	log.Debug("Starting implementation phase", slog.String("function", target.Name))
+	log.Debug("starting implementation phase", logAttrs...)
 	implPhase := phase.NewImplementationPhase(0.2)
 	configureAIClientForPhase(aiClient, implPhase)
 
@@ -393,19 +401,21 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
 	if err != nil {
 		log.Error("failed to build implementation prompt",
-			slog.String("function", target.Name),
-			slog.String("error", err.Error()))
+			append(logAttrs, slog.String("error", err.Error()))...)
 		return "", err
 	}
 
 	// Generate implementation
 	implementation, err := aiClient.Generate(ctx, implPrompt)
 	if err != nil {
-		log.Error(fmt.Sprintf("[%d/%d] Implementation failed: %s - %s", targetNum, totalTargets, target.Name, err.Error()))
+		log.Error("implementation failed",
+			append(logAttrs, slog.String("error", err.Error()))...)
 		return "", err
 	}
 
-	log.Info(fmt.Sprintf("[%d/%d] Generated: %s (%s)", targetNum, totalTargets, target.Name, time.Since(targetStart).Round(time.Millisecond)))
+	duration := time.Since(targetStart).Round(time.Millisecond)
+	log.Info("generation completed",
+		append(logAttrs, slog.Duration("duration", duration))...)
 	return implementation, nil
 }
 
