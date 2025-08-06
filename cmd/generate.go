@@ -243,7 +243,7 @@ type targetWithContext struct {
 func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, destDir string) error {
 	// Collect all targets that need generation across all files
 	var allTargets []targetWithContext
-	
+
 	// First pass: collect targets and handle files without targets
 	for _, result := range results {
 		fileInfo := result.FileInfo
@@ -301,10 +301,10 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 
 		fileInfo := result.FileInfo
 		filePath := fileInfo.FilePath
-		
+
 		// Collect all implementations for this file
 		allImplementations := make(map[string]string)
-		
+
 		// Add existing implementations
 		for _, status := range result.Statuses {
 			if status.Status == detector.StatusCurrent {
@@ -357,74 +357,6 @@ func findProjectRoot(startPath string) string {
 	}
 }
 
-// generateImplementationForTarget generates implementation for a single target using two-phase approach
-func generateImplementationForTarget(ctx context.Context, target *parser.Target, fileContent string, aiClient *ai.Client, projectRoot string, targetNum, totalTargets int) (string, error) {
-	targetStart := time.Now()
-	
-	// Common log attributes for this generation task
-	logAttrs := []any{
-		slog.String("function", target.Name),
-		slog.Int("index", targetNum),
-		slog.Int("total", totalTargets),
-	}
-	
-	log.Info("starting generation", logAttrs...)
-
-	// Phase 1: Context Gathering
-	log.Debug("starting context gathering phase", logAttrs...)
-	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot, log.Default())
-	configureAIClientForPhase(aiClient, contextPhase, log.Default())
-
-	// Build initial prompt
-	contextPromptBuilder := contextPhase.GetPromptBuilder()
-	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
-	if err != nil {
-		log.Error("failed to build prompt",
-			append(logAttrs, slog.String("error", err.Error()))...)
-		return "", err
-	}
-
-	// Execute context gathering
-	contextResult, err := aiClient.Generate(ctx, initialPrompt)
-	if err != nil {
-		log.Error("context gathering failed",
-			append(logAttrs, slog.String("error", err.Error()))...)
-		return "", err
-	}
-
-	log.Debug("context gathering result",
-		append(logAttrs, 
-			slog.Int("length", len(contextResult)),
-			slog.String("content", contextResult))...)
-
-	// Phase 2: Implementation
-	log.Debug("starting implementation phase", logAttrs...)
-	implPhase := phase.NewImplementationPhase(0.2, log.Default())
-	configureAIClientForPhase(aiClient, implPhase, log.Default())
-
-	// Build implementation prompt with context from phase 1
-	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResult)
-	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
-	if err != nil {
-		log.Error("failed to build implementation prompt",
-			append(logAttrs, slog.String("error", err.Error()))...)
-		return "", err
-	}
-
-	// Generate implementation
-	implementation, err := aiClient.Generate(ctx, implPrompt)
-	if err != nil {
-		log.Error("implementation failed",
-			append(logAttrs, slog.String("error", err.Error()))...)
-		return "", err
-	}
-
-	duration := time.Since(targetStart).Round(time.Millisecond)
-	log.Info("generation completed",
-		append(logAttrs, slog.Duration("duration", duration))...)
-	return implementation, nil
-}
-
 // generateAllTargetsInParallel generates implementations for all targets across multiple files in parallel
 func generateAllTargetsInParallel(ctx context.Context, targets []targetWithContext, aiClient *ai.Client) (map[string]string, error) {
 	if len(targets) == 0 {
@@ -440,7 +372,7 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 	// Thread-safe map for collecting results
 	var mu sync.Mutex
 	implementations := make(map[string]string)
-	
+
 	// Channel to signal completion
 	done := make(chan struct{})
 
@@ -469,28 +401,50 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 					implementations[targetCtx.target.Name] = impl
 					mu.Unlock()
 				}
-				
+
 				return nil
 			})
 		}
 
 		// Wait for all goroutines to complete
 		g.Wait()
-		
+
 		// Signal completion
 		close(done)
 	}()
-	
+
 	// Stop TUI after completion
 	go func() {
 		<-done
 		time.Sleep(100 * time.Millisecond) // Allow final render
 		uiProgram.Quit()
 	}()
-	
+
 	// Run TUI (blocks until Quit is called)
 	if err := uiProgram.Start(); err != nil {
 		<-done // Ensure generation completes even if TUI fails
+	}
+
+	// Display detailed logs for failed targets
+	failedTargets := uiProgram.GetFailedTargets()
+	if len(failedTargets) > 0 {
+		fmt.Println()
+		log.Error("Failed targets - Detailed logs")
+		fmt.Println()
+
+		for _, target := range failedTargets {
+			log.Error(fmt.Sprintf("Failed: %s", target.Name),
+				slog.String("duration", target.EndTime.Sub(target.StartTime).Round(time.Millisecond).String()))
+
+			logs := target.GetAllLogs()
+			for _, logEntry := range logs {
+				timestamp := logEntry.Timestamp.Format("15:04:05.000")
+				fmt.Printf("  [%s] %s: %s\n", timestamp, logEntry.Level, logEntry.Message)
+			}
+			fmt.Println()
+		}
+
+		log.Error("Total failures", slog.Int("count", len(failedTargets)))
 	}
 
 	return implementations, nil
@@ -499,10 +453,10 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 // generateImplementationForTargetWithUI generates implementation with TUI logger
 func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) (string, error) {
 	targetStart := time.Now()
-	
+
 	// Create a target-specific logger with display name (includes receiver for methods)
 	logger := uiProgram.CreateTargetLogger(target.GetDisplayName(), targetNum, totalTargets)
-	
+
 	// Create a new AI client with the target-specific logger
 	// This avoids concurrent access issues with shared client
 	aiClient, err := ai.NewClient(baseAIClient.GetConfig(), logger)
@@ -511,7 +465,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 		uiProgram.Fail(targetNum)
 		return "", err
 	}
-	
+
 	logger.Info("Starting generation")
 
 	// Phase 1: Context Gathering
@@ -563,6 +517,6 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	duration := time.Since(targetStart).Round(time.Millisecond)
 	logger.Info("Successfully generated implementation", "duration", duration)
 	uiProgram.Complete(targetNum)
-	
+
 	return implementation, nil
 }

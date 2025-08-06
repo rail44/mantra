@@ -94,7 +94,7 @@ func NewOpenAIClient(apiKey, baseURL, model string, logger log.Logger) (*OpenAIC
 	if baseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
-	
+
 	if logger == nil {
 		logger = log.Default()
 	}

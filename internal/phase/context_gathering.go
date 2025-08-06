@@ -19,7 +19,7 @@ func NewContextGatheringPhase(temperature float32, projectRoot string, logger lo
 	if logger == nil {
 		logger = log.Default()
 	}
-	
+
 	// Initialize tools for context gathering
 	tools := []tools.Tool{
 		impl.NewInspectTool(),

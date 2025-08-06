@@ -37,7 +37,7 @@ func (l *targetLogger) log(level, msg string, args ...any) {
 	// Check if this log level should be displayed
 	currentLevel := log.GetCurrentLevel()
 	var logLevel slog.Level
-	
+
 	switch level {
 	case "ERROR":
 		logLevel = slog.LevelError
@@ -52,12 +52,12 @@ func (l *targetLogger) log(level, msg string, args ...any) {
 	default:
 		logLevel = slog.LevelInfo
 	}
-	
+
 	// Skip if log level is too verbose for current setting
 	if logLevel < currentLevel {
 		return
 	}
-	
+
 	// Format message with args if provided
 	formattedMsg := msg
 	if len(args) > 0 {

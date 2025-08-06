@@ -19,7 +19,7 @@ func NewImplementationPhase(temperature float32, logger log.Logger) *Implementat
 	if logger == nil {
 		logger = log.Default()
 	}
-	
+
 	// Initialize tools for implementation/validation
 	tools := []tools.Tool{
 		impl.NewCheckSyntaxTool(),

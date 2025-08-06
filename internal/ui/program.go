@@ -6,7 +6,7 @@ import (
 
 // Program manages the TUI program and provides logger creation
 type Program struct {
-	model     *Model
+	model      *Model
 	teaProgram *tea.Program
 }
 
@@ -14,7 +14,7 @@ type Program struct {
 func NewProgram() *Program {
 	model := newModel()
 	return &Program{
-		model:     model,
+		model:      model,
 		teaProgram: tea.NewProgram(model), // Remove WithAltScreen to keep output in terminal
 	}
 }
@@ -30,7 +30,7 @@ func (p *Program) Start() error {
 func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger {
 	// Add target to model
 	p.model.addTarget(name, index, total)
-	
+
 	// No longer auto-start TUI here - Start() must be called explicitly
 	return newTargetLogger(p, name, index)
 }
@@ -63,4 +63,18 @@ func (p *Program) Fail(targetIndex int) {
 // Quit stops the TUI program
 func (p *Program) Quit() {
 	p.teaProgram.Quit()
+}
+
+// GetFailedTargets returns information about all failed targets
+func (p *Program) GetFailedTargets() []*TargetView {
+	p.model.mu.RLock()
+	defer p.model.mu.RUnlock()
+
+	var failed []*TargetView
+	for _, target := range p.model.targets {
+		if target.Status == "failed" {
+			failed = append(failed, target)
+		}
+	}
+	return failed
 }

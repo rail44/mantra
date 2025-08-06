@@ -22,7 +22,7 @@ func NewExecutor(tools []Tool, logger log.Logger) *Executor {
 	if logger == nil {
 		logger = log.Default()
 	}
-	
+
 	toolMap := make(map[string]Tool)
 	for _, tool := range tools {
 		toolMap[tool.Name()] = tool

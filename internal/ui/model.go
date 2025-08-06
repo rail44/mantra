@@ -21,6 +21,17 @@ type TargetView struct {
 	mu        sync.RWMutex
 }
 
+// GetAllLogs returns a copy of all logs for the target
+func (t *TargetView) GetAllLogs() []LogEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	// Create a copy to avoid data races
+	logs := make([]LogEntry, len(t.Logs))
+	copy(logs, t.Logs)
+	return logs
+}
+
 // Model is the Bubble Tea model for the TUI
 type Model struct {
 	targets []*TargetView
@@ -102,21 +113,57 @@ func (m *Model) View() string {
 	}
 
 	var lines []string
-	
-	// Count targets by status
-	completed := 0
-	failed := 0
-	running := 0
-	pending := 0
-	
-	// Calculate elapsed time from the first started target
+
+	stats := m.calculateStatistics()
+	header := m.buildHeader(stats)
+	lines = append(lines, header)
+	lines = append(lines, "")
+
+	activeTargets, completedTargets := m.categorizeTargets()
+
+	// Show active targets first
+	if len(activeTargets) > 0 {
+		lines = append(lines, "Active:")
+		for _, line := range activeTargets {
+			lines = append(lines, "  "+line)
+		}
+		lines = append(lines, "")
+	}
+
+	// Show all completed targets
+	if len(completedTargets) > 0 {
+		lines = append(lines, "Completed:")
+		for _, line := range completedTargets {
+			lines = append(lines, "  "+line)
+		}
+		// Add empty line after completed section
+		lines = append(lines, "")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// targetStats holds aggregated statistics about targets
+type targetStats struct {
+	completed     int
+	failed        int
+	running       int
+	pending       int
+	total         int
+	totalDuration time.Duration
+}
+
+// calculateStatistics computes aggregate statistics for all targets
+func (m *Model) calculateStatistics() targetStats {
+	stats := targetStats{total: len(m.targets)}
+
 	var earliestStart time.Time
 	var latestEnd time.Time
-	
+
 	for _, target := range m.targets {
 		switch target.Status {
 		case "completed":
-			completed++
+			stats.completed++
 			if earliestStart.IsZero() || target.StartTime.Before(earliestStart) {
 				earliestStart = target.StartTime
 			}
@@ -124,7 +171,7 @@ func (m *Model) View() string {
 				latestEnd = target.EndTime
 			}
 		case "failed":
-			failed++
+			stats.failed++
 			if earliestStart.IsZero() || target.StartTime.Before(earliestStart) {
 				earliestStart = target.StartTime
 			}
@@ -132,77 +179,75 @@ func (m *Model) View() string {
 				latestEnd = target.EndTime
 			}
 		case "running":
-			running++
+			stats.running++
 			if earliestStart.IsZero() || target.StartTime.Before(earliestStart) {
 				earliestStart = target.StartTime
 			}
 		case "pending":
-			pending++
+			stats.pending++
 		}
 	}
-	
+
 	// Calculate total elapsed time
-	var totalDuration time.Duration
 	if !earliestStart.IsZero() {
-		if running > 0 {
-			// If tasks are still running, calculate from start to now
-			totalDuration = time.Since(earliestStart)
+		if stats.running > 0 {
+			stats.totalDuration = time.Since(earliestStart)
 		} else if !latestEnd.IsZero() {
-			// All tasks completed, calculate from start to last end
-			totalDuration = latestEnd.Sub(earliestStart)
+			stats.totalDuration = latestEnd.Sub(earliestStart)
 		}
 	}
-	
+
+	return stats
+}
+
+// buildHeader creates the header with progress bar
+func (m *Model) buildHeader(stats targetStats) string {
 	// Build progress bar
-	total := len(m.targets)
 	progressWidth := 30
-	filledWidth := (completed * progressWidth) / total
+	filledWidth := (stats.completed * progressWidth) / stats.total
 	if filledWidth > progressWidth {
 		filledWidth = progressWidth
 	}
-	
+
 	progressBar := "["
 	for i := 0; i < progressWidth; i++ {
 		if i < filledWidth {
 			progressBar += "="
-		} else if i == filledWidth && running > 0 {
+		} else if i == filledWidth && stats.running > 0 {
 			progressBar += ">"
 		} else {
 			progressBar += " "
 		}
 	}
 	progressBar += "]"
-	
-	// Add header with progress bar
-	percentage := (completed * 100) / total
-	header := fmt.Sprintf("%s %3d%% | %d/%d", progressBar, percentage, completed, total)
-	
-	// Add timing info
-	if totalDuration > 0 {
-		header += fmt.Sprintf(" | %s", totalDuration.Round(time.Millisecond))
-	}
-	
-	// Add status counts
-	if failed > 0 {
-		header += fmt.Sprintf(" | FAILED: %d", failed)
-	}
-	
-	lines = append(lines, header)
-	lines = append(lines, "")
 
-	// Show active targets (running/pending) in detail
-	activeTargets := []string{}
-	completedTargets := []string{}
-	
+	// Build header
+	percentage := (stats.completed * 100) / stats.total
+	header := fmt.Sprintf("%s %3d%% | %d/%d", progressBar, percentage, stats.completed, stats.total)
+
+	// Add timing info
+	if stats.totalDuration > 0 {
+		header += fmt.Sprintf(" | %s", stats.totalDuration.Round(time.Millisecond))
+	}
+
+	// Add status counts
+	if stats.failed > 0 {
+		header += fmt.Sprintf(" | FAILED: %d", stats.failed)
+	}
+
+	return header
+}
+
+// categorizeTargets separates targets into active and completed lists
+func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 	for _, target := range m.targets {
-		// Format target line based on status
 		var targetLine string
-		spinner := m.getSpinner(target.Status)
-		
+
 		if target.Status == "running" || target.Status == "pending" {
 			// Active target - show with current status
+			spinner := m.getSpinner(target.Status)
 			targetLine = fmt.Sprintf("%s %s", spinner, target.Name)
-			
+
 			// Add most recent log message if available
 			target.mu.RLock()
 			if len(target.Logs) > 0 {
@@ -210,7 +255,7 @@ func (m *Model) View() string {
 				targetLine += fmt.Sprintf(" - %s", lastLog.Message)
 			}
 			target.mu.RUnlock()
-			
+
 			activeTargets = append(activeTargets, targetLine)
 		} else {
 			// Completed/failed - show in compact form
@@ -220,35 +265,8 @@ func (m *Model) View() string {
 			completedTargets = append(completedTargets, targetLine)
 		}
 	}
-	
-	// Show active targets first
-	if len(activeTargets) > 0 {
-		lines = append(lines, "Active:")
-		for _, line := range activeTargets {
-			lines = append(lines, "  "+line)
-		}
-		lines = append(lines, "")
-	}
-	
-	// Show completed targets in compact form
-	if len(completedTargets) > 0 {
-		lines = append(lines, "Completed:")
-		// Show up to 5 most recent completed, rest collapsed
-		showCount := len(completedTargets)
-		if showCount > 5 && m.height > 0 {
-			showCount = 5
-		}
-		for i := 0; i < showCount; i++ {
-			lines = append(lines, "  "+completedTargets[i])
-		}
-		if len(completedTargets) > showCount {
-			lines = append(lines, fmt.Sprintf("  ... and %d more", len(completedTargets)-showCount))
-		}
-		// Add empty line after completed section
-		lines = append(lines, "")
-	}
 
-	return strings.Join(lines, "\n")
+	return activeTargets, completedTargets
 }
 
 func (m *Model) getSpinner(status string) string {
@@ -275,11 +293,16 @@ func (m *Model) getCompletionIcon(status string) string {
 	}
 }
 
+// validateTargetIndex checks if the target index is valid
+func (m *Model) validateTargetIndex(index int) bool {
+	return index >= 1 && index <= len(m.targets)
+}
+
 func (m *Model) addLog(msg logMsg) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if msg.TargetIndex < 1 || msg.TargetIndex > len(m.targets) {
+	if !m.validateTargetIndex(msg.TargetIndex) {
 		return
 	}
 
@@ -303,7 +326,7 @@ func (m *Model) updateStatus(msg statusMsg) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if msg.TargetIndex < 1 || msg.TargetIndex > len(m.targets) {
+	if !m.validateTargetIndex(msg.TargetIndex) {
 		return
 	}
 
