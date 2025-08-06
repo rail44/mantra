@@ -233,9 +233,22 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Ge
 	return aiClient, gen, nil
 }
 
+// targetWithContext contains a target and its associated file context
+type targetWithContext struct {
+	target       *parser.Target
+	fileContent  string
+	fileInfo     *parser.FileInfo
+	fileResult   *detector.FileDetectionResult
+}
+
 // processTargetsByFile processes all files, generating implementations for targets and copying files without targets
 func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, destDir string) error {
-	// Process each file
+	// Collect all targets that need generation across all files
+	
+	var allTargets []targetWithContext
+	fileContents := make(map[string]string)
+	
+	// First pass: collect targets and handle files without targets
 	for _, result := range results {
 		fileInfo := result.FileInfo
 		filePath := fileInfo.FilePath
@@ -253,22 +266,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 			continue
 		}
 
-		// Count targets that need generation
-		targetsNeedingGeneration := 0
-		for _, status := range result.Statuses {
-			if status.Status != detector.StatusCurrent {
-				targetsNeedingGeneration++
-			}
-		}
-
-		// Skip files where all targets are current
-		if targetsNeedingGeneration == 0 {
-			continue
-		}
-
-		// TUI will handle display for parallel generation
-
-		// Read file content
+		// Read file content once
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Error("failed to read file",
@@ -276,44 +274,58 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 				slog.String("error", err.Error()))
 			continue
 		}
+		fileContents[filePath] = string(content)
 
-		// Generate implementations only for targets that need it
-		var targetsToGenerate []*parser.Target
-		existingImplementations := make(map[string]string)
-
+		// Collect targets that need generation
 		for _, status := range result.Statuses {
-			if status.Status == detector.StatusCurrent {
-				// Use existing implementation
-				existingImplementations[status.Target.Name] = status.ExistingImpl
-			} else {
-				// Need to generate
-				targetsToGenerate = append(targetsToGenerate, status.Target)
+			if status.Status != detector.StatusCurrent {
+				allTargets = append(allTargets, targetWithContext{
+					target:      status.Target,
+					fileContent: string(content),
+					fileInfo:    fileInfo,
+					fileResult:  result,
+				})
 			}
 		}
+	}
 
-		// Generate new implementations
-		newImplementations, err := generateImplementationsForTargets(ctx, targetsToGenerate, string(content), aiClient)
+	// Generate all targets in parallel if there are any
+	if len(allTargets) > 0 {
+		implementations, err := generateAllTargetsInParallel(ctx, allTargets, aiClient)
 		if err != nil {
-			return fmt.Errorf("failed to generate implementations for file %s: %w", filePath, err)
+			return fmt.Errorf("failed to generate implementations: %w", err)
 		}
 
-		// Merge existing and new implementations
-		allImplementations := make(map[string]string)
-		for name, impl := range existingImplementations {
-			allImplementations[name] = impl
-		}
-		for name, impl := range newImplementations {
-			allImplementations[name] = impl
-		}
+		// Group implementations by file and generate output files
+		for _, result := range results {
+			if len(result.Statuses) == 0 {
+				continue // Already handled
+			}
 
-		// Generate file with all implementations
-		if len(allImplementations) > 0 {
-			if err := gen.GenerateFile(fileInfo, allImplementations); err != nil {
-				log.Error("failed to generate file",
-					slog.String("file", filePath),
-					slog.String("error", err.Error()))
-			} else {
-				log.Info(fmt.Sprintf("Generated: %s", filepath.Base(filePath)))
+			fileInfo := result.FileInfo
+			filePath := fileInfo.FilePath
+			
+			// Collect all implementations for this file
+			allImplementations := make(map[string]string)
+			
+			// Add existing implementations
+			for _, status := range result.Statuses {
+				if status.Status == detector.StatusCurrent {
+					allImplementations[status.Target.Name] = status.ExistingImpl
+				} else if impl, ok := implementations[status.Target.Name]; ok {
+					allImplementations[status.Target.Name] = impl
+				}
+			}
+
+			// Generate file with all implementations
+			if len(allImplementations) > 0 {
+				if err := gen.GenerateFile(fileInfo, allImplementations); err != nil {
+					log.Error("failed to generate file",
+						slog.String("file", filePath),
+						slog.String("error", err.Error()))
+				} else {
+					log.Info(fmt.Sprintf("Generated: %s", filepath.Base(filePath)))
+				}
 			}
 		}
 	}
@@ -417,14 +429,14 @@ func generateImplementationForTarget(ctx context.Context, target *parser.Target,
 	return implementation, nil
 }
 
-// generateImplementationsForTargets generates implementations for a list of targets from the same file
-func generateImplementationsForTargets(ctx context.Context, targets []*parser.Target, fileContent string, aiClient *ai.Client) (map[string]string, error) {
+// generateAllTargetsInParallel generates implementations for all targets across multiple files in parallel
+func generateAllTargetsInParallel(ctx context.Context, targets []targetWithContext, aiClient *ai.Client) (map[string]string, error) {
 	if len(targets) == 0 {
 		return make(map[string]string), nil
 	}
 
 	// Get project root from the first target's file path
-	projectRoot := findProjectRoot(filepath.Dir(targets[0].FilePath))
+	projectRoot := findProjectRoot(filepath.Dir(targets[0].target.FilePath))
 
 	// Create TUI program for parallel execution
 	uiProgram := ui.NewProgram()
@@ -443,14 +455,14 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 		g.SetLimit(16)
 
 		// Process each target in parallel
-		for i, target := range targets {
+		for i, tc := range targets {
 			// Capture loop variables
 			index := i + 1
 			total := len(targets)
-			t := target
+			targetCtx := tc
 
 			g.Go(func() error {
-				impl, err := generateImplementationForTargetWithUI(ctx, t, fileContent, aiClient, projectRoot, index, total, uiProgram)
+				impl, err := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, aiClient, projectRoot, index, total, uiProgram)
 				if err != nil {
 					// Error already logged in generateImplementationForTarget
 					return nil // Continue processing other targets
@@ -458,7 +470,7 @@ func generateImplementationsForTargets(ctx context.Context, targets []*parser.Ta
 
 				if impl != "" {
 					mu.Lock()
-					implementations[t.Name] = impl
+					implementations[targetCtx.target.Name] = impl
 					mu.Unlock()
 				}
 				
