@@ -244,6 +244,8 @@ func (m *Model) View() string {
 		if len(completedTargets) > showCount {
 			lines = append(lines, fmt.Sprintf("  ... and %d more", len(completedTargets)-showCount))
 		}
+		// Add empty line after completed section
+		lines = append(lines, "")
 	}
 
 	return strings.Join(lines, "\n")
