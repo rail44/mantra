@@ -96,7 +96,6 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		return nil, err
 	}
 
-
 	e.logger.Trace(fmt.Sprintf("Tool '%s' completed (%s)", toolName, duration.Round(time.Millisecond)))
 
 	return result, nil

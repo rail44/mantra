@@ -57,12 +57,43 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	// DevStral最適化：XMLタグで構造化
 	prompt.WriteString("<context>\n")
 
-	// Import情報を最初に表示
-	if len(ctx.Imports) > 0 {
-		prompt.WriteString("Available imports:\n")
-		for _, imp := range ctx.Imports {
-			prompt.WriteString(fmt.Sprintf("```go\nimport %s\n```\n\n", imp))
+	// Import情報を整理して表示
+	var regularImports []*context.ImportInfo
+	var blankImports []*context.ImportInfo
+
+	for _, imp := range ctx.Imports {
+		if imp.IsBlank {
+			blankImports = append(blankImports, imp)
+		} else {
+			regularImports = append(regularImports, imp)
 		}
+	}
+
+	// Regular imports
+	if len(regularImports) > 0 {
+		prompt.WriteString("Available imports (already in use):\n```go\n")
+		for _, imp := range regularImports {
+			if imp.Alias != "" && imp.Alias != imp.GetIdentifier() {
+				prompt.WriteString(fmt.Sprintf("import %s \"%s\"\n", imp.Alias, imp.Path))
+			} else {
+				prompt.WriteString(fmt.Sprintf("import \"%s\"\n", imp.Path))
+			}
+		}
+		prompt.WriteString("```\n")
+		prompt.WriteString("Usage in code:\n")
+		for _, imp := range regularImports {
+			prompt.WriteString(fmt.Sprintf("- %s (from %s)\n", imp.GetIdentifier(), imp.Path))
+		}
+		prompt.WriteString("\n")
+	}
+
+	// Blank imports indicate packages available for generated code
+	if len(blankImports) > 0 {
+		prompt.WriteString("Additional packages available for generated code (marked with _ import):\n")
+		for _, imp := range blankImports {
+			prompt.WriteString(fmt.Sprintf("- %s (use as: %s)\n", imp.Path, imp.GetIdentifier()))
+		}
+		prompt.WriteString("Use these packages IF needed based on the specific instructions for this function.\n\n")
 	}
 
 	// 関数シグネチャに関連する型情報を優先的に表示
@@ -98,7 +129,17 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 
 	// Log imports separately for debugging
 	if len(ctx.Imports) > 0 {
-		b.logger.Trace(fmt.Sprintf("         imports: %v", ctx.Imports))
+		var importPaths []string
+		for _, imp := range ctx.Imports {
+			if imp.IsBlank {
+				importPaths = append(importPaths, "_ "+imp.Path)
+			} else if imp.Alias != "" {
+				importPaths = append(importPaths, imp.Alias+" "+imp.Path)
+			} else {
+				importPaths = append(importPaths, imp.Path)
+			}
+		}
+		b.logger.Trace(fmt.Sprintf("         imports: %v", importPaths))
 	}
 
 	return fullPrompt

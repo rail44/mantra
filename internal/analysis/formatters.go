@@ -56,6 +56,10 @@ func ExtractImports(node *ast.File) []string {
 	var imports []string
 	for _, imp := range node.Imports {
 		if imp.Name != nil {
+			// Skip blank imports (they're for generated code, not context)
+			if imp.Name.Name == "_" {
+				continue
+			}
 			// Named import: alias "path"
 			imports = append(imports, imp.Name.Name+" "+imp.Path.Value)
 		} else {
@@ -64,4 +68,17 @@ func ExtractImports(node *ast.File) []string {
 		}
 	}
 	return imports
+}
+
+// ExtractBlankImports extracts blank imports (imports with _) from the file
+func ExtractBlankImports(node *ast.File) []string {
+	var blankImports []string
+	for _, imp := range node.Imports {
+		if imp.Name != nil && imp.Name.Name == "_" {
+			// Remove quotes from import path
+			path := strings.Trim(imp.Path.Value, `"`)
+			blankImports = append(blankImports, path)
+		}
+	}
+	return blankImports
 }

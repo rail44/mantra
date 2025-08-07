@@ -94,6 +94,9 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	// Change package name
 	content = strings.Replace(content, fmt.Sprintf("package %s", fileInfo.PackageName), fmt.Sprintf("package %s", g.config.PackageName), 1)
 
+	// Convert blank imports to regular imports
+	content = g.convertBlankImports(content)
+
 	// Sort targets by line number in reverse order to avoid line number shifts
 	var targetsToProcess []*parser.Target
 	for _, target := range fileInfo.Targets {
@@ -123,6 +126,13 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	for _, impl := range implementations {
 		implImports := imports.AnalyzeRequiredImports(impl)
 		requiredImports = imports.MergeImports(requiredImports, implImports)
+	}
+
+	// Extract blank imports from the original file (imports marked with _)
+	// These indicate packages that should be used in generated code
+	blankImports := imports.ExtractBlankImports(fileInfo.SourceContent)
+	if len(blankImports) > 0 {
+		requiredImports = imports.MergeImports(requiredImports, blankImports)
 	}
 
 	// Add required imports to the generated file

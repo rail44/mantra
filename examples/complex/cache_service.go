@@ -3,6 +3,9 @@ package complex
 import (
 	"sync"
 	"time"
+	
+	// For generated code
+	_ "fmt"
 )
 
 type cacheItem struct {

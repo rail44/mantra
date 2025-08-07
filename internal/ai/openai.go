@@ -323,7 +323,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 		}
 		c.logger.Info(fmt.Sprintf("Running tools: %s", strings.Join(toolNames, ", ")))
 	}
-	
+
 	// Execute all tools in parallel
 	for i, toolCall := range toolCalls {
 		wg.Add(1)

@@ -12,7 +12,7 @@ import (
 
 // RelevantContext holds context information relevant to a function
 type RelevantContext struct {
-	Imports     []string          // Import statements
+	Imports     []*ImportInfo     // All imports with structured information
 	Types       map[string]string // Type definitions (name -> definition)
 	PackageName string            // Package name
 }
@@ -29,7 +29,7 @@ func ExtractFunctionContext(filePath string, target *parser.Target) (*RelevantCo
 	ctx := &RelevantContext{
 		Types:       make(map[string]string),
 		PackageName: node.Name.Name,
-		Imports:     analysis.ExtractImports(node),
+		Imports:     ExtractImportInfo(node),
 	}
 
 	// Step 1: Collect all type definitions in the file

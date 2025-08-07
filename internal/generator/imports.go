@@ -91,6 +91,20 @@ func (g *Generator) addImports(content string, requiredImports []string) string 
 	return strings.Join(result, "\n")
 }
 
+// convertBlankImports converts blank imports (_ "package") to regular imports
+func (g *Generator) convertBlankImports(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Check for blank import pattern: _ "package/path"
+		if strings.HasPrefix(trimmed, `_ "`) {
+			// Remove the underscore and space
+			lines[i] = strings.Replace(line, `_ "`, `"`, 1)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // addImportsSimple adds imports using simple string manipulation
 func (g *Generator) addImportsSimple(content string, requiredImports []string) string {
 	// Find package declaration

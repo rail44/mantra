@@ -3,6 +3,10 @@ package complex
 import (
 	"context"
 	"time"
+	
+	// For generated code
+	_ "fmt"
+	_ "github.com/google/uuid"
 )
 
 // Order represents an order

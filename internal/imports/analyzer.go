@@ -165,3 +165,25 @@ func MergeImports(existingImports []string, newImports []string) []string {
 
 	return merged
 }
+
+// ExtractBlankImports extracts blank imports from a file's AST
+// These are imports with "_" that indicate packages needed for generated code
+func ExtractBlankImports(fileContent string) []string {
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "source.go", fileContent, parser.ParseComments)
+	if err != nil {
+		return nil
+	}
+
+	var blankImports []string
+	for _, imp := range node.Imports {
+		// Check if this is a blank import
+		if imp.Name != nil && imp.Name.Name == "_" {
+			// Remove quotes from import path
+			path := strings.Trim(imp.Path.Value, `"`)
+			blankImports = append(blankImports, path)
+		}
+	}
+
+	return blankImports
+}

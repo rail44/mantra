@@ -340,12 +340,12 @@ func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Lo
 	phaseTools := p.GetTools()
 	aiTools := ai.ConvertToAITools(phaseTools)
 	executor := tools.NewExecutor(phaseTools, logger)
-	
+
 	// Set context if provided
 	if toolContext != nil {
 		executor.SetContext(toolContext)
 	}
-	
+
 	aiClient.SetTools(aiTools, executor)
 }
 
@@ -507,7 +507,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	logger.Info("Generating implementation...")
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
 	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
-	
+
 	// Create tool context for static analysis
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)
 	configureAIClientForPhase(aiClient, implPhase, logger, toolContext)

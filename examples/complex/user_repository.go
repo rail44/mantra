@@ -3,6 +3,9 @@ package complex
 import (
 	"context"
 	"sync"
+	
+	// For generated code
+	_ "fmt"
 )
 
 // User represents a user

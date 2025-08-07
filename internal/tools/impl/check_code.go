@@ -23,8 +23,8 @@ import (
 	"honnef.co/go/tools/stylecheck"
 	"honnef.co/go/tools/unused"
 
-	"github.com/rail44/mantra/internal/tools"
 	pkgparser "github.com/rail44/mantra/internal/parser"
+	"github.com/rail44/mantra/internal/tools"
 )
 
 // CheckCodeTool validates Go code using staticcheck analyzers
@@ -83,7 +83,7 @@ func (t *CheckCodeTool) Execute(ctx context.Context, params map[string]interface
 			Message: "Parameter 'code' is required and must be a string",
 		}
 	}
-	
+
 	// Trim whitespace to avoid issues with leading/trailing spaces
 	code = strings.TrimSpace(code)
 
@@ -317,18 +317,18 @@ func (pm *PositionMapper) ParseErrorPosition(errPos string, targetFile string) (
 	if errPos == "" || errPos == "-" {
 		return 0, 0
 	}
-	
+
 	parts := strings.Split(errPos, ":")
 	if len(parts) < 2 || !strings.HasSuffix(parts[0], filepath.Base(targetFile)) {
 		return 0, 0
 	}
-	
+
 	line, _ = strconv.Atoi(parts[1])
 	line = line - pm.startPosition.Line + 1
 	if line <= 0 {
 		return 0, 0
 	}
-	
+
 	if len(parts) >= 3 {
 		column, _ = strconv.Atoi(parts[2])
 	}
@@ -338,12 +338,12 @@ func (pm *PositionMapper) ParseErrorPosition(errPos string, targetFile string) (
 // collectAnalyzers collects all analyzers except those marked as NonDefault
 func collectAnalyzers() []*analysis.Analyzer {
 	var analyzers []*analysis.Analyzer
-	
+
 	// Helper to check if analyzer should be included
 	include := func(la *lint.Analyzer) bool {
 		return la.Analyzer != nil && (la.Doc == nil || !la.Doc.NonDefault)
 	}
-	
+
 	// Collect from all analyzer sets
 	for _, la := range simple.Analyzers {
 		if include(la) {
@@ -363,7 +363,7 @@ func collectAnalyzers() []*analysis.Analyzer {
 	if include(unused.Analyzer) {
 		analyzers = append(analyzers, unused.Analyzer.Analyzer)
 	}
-	
+
 	return analyzers
 }
 
@@ -383,13 +383,13 @@ func runAnalyzer(analyzer *analysis.Analyzer, pkg *packages.Package, results map
 		AllObjectFacts:    func() []analysis.ObjectFact { return nil },
 		AllPackageFacts:   func() []analysis.PackageFact { return nil },
 	}
-	
+
 	if report != nil {
 		pass.Report = report
 	} else {
 		pass.Report = func(analysis.Diagnostic) {}
 	}
-	
+
 	return analyzer.Run(pass)
 }
 
@@ -401,7 +401,7 @@ func runAnalyzerSafe(analyzer *analysis.Analyzer, pkg *packages.Package, results
 			_ = r
 		}
 	}()
-	
+
 	if result, err := runAnalyzer(analyzer, pkg, results, report); err == nil && result != nil {
 		results[analyzer] = result
 	}
@@ -427,7 +427,7 @@ func (t *CheckCodeTool) runAnalyzersWithFilter(pkgs []*packages.Package, modifie
 	// Collect all package errors
 	var issues []Issue
 	mapper, _ := t.createPositionMapper(targetPkg, modified, targetFile)
-	
+
 	for _, pkg := range pkgs {
 		for _, err := range pkg.Errors {
 			issue := Issue{Code: "package_error", Message: err.Msg}
@@ -437,7 +437,7 @@ func (t *CheckCodeTool) runAnalyzersWithFilter(pkgs []*packages.Package, modifie
 			issues = append(issues, issue)
 		}
 	}
-	
+
 	// Early return if mapper creation failed
 	if mapper == nil {
 		return &CheckCodeResult{Valid: len(issues) == 0, Issues: issues}, nil
@@ -448,12 +448,12 @@ func (t *CheckCodeTool) runAnalyzersWithFilter(pkgs []*packages.Package, modifie
 
 	// Run analyzers
 	analyzersResults := make(map[*analysis.Analyzer]interface{})
-	
+
 	// Run inspect analyzer first (many analyzers depend on it)
 	if result, err := runAnalyzer(inspect.Analyzer, targetPkg, analyzersResults, nil); err == nil {
 		analyzersResults[inspect.Analyzer] = result
 	}
-	
+
 	// Run all other analyzers
 	for _, analyzer := range allAnalyzers {
 		runAnalyzerSafe(analyzer, targetPkg, analyzersResults, func(diag analysis.Diagnostic) {
@@ -483,8 +483,8 @@ type CheckCodeResult struct {
 
 // Issue represents a code issue found during checking
 type Issue struct {
-	Code    string `json:"code"`              // Analyzer code (e.g., "SA1000")
-	Message string `json:"message"`           // Issue description
-	Line    int    `json:"line,omitempty"`    // Line number (relative to function body)
-	Column  int    `json:"column,omitempty"`  // Column position
+	Code    string `json:"code"`             // Analyzer code (e.g., "SA1000")
+	Message string `json:"message"`          // Issue description
+	Line    int    `json:"line,omitempty"`   // Line number (relative to function body)
+	Column  int    `json:"column,omitempty"` // Column position
 }

@@ -15,8 +15,8 @@ type TargetView struct {
 	Index       int
 	Total       int
 	Status      string
-	Phase       string  // Current phase (e.g., "Context Gathering", "Implementation")
-	PhaseDetail string  // Phase-specific detail (e.g., "Analyzing codebase", "Generating code")
+	Phase       string // Current phase (e.g., "Context Gathering", "Implementation")
+	PhaseDetail string // Phase-specific detail (e.g., "Analyzing codebase", "Generating code")
 	Logs        []LogEntry
 	StartTime   time.Time
 	EndTime     time.Time
@@ -70,7 +70,7 @@ func (m *Model) addTarget(name string, index, total int) {
 func (m *Model) updatePhase(targetIndex int, phase string, detail string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if m.validateTargetIndex(targetIndex) {
 		target := m.targets[targetIndex-1]
 		target.mu.Lock()
@@ -115,7 +115,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		// Update target status
 		m.updateStatus(msg)
-		
+
 	case phaseMsg:
 		// Update target phase
 		m.updatePhase(msg.TargetIndex, msg.Phase, msg.Detail)

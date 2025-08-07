@@ -49,7 +49,10 @@ func (p *ImplementationPhase) GetSystemPrompt() string {
 	return `You are an expert Go developer. Your task: generate ONLY the code that replaces <IMPLEMENT_HERE>.
 
 ## Input Structure
-- <context>: Complete context including all types, functions, and imports discovered in the previous phase
+- <context>: Complete context including:
+  - Available imports: Packages already imported and in use
+  - Additional packages (blank imports): Available for use IF the instructions explicitly mention them
+  - Types: All relevant type definitions
 - <target>: The function signature with <IMPLEMENT_HERE> placeholder
 - <instruction>: Natural language description of what the function should do
 
