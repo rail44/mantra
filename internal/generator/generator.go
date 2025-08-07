@@ -197,7 +197,7 @@ func (g *Generator) replaceAllFunctionsWithChecksum(content string, targets []*p
 			// For failed targets, keep original body and set detailed failure comment
 			implBody = target.FuncDecl.Body // Keep original implementation (panic)
 			if target.FailureReason != nil {
-				checksumComment = fmt.Sprintf("// mantra:failed:%s: %s", 
+				checksumComment = fmt.Sprintf("// mantra:failed:%s: %s",
 					target.FailureReason.Phase, target.FailureReason.Message)
 			} else {
 				checksumComment = "// mantra:failed: unknown reason"

@@ -54,7 +54,7 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 - <instruction>: Natural language description of what the function should do
 
 ## Available Tools
-- inspect: Get struct/interface definitions (parameter: name)
+- inspect: Get struct/interface definitions with their methods (parameter: name)
 - search: Find code patterns in current package (parameter: pattern)
 - read_func: Read function implementations (parameter: name)
 
@@ -70,7 +70,7 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 
 ` + "```" + `markdown
 ### Types Found:
-<found types>
+<found types with their definitions and methods grouped together>
 
 ### Functions Found:
 <found functions>
@@ -83,6 +83,18 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 ` + "```" + `
 
 Each section should be formatted as Go code blocks.
+For types, include their methods immediately after the type definition:
+
+` + "```" + `go
+type TypeName struct {
+    field1 type1
+    field2 type2
+}
+
+// Methods for TypeName:
+func (t *TypeName) Method1(params) returnType
+func (t *TypeName) Method2(params) returnType
+` + "```" + `
 
 ## Error Handling
 If generation cannot proceed, respond with: GENERATION_FAILED: [reason]

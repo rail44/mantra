@@ -297,7 +297,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 	if err != nil {
 		return fmt.Errorf("failed to generate implementations: %w", err)
 	}
-	
+
 	// Create implementation map for backward compatibility during transition
 	implementations := make(map[string]string)
 	for _, result := range allResults {
@@ -323,7 +323,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 
 		// Collect GenerationResults for this file
 		var fileGenerationResults []*parser.GenerationResult
-		
+
 		// Add results from generation
 		if genResults, exists := fileResults[filePath]; exists {
 			fileGenerationResults = append(fileGenerationResults, genResults...)
@@ -425,7 +425,7 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 
 			g.Go(func() error {
 				result := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, targetCtx.fileInfo, aiClient, projectRoot, index, total, uiProgram)
-				
+
 				mu.Lock()
 				allResults = append(allResults, result)
 				if result.Success {
@@ -515,27 +515,27 @@ func parseAIResponse(response, phase string) (implementation string, failure *pa
 		// Extract failure message
 		message := strings.TrimPrefix(strings.TrimSpace(response), "GENERATION_FAILED:")
 		message = strings.TrimSpace(message)
-		
+
 		return "", &parser.FailureReason{
 			Phase:   phase,
 			Message: message,
 			Context: "AI explicitly indicated generation cannot be completed",
 		}
 	}
-	
-	// Check for common failure patterns in responses  
+
+	// Check for common failure patterns in responses
 	lower := strings.ToLower(response)
-	if strings.Contains(lower, "cannot implement") || 
-	   strings.Contains(lower, "unable to implement") ||
-	   strings.Contains(lower, "insufficient information") ||
-	   strings.Contains(lower, "not enough context") {
+	if strings.Contains(lower, "cannot implement") ||
+		strings.Contains(lower, "unable to implement") ||
+		strings.Contains(lower, "insufficient information") ||
+		strings.Contains(lower, "not enough context") {
 		return "", &parser.FailureReason{
 			Phase:   phase,
 			Message: "AI indicated implementation difficulties: " + response,
 			Context: "AI response suggests implementation issues",
 		}
 	}
-	
+
 	return response, nil
 }
 

@@ -87,3 +87,15 @@ func (p *Program) GetFailedTargets() []*TargetView {
 	}
 	return failed
 }
+
+// GetAllTargets returns information about all targets
+func (p *Program) GetAllTargets() []*TargetView {
+	p.model.mu.RLock()
+	defer p.model.mu.RUnlock()
+
+	var all []*TargetView
+	for _, target := range p.model.targets {
+		all = append(all, target)
+	}
+	return all
+}

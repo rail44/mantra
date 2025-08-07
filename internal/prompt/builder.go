@@ -62,7 +62,7 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 		prompt.WriteString("Available packages:\n")
 		for _, imp := range ctx.Imports {
 			identifier := imp.GetIdentifier()
-			
+
 			// For blank imports, we still show them as available packages
 			// The AI doesn't need to know about the blank import detail
 			if imp.Path == identifier {
@@ -82,8 +82,17 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	// 関数シグネチャに関連する型情報を優先的に表示
 	if len(ctx.Types) > 0 {
 		prompt.WriteString("Available types:\n")
-		for _, typeDef := range ctx.Types {
-			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", typeDef))
+		for typeName, typeDef := range ctx.Types {
+			prompt.WriteString(fmt.Sprintf("```go\n%s\n```\n", typeDef))
+
+			// Include methods for this type if available
+			if methods, exists := ctx.Methods[typeName]; exists && len(methods) > 0 {
+				prompt.WriteString("\nMethods:\n")
+				for _, method := range methods {
+					prompt.WriteString(fmt.Sprintf("- %s\n", method.Signature))
+				}
+			}
+			prompt.WriteString("\n")
 		}
 	}
 
@@ -107,8 +116,12 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	fullPrompt := prompt.String()
 
 	// Log the generated prompt at trace level for debugging
-	b.logger.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d imports",
-		target.Name, len(fullPrompt), len(ctx.Types), len(ctx.Imports)))
+	totalMethods := 0
+	for _, methods := range ctx.Methods {
+		totalMethods += len(methods)
+	}
+	b.logger.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d methods, %d imports",
+		target.Name, len(fullPrompt), len(ctx.Types), totalMethods, len(ctx.Imports)))
 
 	// Log imports separately for debugging
 	if len(ctx.Imports) > 0 {
