@@ -25,6 +25,8 @@ import (
 	"github.com/rail44/mantra/internal/ui"
 )
 
+var verbose bool
+
 var generateCmd = &cobra.Command{
 	Use:   "generate [package-dir]",
 	Short: "Generate implementations for all pending targets in a package",
@@ -80,6 +82,7 @@ their implementations based on the natural language instructions provided.`,
 }
 
 func init() {
+	generateCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed logs for all targets")
 	rootCmd.AddCommand(generateCmd)
 }
 
@@ -453,26 +456,53 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 		<-done // Ensure generation completes even if TUI fails
 	}
 
-	// Display detailed logs for failed targets
-	failedTargets := uiProgram.GetFailedTargets()
-	if len(failedTargets) > 0 {
-		fmt.Println()
-		log.Error("Failed targets - Detailed logs")
-		fmt.Println()
-
-		for _, target := range failedTargets {
-			log.Error(fmt.Sprintf("Failed: %s", target.Name),
-				slog.String("duration", target.EndTime.Sub(target.StartTime).Round(time.Millisecond).String()))
-
-			logs := target.GetAllLogs()
-			for _, logEntry := range logs {
-				timestamp := logEntry.Timestamp.Format("15:04:05.000")
-				fmt.Printf("  [%s] %s: %s\n", timestamp, logEntry.Level, logEntry.Message)
-			}
+	// Display detailed logs based on verbose flag
+	if verbose {
+		// Show logs for all targets when verbose is enabled
+		allTargets := uiProgram.GetAllTargets()
+		if len(allTargets) > 0 {
 			fmt.Println()
-		}
+			log.Info("Detailed logs for all targets")
+			fmt.Println()
 
-		log.Error("Total failures", slog.Int("count", len(failedTargets)))
+			for _, target := range allTargets {
+				status := "Success"
+				if target.Status == "failed" {
+					status = "Failed"
+				}
+				log.Info(fmt.Sprintf("%s: %s", status, target.Name),
+					slog.String("duration", target.EndTime.Sub(target.StartTime).Round(time.Millisecond).String()))
+
+				logs := target.GetAllLogs()
+				for _, logEntry := range logs {
+					timestamp := logEntry.Timestamp.Format("15:04:05.000")
+					fmt.Printf("  [%s] %s: %s\n", timestamp, logEntry.Level, logEntry.Message)
+				}
+				fmt.Println()
+			}
+		}
+	} else {
+		// Show logs only for failed targets when not verbose
+		failedTargets := uiProgram.GetFailedTargets()
+		if len(failedTargets) > 0 {
+			fmt.Println()
+			log.Error("Failed targets - Detailed logs")
+			fmt.Println()
+
+			for _, target := range failedTargets {
+				log.Error(fmt.Sprintf("Failed: %s", target.Name),
+					slog.String("duration", target.EndTime.Sub(target.StartTime).Round(time.Millisecond).String()))
+
+				logs := target.GetAllLogs()
+				for _, logEntry := range logs {
+					timestamp := logEntry.Timestamp.Format("15:04:05.000")
+					fmt.Printf("  [%s] %s: %s\n", timestamp, logEntry.Level, logEntry.Message)
+				}
+				fmt.Println()
+			}
+
+			log.Error("Total failures", slog.Int("count", len(failedTargets)))
+		}
 	}
 
 	return allResults, nil
@@ -598,6 +628,8 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	contextResult = parsedContext
 
 	logger.Debug("Context gathering result", "length", len(contextResult))
+	// Log the actual context content at trace level
+	logger.Trace("Context gathering output", "content", contextResult)
 
 	// Phase 2: Implementation
 	logger.Info("Generating implementation...")
