@@ -308,41 +308,113 @@ func (pm *PositionMapper) IsInGeneratedCode(pos token.Pos) bool {
 // ToRelativePosition converts absolute position to relative position within function body
 func (pm *PositionMapper) ToRelativePosition(pos token.Pos) (line, column int) {
 	absPosition := pm.fileSet.Position(pos)
-
-	// Calculate relative line number from function body start
 	relativeLine := absPosition.Line - pm.startPosition.Line + 1
-
-	// For the first line, adjust column position for indentation
-	if relativeLine == 1 {
-		// Calculate base indentation from the first statement if available
-		if pm.funcDecl.Body.List != nil && len(pm.funcDecl.Body.List) > 0 {
-			firstStmt := pm.funcDecl.Body.List[0]
-			firstStmtPos := pm.fileSet.Position(firstStmt.Pos())
-			baseIndent := firstStmtPos.Column - 1 // Convert to 0-based
-			relativeColumn := absPosition.Column - baseIndent
-			if relativeColumn < 1 {
-				relativeColumn = 1
-			}
-			return relativeLine, relativeColumn
-		}
-		return relativeLine, absPosition.Column
-	}
-
 	return relativeLine, absPosition.Column
+}
+
+// ParseErrorPosition parses position from error string and converts to relative position
+func (pm *PositionMapper) ParseErrorPosition(errPos string, targetFile string) (line, column int) {
+	if errPos == "" || errPos == "-" {
+		return 0, 0
+	}
+	
+	parts := strings.Split(errPos, ":")
+	if len(parts) < 2 || !strings.HasSuffix(parts[0], filepath.Base(targetFile)) {
+		return 0, 0
+	}
+	
+	line, _ = strconv.Atoi(parts[1])
+	line = line - pm.startPosition.Line + 1
+	if line <= 0 {
+		return 0, 0
+	}
+	
+	if len(parts) >= 3 {
+		column, _ = strconv.Atoi(parts[2])
+	}
+	return
+}
+
+// collectAnalyzers collects all analyzers except those marked as NonDefault
+func collectAnalyzers() []*analysis.Analyzer {
+	var analyzers []*analysis.Analyzer
+	
+	// Helper to check if analyzer should be included
+	include := func(la *lint.Analyzer) bool {
+		return la.Analyzer != nil && (la.Doc == nil || !la.Doc.NonDefault)
+	}
+	
+	// Collect from all analyzer sets
+	for _, la := range simple.Analyzers {
+		if include(la) {
+			analyzers = append(analyzers, la.Analyzer)
+		}
+	}
+	for _, la := range staticcheck.Analyzers {
+		if include(la) {
+			analyzers = append(analyzers, la.Analyzer)
+		}
+	}
+	for _, la := range stylecheck.Analyzers {
+		if include(la) {
+			analyzers = append(analyzers, la.Analyzer)
+		}
+	}
+	if include(unused.Analyzer) {
+		analyzers = append(analyzers, unused.Analyzer.Analyzer)
+	}
+	
+	return analyzers
+}
+
+// runAnalyzer runs a single analyzer
+func runAnalyzer(analyzer *analysis.Analyzer, pkg *packages.Package, results map[*analysis.Analyzer]interface{}, report func(analysis.Diagnostic)) (interface{}, error) {
+	pass := &analysis.Pass{
+		Analyzer:          analyzer,
+		Fset:              pkg.Fset,
+		Files:             pkg.Syntax,
+		Pkg:               pkg.Types,
+		TypesInfo:         pkg.TypesInfo,
+		ResultOf:          results,
+		ImportObjectFact:  func(types.Object, analysis.Fact) bool { return false },
+		ExportObjectFact:  func(types.Object, analysis.Fact) {},
+		ImportPackageFact: func(*types.Package, analysis.Fact) bool { return false },
+		ExportPackageFact: func(analysis.Fact) {},
+		AllObjectFacts:    func() []analysis.ObjectFact { return nil },
+		AllPackageFacts:   func() []analysis.PackageFact { return nil },
+	}
+	
+	if report != nil {
+		pass.Report = report
+	} else {
+		pass.Report = func(analysis.Diagnostic) {}
+	}
+	
+	return analyzer.Run(pass)
+}
+
+// runAnalyzerSafe runs an analyzer with panic recovery
+func runAnalyzerSafe(analyzer *analysis.Analyzer, pkg *packages.Package, results map[*analysis.Analyzer]interface{}, report func(analysis.Diagnostic)) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Silently skip analyzers that panic (usually due to missing dependencies)
+			_ = r
+		}
+	}()
+	
+	if result, err := runAnalyzer(analyzer, pkg, results, report); err == nil && result != nil {
+		results[analyzer] = result
+	}
 }
 
 // runAnalyzersWithFilter runs staticcheck analyzers with position filtering
 func (t *CheckCodeTool) runAnalyzersWithFilter(pkgs []*packages.Package, modified *ModifiedFile, targetFile string) (*CheckCodeResult, error) {
-	var issues []Issue
-	var packageErrors []packages.Error
-
-	// Collect package errors first
-	for _, pkg := range pkgs {
-		packageErrors = append(packageErrors, pkg.Errors...)
+	if len(pkgs) == 0 {
+		return &CheckCodeResult{Valid: false}, nil
 	}
 
-	// Find the target package
-	var targetPkg *packages.Package
+	// Find target package (default to first if not found)
+	targetPkg := pkgs[0]
 	for _, pkg := range pkgs {
 		for _, file := range pkg.CompiledGoFiles {
 			if file == targetFile {
@@ -350,188 +422,51 @@ func (t *CheckCodeTool) runAnalyzersWithFilter(pkgs []*packages.Package, modifie
 				break
 			}
 		}
-		if targetPkg != nil {
-			break
-		}
 	}
 
-	if targetPkg == nil {
-		// If no exact match, use the first package (common case for overlay)
-		if len(pkgs) > 0 {
-			targetPkg = pkgs[0]
-		} else {
-			return &CheckCodeResult{
-				Valid:  false,
-				Issues: issues,
-			}, nil
-		}
-	}
-
-	// Create position mapper
-	mapper, err := t.createPositionMapper(targetPkg, modified, targetFile)
-	if err != nil {
-		// If we can't create a mapper, convert package errors without position mapping
-		for _, pkgErr := range packageErrors {
-			issues = append(issues, Issue{
-				Code:    "package_error",
-				Message: pkgErr.Msg,
-			})
-		}
-		return &CheckCodeResult{
-			Valid:  len(packageErrors) == 0,
-			Issues: issues,
-		}, nil
-	}
+	// Collect all package errors
+	var issues []Issue
+	mapper, _ := t.createPositionMapper(targetPkg, modified, targetFile)
 	
-	// Process package errors with position mapping
-	for _, pkgErr := range packageErrors {
-		issue := Issue{
-			Code:    "package_error",
-			Message: pkgErr.Msg,
-		}
-		
-		// Parse position from error if available
-		// Format: "file:line:col" or "file:line"
-		if pkgErr.Pos != "" && pkgErr.Pos != "-" {
-			parts := strings.Split(pkgErr.Pos, ":")
-			if len(parts) >= 2 {
-				// Check if this error is in our target file
-				if strings.HasSuffix(parts[0], filepath.Base(targetFile)) {
-					// Parse line number
-					if line, parseErr := strconv.Atoi(parts[1]); parseErr == nil {
-						// Convert absolute line to relative position within function body
-						relLine := line - mapper.startPosition.Line + 1
-						if relLine > 0 {
-							issue.Line = relLine
-							// Parse column if available
-							if len(parts) >= 3 {
-								if col, parseErr := strconv.Atoi(parts[2]); parseErr == nil {
-									issue.Column = col
-								}
-							}
-						}
-					}
-				}
+	for _, pkg := range pkgs {
+		for _, err := range pkg.Errors {
+			issue := Issue{Code: "package_error", Message: err.Msg}
+			if mapper != nil {
+				issue.Line, issue.Column = mapper.ParseErrorPosition(err.Pos, targetFile)
 			}
+			issues = append(issues, issue)
 		}
-		
-		issues = append(issues, issue)
+	}
+	
+	// Early return if mapper creation failed
+	if mapper == nil {
+		return &CheckCodeResult{Valid: len(issues) == 0, Issues: issues}, nil
 	}
 
-	// Collect all analyzers (same as staticcheck CLI)
-	var allAnalyzers []*analysis.Analyzer
-	
-	// Helper function to check if analyzer should be included
-	// This mimics staticcheck CLI's behavior: include all analyzers except those marked as NonDefault
-	shouldInclude := func(la *lint.Analyzer) bool {
-		// Check if the analyzer has NonDefault set to true
-		// The staticcheck CLI excludes analyzers with NonDefault=true by default
-		if la.Doc != nil && la.Doc.NonDefault {
-			return false
-		}
-		return true
-	}
-	
-	// Add simple analyzers (S*)
-	for _, la := range simple.Analyzers {
-		if la.Analyzer != nil && shouldInclude(la) {
-			allAnalyzers = append(allAnalyzers, la.Analyzer)
-		}
-	}
-	
-	// Add staticcheck analyzers (SA*)
-	for _, la := range staticcheck.Analyzers {
-		if la.Analyzer != nil && shouldInclude(la) {
-			allAnalyzers = append(allAnalyzers, la.Analyzer)
-		}
-	}
-	
-	// Add stylecheck analyzers (ST*)
-	for _, la := range stylecheck.Analyzers {
-		if la.Analyzer != nil && shouldInclude(la) {
-			allAnalyzers = append(allAnalyzers, la.Analyzer)
-		}
-	}
-	
-	// Add unused analyzer (U*)
-	// Note: unused.Analyzer is a single analyzer, not a slice
-	if unused.Analyzer.Analyzer != nil && shouldInclude(unused.Analyzer) {
-		allAnalyzers = append(allAnalyzers, unused.Analyzer.Analyzer)
-	}
+	// Collect analyzers (exclude NonDefault ones to match staticcheck CLI)
+	allAnalyzers := collectAnalyzers()
 
-	// Run all analyzers with proper dependency handling
-	// First, run the inspect analyzer that many other analyzers depend on
+	// Run analyzers
 	analyzersResults := make(map[*analysis.Analyzer]interface{})
 	
-	// Run inspect analyzer first
-	inspectPass := &analysis.Pass{
-		Analyzer:      inspect.Analyzer,
-		Fset:          targetPkg.Fset,
-		Files:         targetPkg.Syntax,
-		Pkg:           targetPkg.Types,
-		TypesInfo:     targetPkg.TypesInfo,
-		ResultOf:      make(map[*analysis.Analyzer]interface{}),
-		ImportObjectFact: func(obj types.Object, fact analysis.Fact) bool { return false },
-		ExportObjectFact: func(obj types.Object, fact analysis.Fact) {},
-		ImportPackageFact: func(pkg *types.Package, fact analysis.Fact) bool { return false },
-		ExportPackageFact: func(fact analysis.Fact) {},
-		AllObjectFacts: func() []analysis.ObjectFact { return nil },
-		AllPackageFacts: func() []analysis.PackageFact { return nil },
-		Report: func(diag analysis.Diagnostic) {}, // Inspect doesn't report diagnostics
+	// Run inspect analyzer first (many analyzers depend on it)
+	if result, err := runAnalyzer(inspect.Analyzer, targetPkg, analyzersResults, nil); err == nil {
+		analyzersResults[inspect.Analyzer] = result
 	}
 	
-	if inspectResult, err := inspect.Analyzer.Run(inspectPass); err == nil {
-		analyzersResults[inspect.Analyzer] = inspectResult
-	}
-	
-	// Now run the other analyzers
+	// Run all other analyzers
 	for _, analyzer := range allAnalyzers {
-		pass := &analysis.Pass{
-			Analyzer:      analyzer,
-			Fset:          targetPkg.Fset,
-			Files:         targetPkg.Syntax,
-			Pkg:           targetPkg.Types,
-			TypesInfo:     targetPkg.TypesInfo,
-			ResultOf:      analyzersResults, // Share results between analyzers
-			ImportObjectFact: func(obj types.Object, fact analysis.Fact) bool { return false },
-			ExportObjectFact: func(obj types.Object, fact analysis.Fact) {},
-			ImportPackageFact: func(pkg *types.Package, fact analysis.Fact) bool { return false },
-			ExportPackageFact: func(fact analysis.Fact) {},
-			AllObjectFacts: func() []analysis.ObjectFact { return nil },
-			AllPackageFacts: func() []analysis.PackageFact { return nil },
-			Report: func(diag analysis.Diagnostic) {
-				// Only report diagnostics within the generated code
-				if mapper.IsInGeneratedCode(diag.Pos) {
-					// Convert to relative position
-					relLine, relColumn := mapper.ToRelativePosition(diag.Pos)
-
-					issues = append(issues, Issue{
-						Code:    analyzer.Name,
-						Message: diag.Message,
-						Line:    relLine,
-						Column:  relColumn,
-					})
-				}
-			},
-		}
-
-		// Run the analyzer with panic recovery
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// Log the panic for debugging but continue with other analyzers
-					// This typically happens when analyzer dependencies are not satisfied
-					// TODO: Implement proper dependency resolution
-					_ = r // For now, continue silently to avoid breaking the analysis
-				}
-			}()
-			
-			// Try to run the analyzer
-			if result, err := analyzer.Run(pass); err == nil && result != nil {
-				// Store result for dependent analyzers
-				analyzersResults[analyzer] = result
+		runAnalyzerSafe(analyzer, targetPkg, analyzersResults, func(diag analysis.Diagnostic) {
+			if mapper.IsInGeneratedCode(diag.Pos) {
+				line, column := mapper.ToRelativePosition(diag.Pos)
+				issues = append(issues, Issue{
+					Code:    analyzer.Name,
+					Message: diag.Message,
+					Line:    line,
+					Column:  column,
+				})
 			}
-		}()
+		})
 	}
 
 	return &CheckCodeResult{
