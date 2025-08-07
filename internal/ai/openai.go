@@ -49,6 +49,7 @@ type ProviderSpec struct {
 type OpenAIMessage struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning,omitempty"` // For models that support reasoning
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
@@ -177,8 +178,14 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	var result OpenAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -259,6 +266,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		cleanMsg := OpenAIMessage{
 			Role:      responseMsg.Role,
 			Content:   responseMsg.Content,
+			Reasoning: responseMsg.Reasoning, // Preserve reasoning for models that support it
 			ToolCalls: responseMsg.ToolCalls,
 		}
 		messages = append(messages, cleanMsg)

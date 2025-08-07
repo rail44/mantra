@@ -1,17 +1,18 @@
-# mantra Configuration for Simple Examples with Ollama
-# This example uses local Ollama with gpt-oss
-
 # Model configuration
-model = "gpt-oss:20b"
+model = "mistralai/devstral-small"
 
-# Ollama API endpoint
-url = "http://localhost:11434/v1"
+# OpenRouter API endpoint
+url = "https://openrouter.ai/api/v1"
 
 # Output directory
 dest = "../simple_mantra"
 
-# API key (not needed for Ollama)
-api_key = ""
+# API key from environment variable
+api_key = "${OPENROUTER_API_KEY}"
 
 # Debug logging to see generation details
 log_level = "trace"
+
+# OpenRouter-specific configuration
+[openrouter]
+providers = ["Mistral"]

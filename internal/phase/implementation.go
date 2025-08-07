@@ -62,6 +62,9 @@ func (p *ImplementationPhase) GetSystemPrompt() string {
 ## Process
 1. Review all information in <context>
 2. Implement according to <instruction> using available types and functions
+   - For methods: directly access struct fields (e.g., c.items[key], not c.Get(key))
+   - Use standard library functions directly (e.g., time.Now())
+   - The method being implemented is NOT available to call (would cause recursion)
 3. Validate your implementation with check_code tool
 4. Fix any issues found by the analysis
 5. Only return code that passes validation

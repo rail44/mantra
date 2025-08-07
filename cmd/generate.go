@@ -569,7 +569,8 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Phase 1: Context Gathering
 	logger.Info("Analyzing codebase context...")
-	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot, logger)
+	packagePath := filepath.Dir(target.FilePath) // Get the package directory
+	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger)
 	// Context gathering doesn't need tool context
 	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
 
