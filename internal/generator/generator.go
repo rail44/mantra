@@ -33,7 +33,7 @@ func New(config *Config) *Generator {
 }
 
 // GenerateFile generates a complete file with implementations for all targets
-func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[string]string) error {
+func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, results []*parser.GenerationResult) error {
 	// Create output directory if it doesn't exist
 	if err := os.MkdirAll(g.config.Dest, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -49,7 +49,7 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 	}
 
 	// Generate the file content
-	content, err := g.generateFileContent(fileInfo, implementations, existingContent)
+	content, err := g.generateFileContent(fileInfo, results, existingContent)
 	if err != nil {
 		return fmt.Errorf("failed to generate file content: %w", err)
 	}
@@ -73,7 +73,7 @@ func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, implementations map[
 }
 
 // generateFileContent creates the content for the generated file by replacing mantra functions
-func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementations map[string]string, existingContent string) (string, error) {
+func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, results []*parser.GenerationResult, existingContent string) (string, error) {
 	// Start with the original source content
 	content := fileInfo.SourceContent
 
@@ -97,16 +97,33 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	// Convert blank imports to regular imports
 	content = g.convertBlankImports(content)
 
+	// Create a map for quick lookup of results by target name
+	resultMap := make(map[string]*parser.GenerationResult)
+	for _, result := range results {
+		resultMap[result.Target.Name] = result
+	}
+
 	// Sort targets by line number in reverse order to avoid line number shifts
 	var targetsToProcess []*parser.Target
 	for _, target := range fileInfo.Targets {
 		// Process all targets with mantra comments
-		if implementation, exists := implementations[target.Name]; exists {
-			target.Implementation = implementation // Store implementation in target
-			target.GenerationFailed = false
+		if result, exists := resultMap[target.Name]; exists {
+			if result.Success {
+				target.Implementation = result.Implementation
+				target.GenerationFailed = false
+			} else {
+				// Mark as failed, keep original implementation (panic), store failure reason
+				target.GenerationFailed = true
+				target.FailureReason = result.FailureReason
+			}
 		} else {
-			// Mark as failed, keep original implementation (panic)
+			// No result found - mark as failed
 			target.GenerationFailed = true
+			target.FailureReason = &parser.FailureReason{
+				Phase:   "unknown",
+				Message: "No generation result found for this target",
+				Context: "Target may have been skipped during processing",
+			}
 		}
 		targetsToProcess = append(targetsToProcess, target)
 	}
@@ -125,11 +142,13 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	}
 	content = newContent
 
-	// Analyze required imports from all implementations
+	// Analyze required imports from successful implementations
 	var requiredImports []string
-	for _, impl := range implementations {
-		implImports := imports.AnalyzeRequiredImports(impl)
-		requiredImports = imports.MergeImports(requiredImports, implImports)
+	for _, result := range results {
+		if result.Success {
+			implImports := imports.AnalyzeRequiredImports(result.Implementation)
+			requiredImports = imports.MergeImports(requiredImports, implImports)
+		}
 	}
 
 	// Extract blank imports from the original file (imports marked with _)
@@ -175,9 +194,14 @@ func (g *Generator) replaceAllFunctionsWithChecksum(content string, targets []*p
 		var checksumComment string
 
 		if target.GenerationFailed {
-			// For failed targets, keep original body and set failed checksum
+			// For failed targets, keep original body and set detailed failure comment
 			implBody = target.FuncDecl.Body // Keep original implementation (panic)
-			checksumComment = "// mantra:failed"
+			if target.FailureReason != nil {
+				checksumComment = fmt.Sprintf("// mantra:failed:%s: %s", 
+					target.FailureReason.Phase, target.FailureReason.Message)
+			} else {
+				checksumComment = "// mantra:failed: unknown reason"
+			}
 		} else {
 			// Parse the implementation as a function body
 			cleanedImpl := cleanCode(target.Implementation)

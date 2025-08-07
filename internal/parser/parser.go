@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rail44/mantra/internal/analysis"
 )
@@ -33,6 +34,22 @@ type Import struct {
 	Alias string // Import alias (empty if no alias)
 }
 
+// FailureReason represents the reason why generation failed
+type FailureReason struct {
+	Phase   string // Phase where failure occurred ("context_gathering" or "implementation")  
+	Message string // Detailed failure message
+	Context string // Additional context information
+}
+
+// GenerationResult represents the result of generating implementation for a target
+type GenerationResult struct {
+	Target         *Target       // The target function that was processed
+	Success        bool          // Whether generation succeeded
+	Implementation string        // Generated implementation code (when Success=true)
+	FailureReason  *FailureReason // Detailed failure information (when Success=false)
+	Duration       time.Duration  // Time taken for generation
+}
+
 // Target represents a function or method to generate
 type Target struct {
 	Name             string         // Function or method name
@@ -42,10 +59,12 @@ type Target struct {
 	Instruction      string         // Content from // mantra: comment
 	FilePath         string         // Source file path
 	HasPanic         bool           // Whether function contains panic("not implemented")
-	Implementation   string         // Generated implementation (temporary storage)
-	GenerationFailed bool           // Whether generation failed for this target
 	FuncDecl         *ast.FuncDecl  // AST node for the function declaration
 	TokenSet         *token.FileSet // Token file set for position information
+	// Generation result fields (set during processing)
+	Implementation   string         // Generated implementation (temporary storage)
+	GenerationFailed bool           // Whether generation failed for this target
+	FailureReason    *FailureReason // Detailed failure information (when GenerationFailed=true)
 }
 
 // Receiver represents method receiver

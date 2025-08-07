@@ -253,7 +253,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 		// Handle files without mantra targets
 		if len(result.Statuses) == 0 {
 			// Simply copy the file with package name change
-			if err := gen.GenerateFile(fileInfo, make(map[string]string)); err != nil {
+			if err := gen.GenerateFile(fileInfo, []*parser.GenerationResult{}); err != nil {
 				log.Error("failed to copy file without mantra targets",
 					slog.String("file", filePath),
 					slog.String("error", err.Error()))
@@ -290,12 +290,26 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 	}
 
 	// Generate all targets in parallel
-	implementations, err := generateAllTargetsInParallel(ctx, allTargets, aiClient)
+	allResults, err := generateAllTargetsInParallel(ctx, allTargets, aiClient)
 	if err != nil {
 		return fmt.Errorf("failed to generate implementations: %w", err)
 	}
+	
+	// Create implementation map for backward compatibility during transition
+	implementations := make(map[string]string)
+	for _, result := range allResults {
+		if result.Success {
+			implementations[result.Target.Name] = result.Implementation
+		}
+	}
 
-	// Group implementations by file and generate output files
+	// Group results by file and generate output files
+	fileResults := make(map[string][]*parser.GenerationResult)
+	for _, genResult := range allResults {
+		filePath := genResult.Target.FilePath
+		fileResults[filePath] = append(fileResults[filePath], genResult)
+	}
+
 	for _, result := range results {
 		if len(result.Statuses) == 0 {
 			continue // Already handled
@@ -304,21 +318,29 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 		fileInfo := result.FileInfo
 		filePath := fileInfo.FilePath
 
-		// Collect all implementations for this file
-		allImplementations := make(map[string]string)
+		// Collect GenerationResults for this file
+		var fileGenerationResults []*parser.GenerationResult
+		
+		// Add results from generation
+		if genResults, exists := fileResults[filePath]; exists {
+			fileGenerationResults = append(fileGenerationResults, genResults...)
+		}
 
-		// Add existing implementations
+		// Add existing implementations as successful results
 		for _, status := range result.Statuses {
 			if status.Status == detector.StatusCurrent {
-				allImplementations[status.Target.Name] = status.ExistingImpl
-			} else if impl, ok := implementations[status.Target.Name]; ok {
-				allImplementations[status.Target.Name] = impl
+				fileGenerationResults = append(fileGenerationResults, &parser.GenerationResult{
+					Target:         status.Target,
+					Success:        true,
+					Implementation: status.ExistingImpl,
+					Duration:       0, // No generation time for existing implementations
+				})
 			}
 		}
 
-		// Generate file with all implementations
-		if len(allImplementations) > 0 {
-			if err := gen.GenerateFile(fileInfo, allImplementations); err != nil {
+		// Generate file with all results
+		if len(fileGenerationResults) > 0 {
+			if err := gen.GenerateFile(fileInfo, fileGenerationResults); err != nil {
 				log.Error("failed to generate file",
 					slog.String("file", filePath),
 					slog.String("error", err.Error()))
@@ -366,9 +388,9 @@ func findProjectRoot(startPath string) string {
 }
 
 // generateAllTargetsInParallel generates implementations for all targets across multiple files in parallel
-func generateAllTargetsInParallel(ctx context.Context, targets []targetWithContext, aiClient *ai.Client) (map[string]string, error) {
+func generateAllTargetsInParallel(ctx context.Context, targets []targetWithContext, aiClient *ai.Client) ([]*parser.GenerationResult, error) {
 	if len(targets) == 0 {
-		return make(map[string]string), nil
+		return []*parser.GenerationResult{}, nil
 	}
 
 	// Get project root from the first target's file path
@@ -377,9 +399,10 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 	// Create TUI program for parallel execution
 	uiProgram := ui.NewProgram()
 
-	// Thread-safe map for collecting results
+	// Thread-safe collections for collecting results
 	var mu sync.Mutex
 	implementations := make(map[string]string)
+	var allResults []*parser.GenerationResult
 
 	// Channel to signal completion
 	done := make(chan struct{})
@@ -398,17 +421,14 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 			targetCtx := tc
 
 			g.Go(func() error {
-				impl, err := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, targetCtx.fileInfo, aiClient, projectRoot, index, total, uiProgram)
-				if err != nil {
-					// Error already logged in generateImplementationForTarget
-					return nil // Continue processing other targets
+				result := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, targetCtx.fileInfo, aiClient, projectRoot, index, total, uiProgram)
+				
+				mu.Lock()
+				allResults = append(allResults, result)
+				if result.Success {
+					implementations[targetCtx.target.Name] = result.Implementation
 				}
-
-				if impl != "" {
-					mu.Lock()
-					implementations[targetCtx.target.Name] = impl
-					mu.Unlock()
-				}
+				mu.Unlock()
 
 				return nil
 			})
@@ -455,11 +475,42 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 		log.Error("Total failures", slog.Int("count", len(failedTargets)))
 	}
 
-	return implementations, nil
+	return allResults, nil
+}
+
+// parseAIResponse parses AI response and detects if it contains a failure indication
+func parseAIResponse(response, phase string) (implementation string, failure *parser.FailureReason) {
+	// Check for explicit failure indication
+	if strings.HasPrefix(strings.TrimSpace(response), "GENERATION_FAILED:") {
+		// Extract failure message
+		message := strings.TrimPrefix(strings.TrimSpace(response), "GENERATION_FAILED:")
+		message = strings.TrimSpace(message)
+		
+		return "", &parser.FailureReason{
+			Phase:   phase,
+			Message: message,
+			Context: "AI explicitly indicated generation cannot be completed",
+		}
+	}
+	
+	// Check for common failure patterns in responses  
+	lower := strings.ToLower(response)
+	if strings.Contains(lower, "cannot implement") || 
+	   strings.Contains(lower, "unable to implement") ||
+	   strings.Contains(lower, "insufficient information") ||
+	   strings.Contains(lower, "not enough context") {
+		return "", &parser.FailureReason{
+			Phase:   phase,
+			Message: "AI indicated implementation difficulties: " + response,
+			Context: "AI response suggests implementation issues",
+		}
+	}
+	
+	return response, nil
 }
 
 // generateImplementationForTargetWithUI generates implementation with TUI logger
-func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) (string, error) {
+func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) *parser.GenerationResult {
 	targetStart := time.Now()
 
 	// Create a target-specific logger with display name (includes receiver for methods)
@@ -471,7 +522,16 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	if err != nil {
 		logger.Error("Failed to create AI client", "error", err.Error())
 		uiProgram.Fail(targetNum)
-		return "", err
+		return &parser.GenerationResult{
+			Target:  target,
+			Success: false,
+			FailureReason: &parser.FailureReason{
+				Phase:   "initialization",
+				Message: "Failed to create AI client: " + err.Error(),
+				Context: "Client configuration error",
+			},
+			Duration: time.Since(targetStart),
+		}
 	}
 
 	logger.Info("Starting generation")
@@ -489,7 +549,16 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	if err != nil {
 		logger.Error("Failed to build prompt", "error", err.Error())
 		uiProgram.Fail(targetNum)
-		return "", err
+		return &parser.GenerationResult{
+			Target:  target,
+			Success: false,
+			FailureReason: &parser.FailureReason{
+				Phase:   "context_gathering",
+				Message: "Failed to build context gathering prompt: " + err.Error(),
+				Context: "Prompt construction error",
+			},
+			Duration: time.Since(targetStart),
+		}
 	}
 
 	// Execute context gathering
@@ -498,8 +567,35 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	if err != nil {
 		logger.Error("Context gathering failed", "error", err.Error())
 		uiProgram.Fail(targetNum)
-		return "", err
+		return &parser.GenerationResult{
+			Target:  target,
+			Success: false,
+			FailureReason: &parser.FailureReason{
+				Phase:   "context_gathering",
+				Message: "AI context gathering failed: " + err.Error(),
+				Context: "May be due to insufficient codebase information or AI service issues",
+			},
+			Duration: time.Since(targetStart),
+		}
 	}
+
+	// Parse context gathering response for failure indications
+	parsedContext, contextFailure := parseAIResponse(contextResult, "context_gathering")
+	if contextFailure != nil {
+		logger.Error("Context gathering indicated failure",
+			"phase", contextFailure.Phase,
+			"message", contextFailure.Message,
+			"context", contextFailure.Context,
+			"target", target.Name)
+		uiProgram.Fail(targetNum)
+		return &parser.GenerationResult{
+			Target:        target,
+			Success:       false,
+			FailureReason: contextFailure,
+			Duration:      time.Since(targetStart),
+		}
+	}
+	contextResult = parsedContext
 
 	logger.Debug("Context gathering result", "length", len(contextResult))
 
@@ -518,7 +614,16 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	if err != nil {
 		logger.Error("Failed to build implementation prompt", "error", err.Error())
 		uiProgram.Fail(targetNum)
-		return "", err
+		return &parser.GenerationResult{
+			Target:  target,
+			Success: false,
+			FailureReason: &parser.FailureReason{
+				Phase:   "implementation",
+				Message: "Failed to build implementation prompt: " + err.Error(),
+				Context: "Error occurred while incorporating context from phase 1",
+			},
+			Duration: time.Since(targetStart),
+		}
 	}
 
 	// Generate implementation
@@ -527,12 +632,44 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	if err != nil {
 		logger.Error("Implementation failed", "error", err.Error())
 		uiProgram.Fail(targetNum)
-		return "", err
+		return &parser.GenerationResult{
+			Target:  target,
+			Success: false,
+			FailureReason: &parser.FailureReason{
+				Phase:   "implementation",
+				Message: "AI implementation generation failed: " + err.Error(),
+				Context: "May be due to complex requirements or AI service issues",
+			},
+			Duration: time.Since(targetStart),
+		}
 	}
+
+	// Parse implementation response for failure indications
+	parsedImplementation, implementationFailure := parseAIResponse(implementation, "implementation")
+	if implementationFailure != nil {
+		logger.Error("Implementation indicated failure",
+			"phase", implementationFailure.Phase,
+			"message", implementationFailure.Message,
+			"context", implementationFailure.Context,
+			"target", target.Name)
+		uiProgram.Fail(targetNum)
+		return &parser.GenerationResult{
+			Target:        target,
+			Success:       false,
+			FailureReason: implementationFailure,
+			Duration:      time.Since(targetStart),
+		}
+	}
+	implementation = parsedImplementation
 
 	duration := time.Since(targetStart).Round(time.Millisecond)
 	logger.Info("Successfully generated implementation", "duration", duration)
 	uiProgram.Complete(targetNum)
 
-	return implementation, nil
+	return &parser.GenerationResult{
+		Target:         target,
+		Success:        true,
+		Implementation: implementation,
+		Duration:       duration,
+	}
 }

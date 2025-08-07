@@ -57,43 +57,26 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	// DevStral最適化：XMLタグで構造化
 	prompt.WriteString("<context>\n")
 
-	// Import情報を整理して表示
-	var regularImports []*context.ImportInfo
-	var blankImports []*context.ImportInfo
-
-	for _, imp := range ctx.Imports {
-		if imp.IsBlank {
-			blankImports = append(blankImports, imp)
-		} else {
-			regularImports = append(regularImports, imp)
-		}
-	}
-
-	// Regular imports
-	if len(regularImports) > 0 {
-		prompt.WriteString("Available imports (already in use):\n```go\n")
-		for _, imp := range regularImports {
-			if imp.Alias != "" && imp.Alias != imp.GetIdentifier() {
-				prompt.WriteString(fmt.Sprintf("import %s \"%s\"\n", imp.Alias, imp.Path))
+	// All imports are treated as available packages for the AI
+	if len(ctx.Imports) > 0 {
+		prompt.WriteString("Available packages:\n")
+		for _, imp := range ctx.Imports {
+			identifier := imp.GetIdentifier()
+			
+			// For blank imports, we still show them as available packages
+			// The AI doesn't need to know about the blank import detail
+			if imp.Path == identifier {
+				// Standard library or simple package
+				prompt.WriteString(fmt.Sprintf("- %s\n", imp.Path))
+			} else if imp.Alias != "" && imp.Alias != "_" && imp.Alias != identifier {
+				// Custom alias (excluding blank imports)
+				prompt.WriteString(fmt.Sprintf("- %s \"%s\"\n", imp.Alias, imp.Path))
 			} else {
-				prompt.WriteString(fmt.Sprintf("import \"%s\"\n", imp.Path))
+				// Package with different identifier
+				prompt.WriteString(fmt.Sprintf("- %s \"%s\"\n", identifier, imp.Path))
 			}
 		}
-		prompt.WriteString("```\n")
-		prompt.WriteString("Usage in code:\n")
-		for _, imp := range regularImports {
-			prompt.WriteString(fmt.Sprintf("- %s (from %s)\n", imp.GetIdentifier(), imp.Path))
-		}
 		prompt.WriteString("\n")
-	}
-
-	// Blank imports indicate packages available for generated code
-	if len(blankImports) > 0 {
-		prompt.WriteString("Additional packages available for generated code (marked with _ import):\n")
-		for _, imp := range blankImports {
-			prompt.WriteString(fmt.Sprintf("- %s (use as: %s)\n", imp.Path, imp.GetIdentifier()))
-		}
-		prompt.WriteString("Use these packages IF needed based on the specific instructions for this function.\n\n")
 	}
 
 	// 関数シグネチャに関連する型情報を優先的に表示
@@ -113,6 +96,16 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	prompt.WriteString("<instruction>\n")
 	prompt.WriteString(fmt.Sprintf("%s\n", target.Instruction))
 	prompt.WriteString("</instruction>\n")
+
+	// Add failure handling instructions
+	prompt.WriteString("\n<important>\n")
+	prompt.WriteString("If you cannot implement this function, respond with:\n")
+	prompt.WriteString("GENERATION_FAILED: [concise reason]\n\n")
+	prompt.WriteString("Examples:\n")
+	prompt.WriteString("- GENERATION_FAILED: Missing type definition for OrderRepository\n")
+	prompt.WriteString("- GENERATION_FAILED: Cache TTL not specified in requirements\n")
+	prompt.WriteString("- GENERATION_FAILED: Unknown function GetUserByID not in context\n")
+	prompt.WriteString("</important>\n")
 
 	// Add additional context if provided
 	if b.additionalContext != "" {
