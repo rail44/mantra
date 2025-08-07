@@ -15,6 +15,7 @@ type Executor struct {
 	tools   map[string]Tool
 	timeout time.Duration
 	logger  log.Logger
+	context *Context // Shared context for tools
 }
 
 // NewExecutor creates a new tool executor
@@ -31,7 +32,13 @@ func NewExecutor(tools []Tool, logger log.Logger) *Executor {
 		tools:   toolMap,
 		timeout: 30 * time.Second, // Default timeout
 		logger:  logger,
+		context: nil, // Will be set via SetContext if needed
 	}
+}
+
+// SetContext sets the shared context for tools
+func (e *Executor) SetContext(ctx *Context) {
+	e.context = ctx
 }
 
 // Execute runs a tool by name with the given parameters
@@ -63,10 +70,17 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		if name, ok := params["name"].(string); ok {
 			e.logger.Debug(fmt.Sprintf("Reading function: %s", name))
 		}
-	case "check_syntax":
-		e.logger.Debug("Validating generated code syntax")
+	case "check_code":
+		e.logger.Debug("Validating generated code")
 	default:
 		e.logger.Debug(fmt.Sprintf("Executing tool: %s", toolName))
+	}
+
+	// If the tool implements ContextAwareTool and we have context, provide it
+	if e.context != nil {
+		if contextAware, ok := tool.(ContextAwareTool); ok {
+			contextAware.SetContext(e.context)
+		}
 	}
 
 	// Execute the tool
@@ -81,6 +95,7 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 			slog.Duration("duration", duration))
 		return nil, err
 	}
+
 
 	e.logger.Trace(fmt.Sprintf("Tool '%s' completed (%s)", toolName, duration.Round(time.Millisecond)))
 

@@ -237,6 +237,7 @@ func setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Ge
 type targetWithContext struct {
 	target      *parser.Target
 	fileContent string
+	fileInfo    *parser.FileInfo
 }
 
 // processTargetsByFile processes all files, generating implementations for targets and copying files without targets
@@ -277,6 +278,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 				allTargets = append(allTargets, targetWithContext{
 					target:      status.Target,
 					fileContent: string(content),
+					fileInfo:    result.FileInfo,
 				})
 			}
 		}
@@ -330,7 +332,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 }
 
 // configureAIClientForPhase configures the AI client with phase-specific settings
-func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Logger) {
+func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Logger, toolContext *tools.Context) {
 	aiClient.SetTemperature(p.GetTemperature())
 	aiClient.SetSystemPrompt(p.GetSystemPrompt())
 
@@ -338,6 +340,12 @@ func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Lo
 	phaseTools := p.GetTools()
 	aiTools := ai.ConvertToAITools(phaseTools)
 	executor := tools.NewExecutor(phaseTools, logger)
+	
+	// Set context if provided
+	if toolContext != nil {
+		executor.SetContext(toolContext)
+	}
+	
 	aiClient.SetTools(aiTools, executor)
 }
 
@@ -390,7 +398,7 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 			targetCtx := tc
 
 			g.Go(func() error {
-				impl, err := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, aiClient, projectRoot, index, total, uiProgram)
+				impl, err := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, targetCtx.fileInfo, aiClient, projectRoot, index, total, uiProgram)
 				if err != nil {
 					// Error already logged in generateImplementationForTarget
 					return nil // Continue processing other targets
@@ -451,7 +459,7 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 }
 
 // generateImplementationForTargetWithUI generates implementation with TUI logger
-func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) (string, error) {
+func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) (string, error) {
 	targetStart := time.Now()
 
 	// Create a target-specific logger with display name (includes receiver for methods)
@@ -471,7 +479,8 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	// Phase 1: Context Gathering
 	logger.Info("Analyzing codebase context...")
 	contextPhase := phase.NewContextGatheringPhase(0.6, projectRoot, logger)
-	configureAIClientForPhase(aiClient, contextPhase, logger)
+	// Context gathering doesn't need tool context
+	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
 
 	// Build initial prompt
 	contextPromptBuilder := contextPhase.GetPromptBuilder()
@@ -494,8 +503,11 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Phase 2: Implementation
 	logger.Info("Generating implementation...")
-	implPhase := phase.NewImplementationPhase(0.2, logger)
-	configureAIClientForPhase(aiClient, implPhase, logger)
+	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
+	
+	// Create tool context for static analysis
+	toolContext := tools.NewContext(fileInfo, target, projectRoot)
+	configureAIClientForPhase(aiClient, implPhase, logger, toolContext)
 
 	// Build implementation prompt with context from phase 1
 	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResult)

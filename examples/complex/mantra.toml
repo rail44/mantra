@@ -14,7 +14,7 @@ dest = "../complex_mantra"
 api_key = "${OPENROUTER_API_KEY}"
 
 # Debug logging to see generation details
-log_level = "info"
+log_level = "trace"
 
 # OpenRouter-specific configuration
 [openrouter]

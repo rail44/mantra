@@ -381,13 +381,16 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				return
 			}
 
-			// Log tool result concisely
+			// Log tool result
 			if log.IsTraceEnabled() {
-				resultStr := string(resultJSON)
-				if len(resultStr) > 200 {
-					resultStr = resultStr[:200] + "..."
+				// Pretty-print JSON for better readability
+				var prettyJSON bytes.Buffer
+				if err := json.Indent(&prettyJSON, resultJSON, "", "  "); err == nil {
+					c.logger.Trace(fmt.Sprintf("[TOOL] Result %s:\n%s", tc.Function.Name, prettyJSON.String()))
+				} else {
+					// Fallback to raw JSON if pretty-print fails
+					c.logger.Trace(fmt.Sprintf("[TOOL] Result %s: %s", tc.Function.Name, string(resultJSON)))
 				}
-				c.logger.Trace(fmt.Sprintf("[TOOL] Result %s: %s", tc.Function.Name, resultStr))
 			}
 
 			results <- toolResult{

@@ -19,3 +19,13 @@ type Tool interface {
 	// Execute runs the tool with the given parameters
 	Execute(ctx context.Context, params map[string]interface{}) (interface{}, error)
 }
+
+// ContextAwareTool is a tool that can receive additional context from the system
+// This is useful for tools that need access to information not provided by the AI
+type ContextAwareTool interface {
+	Tool
+
+	// SetContext provides the tool with system context
+	// This is called before Execute if context is available
+	SetContext(toolCtx *Context)
+}

@@ -11,23 +11,25 @@ import (
 type ImplementationPhase struct {
 	temperature float32
 	tools       []tools.Tool
+	projectRoot string
 	logger      log.Logger
 }
 
 // NewImplementationPhase creates a new implementation phase
-func NewImplementationPhase(temperature float32, logger log.Logger) *ImplementationPhase {
+func NewImplementationPhase(temperature float32, projectRoot string, logger log.Logger) *ImplementationPhase {
 	if logger == nil {
 		logger = log.Default()
 	}
 
 	// Initialize tools for implementation/validation
 	tools := []tools.Tool{
-		impl.NewCheckSyntaxTool(),
+		impl.NewCheckCodeTool(projectRoot),
 	}
 
 	return &ImplementationPhase{
 		temperature: temperature,
 		tools:       tools,
+		projectRoot: projectRoot,
 		logger:      logger,
 	}
 }
@@ -52,17 +54,22 @@ func (p *ImplementationPhase) GetSystemPrompt() string {
 - <instruction>: Natural language description of what the function should do
 
 ## Available Tool
-- **check_syntax**: Validate the syntax of your generated code (parameter: code)
+- **check_code**: Comprehensive validation including syntax and static analysis (parameter: code)
 
 ## Process
 1. Review all information in <context>
 2. Implement according to <instruction> using available types and functions
-3. Validate your implementation with check_syntax tool
-4. Only proceed if you receive {"valid": true}
+3. Validate your implementation with check_code tool
+4. Fix any issues found by the analysis
+5. Only return code that passes validation
 
 ## Output Format
-After successful validation, return ONLY the implementation code.
-No explanations, no markdown code blocks, no comments - just pure Go code that directly replaces <IMPLEMENT_HERE>. `
+After successful validation, return ONLY the implementation code that goes INSIDE the function body.
+- Do NOT include the function signature (func name(...) ...)
+- Do NOT include type definitions or constants
+- Do NOT include the opening and closing braces of the function
+- Do NOT wrap in markdown code blocks
+- Just the pure Go statements that replace <IMPLEMENT_HERE> `
 }
 
 // GetPromptBuilder returns a prompt builder configured for implementation
