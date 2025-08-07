@@ -26,6 +26,7 @@ type OpenAIClient struct {
 	httpClient         *http.Client
 	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
 	logger             log.Logger
+	firstRequestLogged bool // Flag to log detailed info only on first request
 }
 
 // OpenAIRequest represents a chat completion request
@@ -149,9 +150,10 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	c.logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
 		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
-	// Trace: Log request with provider info (only at trace level)
-	if c.providerSpec != nil {
+	// Log provider info only on first request to reduce noise
+	if !c.firstRequestLogged && c.providerSpec != nil {
 		c.logger.Trace("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
+		c.firstRequestLogged = true
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
@@ -189,8 +191,8 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// Log provider info if available (OpenRouter)
-	if result.Provider != "" {
+	// Log provider info only once per client to reduce noise
+	if result.Provider != "" && !c.firstRequestLogged {
 		c.logger.Debug("OpenRouter provider", "provider", result.Provider)
 	}
 

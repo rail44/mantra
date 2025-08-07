@@ -123,6 +123,9 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	b.logger.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d methods, %d imports",
 		target.Name, len(fullPrompt), len(ctx.Types), totalMethods, len(ctx.Imports)))
 
+	// Log the full prompt content for debugging
+	b.logger.Trace(fmt.Sprintf("[PROMPT_CONTENT] %s:\n%s", target.Name, fullPrompt))
+
 	// Log imports separately for debugging
 	if len(ctx.Imports) > 0 {
 		var importPaths []string

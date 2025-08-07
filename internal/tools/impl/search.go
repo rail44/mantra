@@ -258,7 +258,8 @@ func (t *SearchTool) checkGenSpec(spec ast.Spec, tok token.Token, pkg, path, pat
 				}
 
 				// Check if kind matches
-				if kind == "all" || kind == result.Kind {
+				// "type" matches any type (struct, interface, or type alias)
+				if kind == "all" || kind == "type" || kind == result.Kind {
 					return result
 				}
 			}

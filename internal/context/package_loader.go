@@ -37,7 +37,9 @@ func (l *PackageLoader) Load() error {
 			packages.NeedSyntax |
 			packages.NeedTypesInfo |
 			packages.NeedName |
-			packages.NeedFiles,
+			packages.NeedFiles |
+			packages.NeedImports |
+			packages.NeedDeps,
 		Dir:   l.packagePath,
 		Tests: false,
 	}
@@ -54,28 +56,15 @@ func (l *PackageLoader) Load() error {
 }
 
 // GetDeclaration returns information about any declaration
+// Supports both local declarations and qualified names (e.g., "time.Time")
 func (l *PackageLoader) GetDeclaration(name string) (Declaration, error) {
 	if err := l.Load(); err != nil {
 		return nil, err
 	}
 
-	obj := l.pkg.Types.Scope().Lookup(name)
-	if obj == nil {
-		return nil, fmt.Errorf("declaration %s not found", name)
-	}
-
-	switch obj := obj.(type) {
-	case *types.TypeName:
-		return l.getTypeDeclaration(obj)
-	case *types.Func:
-		return l.getFunctionDeclaration(obj)
-	case *types.Const:
-		return l.getConstantDeclaration(obj)
-	case *types.Var:
-		return l.getVariableDeclaration(obj)
-	default:
-		return nil, fmt.Errorf("unknown declaration kind for %s", name)
-	}
+	// Split by dots and resolve step by step
+	parts := strings.Split(name, ".")
+	return l.resolveQualifiedName(parts)
 }
 
 // GetTypeInfo gets complete type information including methods
@@ -252,144 +241,6 @@ type TypeInfo struct {
 	Methods    []analysis.MethodInfo
 }
 
-// getTypeDeclaration converts a TypeName to appropriate Declaration
-func (l *PackageLoader) getTypeDeclaration(obj *types.TypeName) (Declaration, error) {
-	typ := obj.Type()
-
-	switch underlying := typ.Underlying().(type) {
-	case *types.Struct:
-		result := &StructDeclaration{
-			baseDeclaration: baseDeclaration{
-				Found:   true,
-				Name:    obj.Name(),
-				Kind:    "struct",
-				Package: l.pkg.Name,
-			},
-			Definition: fmt.Sprintf("type %s struct", obj.Name()),
-		}
-
-		// Extract fields
-		for i := 0; i < underlying.NumFields(); i++ {
-			field := underlying.Field(i)
-			result.Fields = append(result.Fields, FieldInfo{
-				Name: field.Name(),
-				Type: l.simplifyTypeName(field.Type().String()),
-			})
-		}
-
-		// Extract methods
-		result.Methods = l.extractMethodsForDeclaration(typ)
-		return result, nil
-
-	case *types.Interface:
-		result := &InterfaceDeclaration{
-			baseDeclaration: baseDeclaration{
-				Found:   true,
-				Name:    obj.Name(),
-				Kind:    "interface",
-				Package: l.pkg.Name,
-			},
-			Definition: fmt.Sprintf("type %s interface", obj.Name()),
-		}
-
-		// Extract interface methods
-		for i := 0; i < underlying.NumMethods(); i++ {
-			method := underlying.Method(i)
-			sig := method.Type().(*types.Signature)
-			result.Methods = append(result.Methods, MethodInfo{
-				Name:      method.Name(),
-				Signature: l.formatSignature(method.Name(), sig),
-			})
-		}
-		return result, nil
-
-	default:
-		// Type alias or other type
-		result := &TypeAliasDeclaration{
-			baseDeclaration: baseDeclaration{
-				Found:   true,
-				Name:    obj.Name(),
-				Kind:    "type",
-				Package: l.pkg.Name,
-			},
-			Definition: fmt.Sprintf("type %s %s", obj.Name(), underlying),
-			Type:       underlying.String(),
-		}
-		return result, nil
-	}
-}
-
-// getFunctionDeclaration converts a Func to FunctionDeclaration
-func (l *PackageLoader) getFunctionDeclaration(obj *types.Func) (Declaration, error) {
-	sig := obj.Type().(*types.Signature)
-
-	kind := "func"
-	if sig.Recv() != nil {
-		kind = "method"
-	}
-
-	result := &FunctionDeclaration{
-		baseDeclaration: baseDeclaration{
-			Found:   true,
-			Name:    obj.Name(),
-			Kind:    kind,
-			Package: l.pkg.Name,
-		},
-		Signature: l.formatSignature(obj.Name(), sig),
-	}
-
-	// Check if it's a method
-	if sig.Recv() != nil {
-		recv := sig.Recv()
-		if recv.Type() != nil {
-			result.Receiver = recv.Type().String()
-		}
-	}
-
-	// Get implementation if available
-	implementation := l.getFunctionImplementation(obj.Name())
-	if implementation != "" {
-		result.Implementation = implementation
-	}
-
-	return result, nil
-}
-
-// getConstantDeclaration converts a Const to ConstantDeclaration
-func (l *PackageLoader) getConstantDeclaration(obj *types.Const) (Declaration, error) {
-	result := &ConstantDeclaration{
-		baseDeclaration: baseDeclaration{
-			Found:   true,
-			Name:    obj.Name(),
-			Kind:    "const",
-			Package: l.pkg.Name,
-		},
-		Type: obj.Type().String(),
-	}
-
-	if obj.Val() != nil {
-		result.Value = obj.Val().String()
-	}
-
-	return result, nil
-}
-
-// getVariableDeclaration converts a Var to VariableDeclaration
-func (l *PackageLoader) getVariableDeclaration(obj *types.Var) (Declaration, error) {
-	result := &VariableDeclaration{
-		baseDeclaration: baseDeclaration{
-			Found:   true,
-			Name:    obj.Name(),
-			Kind:    "var",
-			Package: l.pkg.Name,
-		},
-		Type: obj.Type().String(),
-	}
-
-	// TODO: Extract init pattern if needed
-
-	return result, nil
-}
 
 // extractMethodsForDeclaration gets methods for use in Declaration types
 func (l *PackageLoader) extractMethodsForDeclaration(typ types.Type) []MethodInfo {
@@ -504,7 +355,7 @@ func (l *PackageLoader) GetContextForTarget(targetPath string, directlyUsedTypes
 	// Add directly used types
 	for typeName := range directlyUsedTypes {
 		if typeInfo, exists := allTypes[typeName]; exists {
-			ctx.Types[typeName] = typeInfo.Definition
+			ctx.Types[typeName] = l.buildCompleteTypeDefinition(typeInfo)
 			if len(typeInfo.Methods) > 0 {
 				// Filter out the method being implemented to avoid recursive calls
 				var filteredMethods []analysis.MethodInfo
@@ -533,7 +384,7 @@ func (l *PackageLoader) GetContextForTarget(targetPath string, directlyUsedTypes
 			for refType := range referencedTypes {
 				if _, exists := ctx.Types[refType]; !exists {
 					if typeInfo, exists := allTypes[refType]; exists {
-						ctx.Types[refType] = typeInfo.Definition
+						ctx.Types[refType] = l.buildCompleteTypeDefinition(typeInfo)
 						if len(typeInfo.Methods) > 0 {
 							// For referenced types, include all methods (they're not the receiver)
 							ctx.Methods[refType] = typeInfo.Methods
@@ -562,4 +413,282 @@ func (l *PackageLoader) GetContextForTarget(targetPath string, directlyUsedTypes
 	}
 
 	return ctx, nil
+}
+
+// buildCompleteTypeDefinition builds a complete type definition including fields
+func (l *PackageLoader) buildCompleteTypeDefinition(typeInfo *TypeInfo) string {
+	if typeInfo.Kind != "struct" {
+		// For non-struct types, use the original definition
+		return typeInfo.Definition
+	}
+
+	// For struct types, build complete definition with fields
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("type %s struct", typeInfo.Name))
+
+	if len(typeInfo.Fields) == 0 {
+		builder.WriteString(" {}")
+		return builder.String()
+	}
+
+	builder.WriteString(" {\n")
+	for _, field := range typeInfo.Fields {
+		// Simplify type names for same-package types
+		fieldType := l.simplifyFieldTypeName(field.Type)
+		builder.WriteString(fmt.Sprintf("\t%s %s", field.Name, fieldType))
+		if field.Tag != "" {
+			builder.WriteString(fmt.Sprintf(" `%s`", field.Tag))
+		}
+		builder.WriteString("\n")
+	}
+	builder.WriteString("}")
+
+	return builder.String()
+}
+
+// simplifyFieldTypeName simplifies field type names using import and package scope information
+func (l *PackageLoader) simplifyFieldTypeName(typeName string) string {
+	if l.pkg == nil {
+		return typeName
+	}
+
+	// Handle same-package types first
+	pkgPath := l.pkg.PkgPath
+	if pkgPath != "" && strings.Contains(typeName, pkgPath+".") {
+		// Replace "map[string]github.com/user/repo/package.Type" with "map[string]Type"
+		simplifiedType := strings.ReplaceAll(typeName, pkgPath+".", "")
+		return simplifiedType
+	}
+
+	// Handle imported package types
+	for importPath, importedPkg := range l.pkg.Imports {
+		if importedPkg != nil && strings.Contains(typeName, importPath+".") {
+			// Get the package identifier (name or alias)
+			pkgName := importedPkg.Name
+			if pkgName == "" {
+				pkgName = filepath.Base(importPath)
+			}
+
+			// Replace full import path with package identifier
+			// e.g., "time.Time" instead of "time.github.com/golang/time.Time"
+			simplifiedType := strings.ReplaceAll(typeName, importPath+".", pkgName+".")
+			return simplifiedType
+		}
+	}
+
+	return typeName
+}
+
+// resolveQualifiedName resolves a qualified name by first checking imports
+func (l *PackageLoader) resolveQualifiedName(parts []string) (Declaration, error) {
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty name")
+	}
+
+	first := parts[0]
+
+	// First, check if the first part matches an imported package
+	for importPath, importedPkg := range l.pkg.Imports {
+		pkgName := importedPkg.Name
+		if pkgName == "" {
+			pkgName = filepath.Base(importPath)
+		}
+
+		if pkgName == first {
+			// Found in imports - resolve in external package
+			remaining := parts[1:]
+			if len(remaining) == 0 {
+				// Just the package name
+				return &baseDeclaration{
+					Found:   true,
+					Name:    pkgName,
+					Kind:    "package",
+					Package: importPath,
+				}, nil
+			}
+			return l.resolveInPackage(importedPkg, remaining, pkgName)
+		}
+	}
+
+	// Not found in imports - resolve in current package
+	return l.resolveInPackage(l.pkg, parts, l.pkg.Name)
+}
+
+// resolveInPackage resolves a name within a specific package
+func (l *PackageLoader) resolveInPackage(pkg *packages.Package, parts []string, pkgName string) (Declaration, error) {
+	if len(parts) == 0 || pkg == nil || pkg.Types == nil {
+		return nil, fmt.Errorf("invalid package or empty parts")
+	}
+
+	if len(parts) > 1 {
+		// TODO: Handle nested access like Type.Method
+		return nil, fmt.Errorf("nested access not yet implemented: %s", strings.Join(parts, "."))
+	}
+
+	// Simple lookup in package scope
+	name := parts[0]
+	obj := pkg.Types.Scope().Lookup(name)
+	if obj == nil {
+		return nil, fmt.Errorf("%s not found in package %s", name, pkgName)
+	}
+
+	// Create declaration with appropriate package info
+	return l.createDeclarationFromObjectWithPackage(obj, pkgName)
+}
+
+// createDeclarationFromObjectWithPackage creates a Declaration with specific package info
+func (l *PackageLoader) createDeclarationFromObjectWithPackage(obj types.Object, pkgName string) (Declaration, error) {
+	switch obj := obj.(type) {
+	case *types.TypeName:
+		return l.getTypeDeclarationWithPackage(obj, pkgName)
+	case *types.Func:
+		return l.getFunctionDeclarationWithPackage(obj, pkgName)
+	case *types.Const:
+		return l.getConstantDeclarationWithPackage(obj, pkgName)
+	case *types.Var:
+		return l.getVariableDeclarationWithPackage(obj, pkgName)
+	default:
+		return nil, fmt.Errorf("unknown declaration kind")
+	}
+}
+
+// getTypeDeclarationWithPackage converts a TypeName to appropriate Declaration with specific package name
+func (l *PackageLoader) getTypeDeclarationWithPackage(obj *types.TypeName, pkgName string) (Declaration, error) {
+	typ := obj.Type()
+
+	switch underlying := typ.Underlying().(type) {
+	case *types.Struct:
+		result := &StructDeclaration{
+			baseDeclaration: baseDeclaration{
+				Found:   true,
+				Name:    obj.Name(),
+				Kind:    "struct",
+				Package: pkgName,
+			},
+			Definition: fmt.Sprintf("type %s struct", obj.Name()),
+		}
+
+		// Extract fields
+		for i := 0; i < underlying.NumFields(); i++ {
+			field := underlying.Field(i)
+			result.Fields = append(result.Fields, FieldInfo{
+				Name: field.Name(),
+				Type: l.simplifyTypeName(field.Type().String()),
+			})
+		}
+
+		// Extract methods
+		result.Methods = l.extractMethodsForDeclaration(typ)
+		return result, nil
+
+	case *types.Interface:
+		result := &InterfaceDeclaration{
+			baseDeclaration: baseDeclaration{
+				Found:   true,
+				Name:    obj.Name(),
+				Kind:    "interface",
+				Package: pkgName,
+			},
+			Definition: fmt.Sprintf("type %s interface", obj.Name()),
+		}
+
+		// Extract interface methods
+		for i := 0; i < underlying.NumMethods(); i++ {
+			method := underlying.Method(i)
+			sig := method.Type().(*types.Signature)
+			result.Methods = append(result.Methods, MethodInfo{
+				Name:      method.Name(),
+				Signature: l.formatSignature(method.Name(), sig),
+			})
+		}
+		return result, nil
+
+	default:
+		// Type alias or other type
+		result := &TypeAliasDeclaration{
+			baseDeclaration: baseDeclaration{
+				Found:   true,
+				Name:    obj.Name(),
+				Kind:    "type",
+				Package: pkgName,
+			},
+			Definition: fmt.Sprintf("type %s %s", obj.Name(), underlying),
+			Type:       underlying.String(),
+		}
+		return result, nil
+	}
+}
+
+// getFunctionDeclarationWithPackage converts a Func to FunctionDeclaration with specific package name
+func (l *PackageLoader) getFunctionDeclarationWithPackage(obj *types.Func, pkgName string) (Declaration, error) {
+	sig := obj.Type().(*types.Signature)
+
+	kind := "func"
+	if sig.Recv() != nil {
+		kind = "method"
+	}
+
+	result := &FunctionDeclaration{
+		baseDeclaration: baseDeclaration{
+			Found:   true,
+			Name:    obj.Name(),
+			Kind:    kind,
+			Package: pkgName,
+		},
+		Signature: l.formatSignature(obj.Name(), sig),
+	}
+
+	// Check if it's a method
+	if sig.Recv() != nil {
+		recv := sig.Recv()
+		if recv.Type() != nil {
+			result.Receiver = recv.Type().String()
+		}
+	}
+
+	// Get implementation if available (only for current package)
+	if pkgName == l.pkg.Name {
+		implementation := l.getFunctionImplementation(obj.Name())
+		if implementation != "" {
+			result.Implementation = implementation
+		}
+	}
+
+	return result, nil
+}
+
+// getConstantDeclarationWithPackage converts a Const to ConstantDeclaration with specific package name
+func (l *PackageLoader) getConstantDeclarationWithPackage(obj *types.Const, pkgName string) (Declaration, error) {
+	result := &ConstantDeclaration{
+		baseDeclaration: baseDeclaration{
+			Found:   true,
+			Name:    obj.Name(),
+			Kind:    "const",
+			Package: pkgName,
+		},
+		Type: obj.Type().String(),
+	}
+
+	if obj.Val() != nil {
+		result.Value = obj.Val().String()
+	}
+
+	return result, nil
+}
+
+// getVariableDeclarationWithPackage converts a Var to VariableDeclaration with specific package name
+func (l *PackageLoader) getVariableDeclarationWithPackage(obj *types.Var, pkgName string) (Declaration, error) {
+	result := &VariableDeclaration{
+		baseDeclaration: baseDeclaration{
+			Found:   true,
+			Name:    obj.Name(),
+			Kind:    "var",
+			Package: pkgName,
+		},
+		Type: obj.Type().String(),
+	}
+
+	// TODO: Extract init pattern if needed
+
+	return result, nil
 }

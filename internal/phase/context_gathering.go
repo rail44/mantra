@@ -55,18 +55,12 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 - <instruction>: Natural language description of what the function should do
 
 ## Available Tools
-- inspect(name): Get details of types and functions from the current package
+- inspect(name): Get details of types, package, function and variable from current scope
 - search(pattern): Search for declarations by pattern from the current package
-
-## Important Guidelines
-1. DO NOT search for standard library functions (e.g., time.Now, fmt.Sprintf)
-2. DO NOT search for functions from imported packages - they are already available
-3. ONLY search for types, functions, and constants defined in the CURRENT package
-4. Focus on understanding the data structures and methods you need to use
 
 ## Process
 1. Gather additional context using the tools, until you have enough information to implement the function.
-	- Use inspect() to get details of types, functions, constants, and variables from the current package
+	- Use inspect() to get details of unclear identifier
 	- Use search() to find declarations from the current package when you don't know the exact name
 2. Return your findings as additional context in the format below
 3. Do not return any other text or explanations

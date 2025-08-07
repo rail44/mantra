@@ -32,7 +32,7 @@ func (t *InspectTool) Name() string {
 
 // Description returns what this tool does
 func (t *InspectTool) Description() string {
-	return "Get detailed information about any Go declaration with full type resolution"
+	return "Get detailed information about Go declarations from current package or imported packages (e.g., 'SimpleCache', 'time.Time')"
 }
 
 // ParametersSchema returns the JSON Schema for parameters
