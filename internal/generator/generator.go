@@ -100,11 +100,15 @@ func (g *Generator) generateFileContent(fileInfo *parser.FileInfo, implementatio
 	// Sort targets by line number in reverse order to avoid line number shifts
 	var targetsToProcess []*parser.Target
 	for _, target := range fileInfo.Targets {
-		// Process all targets with mantra comments (remove HasPanic check)
+		// Process all targets with mantra comments
 		if implementation, exists := implementations[target.Name]; exists {
 			target.Implementation = implementation // Store implementation in target
-			targetsToProcess = append(targetsToProcess, target)
+			target.GenerationFailed = false
+		} else {
+			// Mark as failed, keep original implementation (panic)
+			target.GenerationFailed = true
 		}
+		targetsToProcess = append(targetsToProcess, target)
 	}
 
 	// Sort by start line in descending order (process from bottom to top)
@@ -167,16 +171,26 @@ func (g *Generator) replaceAllFunctionsWithChecksum(content string, targets []*p
 	sourceTargetData := make(map[string]*targetData)
 
 	for _, target := range targets {
-		// Parse the implementation as a function body
-		cleanedImpl := cleanCode(target.Implementation)
-		implBody, err := g.parseImplementationAsBlockWithFileSet(cleanedImpl, fset)
-		if err != nil {
-			return "", fmt.Errorf("failed to parse implementation for %s: %w", target.Name, err)
-		}
+		var implBody *ast.BlockStmt
+		var checksumComment string
 
-		// Calculate checksum for the comment
-		cs := checksum.Calculate(target)
-		checksumComment := checksum.FormatComment(cs)
+		if target.GenerationFailed {
+			// For failed targets, keep original body and set failed checksum
+			implBody = target.FuncDecl.Body // Keep original implementation (panic)
+			checksumComment = "// mantra:failed"
+		} else {
+			// Parse the implementation as a function body
+			cleanedImpl := cleanCode(target.Implementation)
+			var err error
+			implBody, err = g.parseImplementationAsBlockWithFileSet(cleanedImpl, fset)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse implementation for %s: %w", target.Name, err)
+			}
+
+			// Calculate checksum for the comment
+			cs := checksum.Calculate(target)
+			checksumComment = checksum.FormatComment(cs)
+		}
 
 		// Create a unique key for the target
 		key := g.getTargetKey(target)

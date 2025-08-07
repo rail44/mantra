@@ -35,16 +35,17 @@ type Import struct {
 
 // Target represents a function or method to generate
 type Target struct {
-	Name           string         // Function or method name
-	Receiver       *Receiver      // Receiver for methods (nil for functions)
-	Params         []Param        // Function parameters
-	Returns        []Return       // Return values
-	Instruction    string         // Content from // mantra: comment
-	FilePath       string         // Source file path
-	HasPanic       bool           // Whether function contains panic("not implemented")
-	Implementation string         // Generated implementation (temporary storage)
-	FuncDecl       *ast.FuncDecl  // AST node for the function declaration
-	TokenSet       *token.FileSet // Token file set for position information
+	Name             string         // Function or method name
+	Receiver         *Receiver      // Receiver for methods (nil for functions)
+	Params           []Param        // Function parameters
+	Returns          []Return       // Return values
+	Instruction      string         // Content from // mantra: comment
+	FilePath         string         // Source file path
+	HasPanic         bool           // Whether function contains panic("not implemented")
+	Implementation   string         // Generated implementation (temporary storage)
+	GenerationFailed bool           // Whether generation failed for this target
+	FuncDecl         *ast.FuncDecl  // AST node for the function declaration
+	TokenSet         *token.FileSet // Token file set for position information
 }
 
 // Receiver represents method receiver
