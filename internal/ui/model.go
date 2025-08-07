@@ -11,14 +11,16 @@ import (
 
 // TargetView represents the view state for a single target
 type TargetView struct {
-	Name      string
-	Index     int
-	Total     int
-	Status    string
-	Logs      []LogEntry
-	StartTime time.Time
-	EndTime   time.Time
-	mu        sync.RWMutex
+	Name        string
+	Index       int
+	Total       int
+	Status      string
+	Phase       string  // Current phase (e.g., "Context Gathering", "Implementation")
+	PhaseDetail string  // Phase-specific detail (e.g., "Analyzing codebase", "Generating code")
+	Logs        []LogEntry
+	StartTime   time.Time
+	EndTime     time.Time
+	mu          sync.RWMutex
 }
 
 // GetAllLogs returns a copy of all logs for the target
@@ -57,10 +59,25 @@ func (m *Model) addTarget(name string, index, total int) {
 		Index:     index,
 		Total:     total,
 		Status:    "pending",
+		Phase:     "Initializing",
 		Logs:      make([]LogEntry, 0),
 		StartTime: time.Now(),
 	}
 	m.targets = append(m.targets, target)
+}
+
+// updatePhase updates the phase information for a target
+func (m *Model) updatePhase(targetIndex int, phase string, detail string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	if m.validateTargetIndex(targetIndex) {
+		target := m.targets[targetIndex-1]
+		target.mu.Lock()
+		target.Phase = phase
+		target.PhaseDetail = detail
+		target.mu.Unlock()
+	}
 }
 
 // Init initializes the model
@@ -98,6 +115,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		// Update target status
 		m.updateStatus(msg)
+		
+	case phaseMsg:
+		// Update target phase
+		m.updatePhase(msg.TargetIndex, msg.Phase, msg.Detail)
 	}
 
 	return m, nil
@@ -244,15 +265,18 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 		var targetLine string
 
 		if target.Status == "running" || target.Status == "pending" {
-			// Active target - show with current status
+			// Active target - show with current status and phase
 			spinner := m.getSpinner(target.Status)
 			targetLine = fmt.Sprintf("%s %s", spinner, target.Name)
 
-			// Add most recent log message if available
+			// Add phase information (always prioritize phase over logs)
 			target.mu.RLock()
-			if len(target.Logs) > 0 {
-				lastLog := target.Logs[len(target.Logs)-1]
-				targetLine += fmt.Sprintf(" - %s", lastLog.Message)
+			if target.Phase != "" && target.Phase != "Initializing" {
+				targetLine += fmt.Sprintf(" [%s", target.Phase)
+				if target.PhaseDetail != "" {
+					targetLine += fmt.Sprintf(": %s", target.PhaseDetail)
+				}
+				targetLine += "]"
 			}
 			target.mu.RUnlock()
 
@@ -352,4 +376,10 @@ type logMsg struct {
 type statusMsg struct {
 	TargetIndex int
 	Status      string
+}
+
+type phaseMsg struct {
+	TargetIndex int
+	Phase       string
+	Detail      string
 }

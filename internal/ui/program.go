@@ -60,6 +60,15 @@ func (p *Program) Fail(targetIndex int) {
 	})
 }
 
+// UpdatePhase updates the phase information for a target
+func (p *Program) UpdatePhase(targetIndex int, phase string, detail string) {
+	p.teaProgram.Send(phaseMsg{
+		TargetIndex: targetIndex,
+		Phase:       phase,
+		Detail:      detail,
+	})
+}
+
 // Quit stops the TUI program
 func (p *Program) Quit() {
 	p.teaProgram.Quit()

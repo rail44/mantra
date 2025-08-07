@@ -148,9 +148,9 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	c.logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
 		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
-	// Debug: Log request with provider info
+	// Trace: Log request with provider info (only at trace level)
 	if c.providerSpec != nil {
-		c.logger.Debug("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
+		c.logger.Trace("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
@@ -314,6 +314,16 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 	results := make(chan toolResult, len(toolCalls))
 	var wg sync.WaitGroup
 
+	// Log tool execution info more clearly
+	if len(toolCalls) > 0 {
+		// Build list of tool names for better visibility
+		var toolNames []string
+		for _, tc := range toolCalls {
+			toolNames = append(toolNames, tc.Function.Name)
+		}
+		c.logger.Info(fmt.Sprintf("Running tools: %s", strings.Join(toolNames, ", ")))
+	}
+	
 	// Execute all tools in parallel
 	for i, toolCall := range toolCalls {
 		wg.Add(1)

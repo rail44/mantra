@@ -475,6 +475,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	}
 
 	logger.Info("Starting generation")
+	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Starting")
 
 	// Phase 1: Context Gathering
 	logger.Info("Analyzing codebase context...")
@@ -492,6 +493,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	}
 
 	// Execute context gathering
+	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Analyzing codebase")
 	contextResult, err := aiClient.Generate(ctx, initialPrompt)
 	if err != nil {
 		logger.Error("Context gathering failed", "error", err.Error())
@@ -503,6 +505,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Phase 2: Implementation
 	logger.Info("Generating implementation...")
+	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
 	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
 	
 	// Create tool context for static analysis
@@ -519,6 +522,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	}
 
 	// Generate implementation
+	uiProgram.UpdatePhase(targetNum, "Implementation", "Generating code")
 	implementation, err := aiClient.Generate(ctx, implPrompt)
 	if err != nil {
 		logger.Error("Implementation failed", "error", err.Error())
