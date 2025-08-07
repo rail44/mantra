@@ -72,7 +72,21 @@ After successful validation, return ONLY the implementation code that goes INSID
 - Do NOT include type definitions or constants
 - Do NOT include the opening and closing braces of the function
 - Do NOT wrap in markdown code blocks
-- Just the pure Go statements that replace <IMPLEMENT_HERE> `
+- Just the pure Go statements that replace <IMPLEMENT_HERE>
+
+## Error Handling
+If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
+
+Include in the reason:
+- What you were looking for
+- Where you searched
+- What you found instead (if relevant)
+- What information is needed to proceed
+
+Examples:
+  - GENERATION_FAILED: Method 'GetUserByID' not found on 'UserService' - found 'GetUser' and 'GetUserByEmail' instead
+  - GENERATION_FAILED: Return type 'ValidationResult' not defined - need import path or type definition
+  - GENERATION_FAILED: Instruction requires 'cache TTL' but no duration specified and no default found in codebase`
 }
 
 // GetPromptBuilder returns a prompt builder configured for implementation

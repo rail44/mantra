@@ -97,16 +97,6 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	prompt.WriteString(fmt.Sprintf("%s\n", target.Instruction))
 	prompt.WriteString("</instruction>\n")
 
-	// Add failure handling instructions
-	prompt.WriteString("\n<important>\n")
-	prompt.WriteString("If you cannot implement this function, respond with:\n")
-	prompt.WriteString("GENERATION_FAILED: [concise reason]\n\n")
-	prompt.WriteString("Examples:\n")
-	prompt.WriteString("- GENERATION_FAILED: Missing type definition for OrderRepository\n")
-	prompt.WriteString("- GENERATION_FAILED: Cache TTL not specified in requirements\n")
-	prompt.WriteString("- GENERATION_FAILED: Unknown function GetUserByID not in context\n")
-	prompt.WriteString("</important>\n")
-
 	// Add additional context if provided
 	if b.additionalContext != "" {
 		prompt.WriteString("\n<additional_context>\n")

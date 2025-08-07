@@ -82,7 +82,20 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 <found additional imports>
 ` + "```" + `
 
-Each section should be formatted as Go code blocks.`
+Each section should be formatted as Go code blocks.
+
+## Error Handling
+If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
+
+Include in the reason:
+- What you were looking for
+- Where you searched
+- What you found instead (if relevant)
+- What information is needed to proceed
+
+Examples:
+  - GENERATION_FAILED: Type 'UserRepository' not found in codebase - need type definition or import path
+  - GENERATION_FAILED: Multiple 'Config' types found (database.Config, server.Config) - unclear which to use`
 }
 
 // GetPromptBuilder returns a prompt builder configured for context gathering
