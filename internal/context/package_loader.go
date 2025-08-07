@@ -241,7 +241,6 @@ type TypeInfo struct {
 	Methods    []analysis.MethodInfo
 }
 
-
 // extractMethodsForDeclaration gets methods for use in Declaration types
 func (l *PackageLoader) extractMethodsForDeclaration(typ types.Type) []MethodInfo {
 	var methods []MethodInfo
