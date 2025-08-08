@@ -48,6 +48,7 @@ type FunctionDeclaration struct {
 	Signature      string
 	Receiver       string // For methods
 	Implementation string // The actual code
+	Doc            string // Documentation comment
 }
 
 // ConstantDeclaration represents a constant
@@ -69,6 +70,7 @@ type TypeAliasDeclaration struct {
 	baseDeclaration
 	Definition string
 	Type       string
+	Methods    []MethodInfo
 }
 
 // FieldInfo represents a struct field

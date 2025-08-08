@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/format"
 	"go/types"
 	"path/filepath"
@@ -133,6 +134,36 @@ func (l *PackageLoader) extractTypeDetails(obj *types.TypeName, info *TypeInfo) 
 		info.Type = underlying.String()
 		info.Definition = fmt.Sprintf("type %s %s", obj.Name(), underlying)
 	}
+}
+
+// getPackageDocs extracts documentation from a packages.Package
+func (l *PackageLoader) getPackageDocs(pkg *packages.Package) (*doc.Package, error) {
+	if pkg == nil || len(pkg.Syntax) == 0 {
+		return nil, nil // No syntax available, can't extract docs
+	}
+
+	// Create doc.Package directly from AST files using the modern API
+	docPkg, err := doc.NewFromFiles(pkg.Fset, pkg.Syntax, pkg.PkgPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create doc package: %w", err)
+	}
+
+	return docPkg, nil
+}
+
+// findMethod finds a method by name in a type
+func (l *PackageLoader) findMethod(typ types.Type, name string) *types.Func {
+	// Check both pointer and value method sets
+	ptrMethodSet := types.NewMethodSet(types.NewPointer(typ))
+
+	for i := 0; i < ptrMethodSet.Len(); i++ {
+		method := ptrMethodSet.At(i).Obj().(*types.Func)
+		if method.Name() == name {
+			return method
+		}
+	}
+
+	return nil
 }
 
 // extractMethods gets all methods for a type
@@ -505,6 +536,19 @@ func (l *PackageLoader) resolveQualifiedName(parts []string) (Declaration, error
 					Package: importPath,
 				}, nil
 			}
+
+			// Check if the imported package has type information
+			if importedPkg.Types == nil || importedPkg.Types.Scope() == nil {
+				// Need to load the imported package explicitly, including syntax for documentation
+				cfg := &packages.Config{
+					Mode: packages.NeedTypes | packages.NeedName | packages.NeedSyntax | packages.NeedTypesInfo,
+				}
+				pkgs, err := packages.Load(cfg, importPath)
+				if err == nil && len(pkgs) > 0 {
+					importedPkg = pkgs[0]
+				}
+			}
+
 			return l.resolveInPackage(importedPkg, remaining, pkgName)
 		}
 	}
@@ -519,11 +563,6 @@ func (l *PackageLoader) resolveInPackage(pkg *packages.Package, parts []string, 
 		return nil, fmt.Errorf("invalid package or empty parts")
 	}
 
-	if len(parts) > 1 {
-		// TODO: Handle nested access like Type.Method
-		return nil, fmt.Errorf("nested access not yet implemented: %s", strings.Join(parts, "."))
-	}
-
 	// Simple lookup in package scope
 	name := parts[0]
 	obj := pkg.Types.Scope().Lookup(name)
@@ -531,8 +570,83 @@ func (l *PackageLoader) resolveInPackage(pkg *packages.Package, parts []string, 
 		return nil, fmt.Errorf("%s not found in package %s", name, pkgName)
 	}
 
+	// If there are more parts, handle nested access like Type.Method
+	if len(parts) > 1 {
+		return l.resolveNestedAccess(obj, parts[1:], pkgName)
+	}
+
 	// Create declaration with appropriate package info
-	return l.createDeclarationFromObjectWithPackage(obj, pkgName)
+	decl, err := l.createDeclarationFromObjectWithPackage(obj, pkgName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try to extract documentation if possible
+	if funcDecl, ok := decl.(*FunctionDeclaration); ok && len(pkg.Syntax) > 0 {
+		if docPkg, err := l.getPackageDocs(pkg); err == nil && docPkg != nil {
+			// Look for the function in doc.Package
+			for _, f := range docPkg.Funcs {
+				if f.Name == name {
+					funcDecl.Doc = f.Doc
+					break
+				}
+			}
+		}
+	}
+
+	return decl, nil
+}
+
+// resolveNestedAccess resolves nested access like Type.Method
+func (l *PackageLoader) resolveNestedAccess(obj types.Object, parts []string, pkgName string) (Declaration, error) {
+	if len(parts) == 0 {
+		return l.createDeclarationFromObjectWithPackage(obj, pkgName)
+	}
+
+	// Get the type of the object
+	var typ types.Type
+	switch o := obj.(type) {
+	case *types.TypeName:
+		typ = o.Type()
+	case *types.Var:
+		typ = o.Type()
+	default:
+		return nil, fmt.Errorf("cannot access members of %T", obj)
+	}
+
+	// For the remaining parts, look for methods or fields
+	memberName := parts[0]
+
+	// Try to find as a method
+	if method := l.findMethod(typ, memberName); method != nil {
+		if len(parts) > 1 {
+			// Can't have more nested access after a method
+			return nil, fmt.Errorf("cannot access members of method %s", memberName)
+		}
+		return l.getFunctionDeclarationWithPackage(method, pkgName)
+	}
+
+	// Try to find as a field (for structs)
+	if structType, ok := typ.Underlying().(*types.Struct); ok {
+		for i := 0; i < structType.NumFields(); i++ {
+			field := structType.Field(i)
+			if field.Name() == memberName {
+				// Continue resolving with the field's type
+				if len(parts) > 1 {
+					return l.resolveNestedAccess(field, parts[1:], pkgName)
+				}
+				// Return field information
+				return &baseDeclaration{
+					Found:   true,
+					Name:    field.Name(),
+					Kind:    "field",
+					Package: pkgName,
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("member %s not found in type %s", memberName, typ)
 }
 
 // createDeclarationFromObjectWithPackage creates a Declaration with specific package info
@@ -614,6 +728,10 @@ func (l *PackageLoader) getTypeDeclarationWithPackage(obj *types.TypeName, pkgNa
 			Definition: fmt.Sprintf("type %s %s", obj.Name(), underlying),
 			Type:       underlying.String(),
 		}
+
+		// Extract methods for the type (e.g., time.Duration has methods)
+		result.Methods = l.extractMethodsForDeclaration(typ)
+
 		return result, nil
 	}
 }

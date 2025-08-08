@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,7 +128,7 @@ func runPackageGeneration(pkgDir string, cfg *config.Config) error {
 	ctx := context.Background()
 
 	// Process all files
-	err = processTargetsByFile(ctx, results, aiClient, gen, cfg.Dest)
+	err = processTargetsByFile(ctx, results, aiClient, gen, cfg.Dest, cfg)
 	if err != nil {
 		return err
 	}
@@ -244,7 +245,7 @@ type targetWithContext struct {
 }
 
 // processTargetsByFile processes all files, generating implementations for targets and copying files without targets
-func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, destDir string) error {
+func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, destDir string, cfg *config.Config) error {
 	// Collect all targets that need generation across all files
 	var allTargets []targetWithContext
 
@@ -293,7 +294,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 	}
 
 	// Generate all targets in parallel
-	allResults, err := generateAllTargetsInParallel(ctx, allTargets, aiClient)
+	allResults, err := generateAllTargetsInParallel(ctx, allTargets, aiClient, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to generate implementations: %w", err)
 	}
@@ -360,6 +361,7 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Logger, toolContext *tools.Context) {
 	aiClient.SetTemperature(p.GetTemperature())
 	aiClient.SetSystemPrompt(p.GetSystemPrompt())
+	aiClient.SetResponseFormat(p.GetResponseFormat())
 
 	// Get tools once and convert/create executor
 	phaseTools := p.GetTools()
@@ -391,7 +393,7 @@ func findProjectRoot(startPath string) string {
 }
 
 // generateAllTargetsInParallel generates implementations for all targets across multiple files in parallel
-func generateAllTargetsInParallel(ctx context.Context, targets []targetWithContext, aiClient *ai.Client) ([]*parser.GenerationResult, error) {
+func generateAllTargetsInParallel(ctx context.Context, targets []targetWithContext, aiClient *ai.Client, cfg *config.Config) ([]*parser.GenerationResult, error) {
 	if len(targets) == 0 {
 		return []*parser.GenerationResult{}, nil
 	}
@@ -424,7 +426,7 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 			targetCtx := tc
 
 			g.Go(func() error {
-				result := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, targetCtx.fileInfo, aiClient, projectRoot, index, total, uiProgram)
+				result := generateImplementationForTargetWithUI(ctx, targetCtx.target, targetCtx.fileContent, targetCtx.fileInfo, aiClient, projectRoot, index, total, uiProgram, cfg)
 
 				mu.Lock()
 				allResults = append(allResults, result)
@@ -510,10 +512,77 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 
 // parseAIResponse parses AI response and detects if it contains a failure indication
 func parseAIResponse(response, phase string) (implementation string, failure *parser.FailureReason) {
+	// Try to parse as JSON first
+	trimmed := strings.TrimSpace(response)
+	if strings.HasPrefix(trimmed, "{") {
+		// Appears to be JSON response from structured output
+		switch phase {
+		case "context_gathering":
+			var result struct {
+				Imports   []interface{} `json:"imports"`
+				Types     []interface{} `json:"types"`
+				Functions []interface{} `json:"functions"`
+				Summary   string        `json:"summary"`
+			}
+			if err := json.Unmarshal([]byte(trimmed), &result); err == nil {
+				// Format the JSON result back into the expected markdown format
+				var formatted strings.Builder
+
+				if len(result.Types) > 0 {
+					formatted.WriteString("### Types\n\n")
+					for _, t := range result.Types {
+						if typeMap, ok := t.(map[string]interface{}); ok {
+							if name, ok := typeMap["name"].(string); ok {
+								formatted.WriteString(fmt.Sprintf("#### %s\n\n", name))
+								if def, ok := typeMap["definition"].(string); ok {
+									formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", def))
+								}
+							}
+						}
+					}
+				}
+
+				if len(result.Functions) > 0 {
+					formatted.WriteString("### Functions\n\n")
+					for _, f := range result.Functions {
+						if funcMap, ok := f.(map[string]interface{}); ok {
+							if name, ok := funcMap["name"].(string); ok {
+								formatted.WriteString(fmt.Sprintf("#### %s\n\n", name))
+								if sig, ok := funcMap["signature"].(string); ok {
+									formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", sig))
+								}
+							}
+						}
+					}
+				}
+
+				return formatted.String(), nil
+			}
+
+		case "implementation":
+			var result struct {
+				Code        string   `json:"code"`
+				Explanation string   `json:"explanation"`
+				Assumptions []string `json:"assumptions"`
+			}
+			if err := json.Unmarshal([]byte(trimmed), &result); err == nil {
+				if result.Code == "" {
+					return "", &parser.FailureReason{
+						Phase:   phase,
+						Message: "No code generated",
+						Context: result.Explanation,
+					}
+				}
+				return result.Code, nil
+			}
+		}
+	}
+
+	// Fall back to original text-based parsing
 	// Check for explicit failure indication
-	if strings.HasPrefix(strings.TrimSpace(response), "GENERATION_FAILED:") {
+	if strings.HasPrefix(trimmed, "GENERATION_FAILED:") {
 		// Extract failure message
-		message := strings.TrimPrefix(strings.TrimSpace(response), "GENERATION_FAILED:")
+		message := strings.TrimPrefix(trimmed, "GENERATION_FAILED:")
 		message = strings.TrimSpace(message)
 
 		return "", &parser.FailureReason{
@@ -540,7 +609,7 @@ func parseAIResponse(response, phase string) (implementation string, failure *pa
 }
 
 // generateImplementationForTargetWithUI generates implementation with TUI logger
-func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) *parser.GenerationResult {
+func generateImplementationForTargetWithUI(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, baseAIClient *ai.Client, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program, cfg *config.Config) *parser.GenerationResult {
 	targetStart := time.Now()
 
 	// Create a target-specific logger with display name (includes receiver for methods)
@@ -570,7 +639,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	// Phase 1: Context Gathering
 	logger.Info("Analyzing codebase context...")
 	packagePath := filepath.Dir(target.FilePath) // Get the package directory
-	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger)
+	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger, cfg.StructuredOutput)
 	// Context gathering doesn't need tool context
 	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
 
@@ -635,7 +704,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	// Phase 2: Implementation
 	logger.Info("Generating implementation...")
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
-	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
+	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger, cfg.StructuredOutput)
 
 	// Create tool context for static analysis
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)

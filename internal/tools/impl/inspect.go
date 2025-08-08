@@ -110,6 +110,9 @@ func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{}
 		if d.Implementation != "" {
 			result["implementation"] = d.Implementation
 		}
+		if d.Doc != "" {
+			result["doc"] = d.Doc
+		}
 
 	case *pkgcontext.ConstantDeclaration:
 		result["type"] = d.Type
@@ -124,6 +127,9 @@ func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{}
 	case *pkgcontext.TypeAliasDeclaration:
 		result["definition"] = d.Definition
 		result["type"] = d.Type
+		if len(d.Methods) > 0 {
+			result["methods"] = d.Methods
+		}
 	}
 
 	return result

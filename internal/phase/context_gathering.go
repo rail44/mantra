@@ -1,6 +1,7 @@
 package phase
 
 import (
+	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
@@ -9,13 +10,14 @@ import (
 
 // ContextGatheringPhase represents the phase where AI explores the codebase
 type ContextGatheringPhase struct {
-	temperature float32
-	tools       []tools.Tool
-	logger      log.Logger
+	temperature      float32
+	tools            []tools.Tool
+	logger           log.Logger
+	structuredOutput bool
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
-func NewContextGatheringPhase(temperature float32, packagePath string, logger log.Logger) *ContextGatheringPhase {
+func NewContextGatheringPhase(temperature float32, packagePath string, logger log.Logger, structuredOutput bool) *ContextGatheringPhase {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -23,13 +25,13 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger lo
 	// Initialize tools for context gathering (limited to current package)
 	tools := []tools.Tool{
 		impl.NewInspectTool(packagePath), // Use go/packages for accurate type info including implementations
-		impl.NewSearchTool(packagePath),  // Search only in current package
 	}
 
 	return &ContextGatheringPhase{
-		temperature: temperature,
-		tools:       tools,
-		logger:      logger,
+		temperature:      temperature,
+		tools:            tools,
+		logger:           logger,
+		structuredOutput: structuredOutput,
 	}
 }
 
@@ -56,12 +58,10 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 
 ## Available Tools
 - inspect(name): Get details of types, package, function and variable from current scope
-- search(pattern): Search for declarations by pattern from the current package
 
 ## Process
 1. Gather additional context using the tools, until you have enough information to implement the function.
 	- Use inspect() to get details of unclear identifier
-	- Use search() to find declarations from the current package when you don't know the exact name
 2. Return your findings as additional context in the format below
 3. Do not return any other text or explanations
 
@@ -98,7 +98,6 @@ If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
 
 Include in the reason:
 - What you were looking for
-- Where you searched
 - What you found instead (if relevant)
 - What information is needed to proceed`
 }
@@ -108,4 +107,15 @@ func (p *ContextGatheringPhase) GetPromptBuilder() *prompt.Builder {
 	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true)
 	return builder
+}
+
+// GetResponseFormat returns the structured output format for context gathering
+func (p *ContextGatheringPhase) GetResponseFormat() *ai.ResponseFormat {
+	if !p.structuredOutput {
+		return nil
+	}
+	return &ai.ResponseFormat{
+		Type:       "json_schema",
+		JSONSchema: ai.ContextGatheringSchema,
+	}
 }

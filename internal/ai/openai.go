@@ -24,7 +24,8 @@ type OpenAIClient struct {
 	currentTemperature float32 // Current temperature to use
 	systemPrompt       string  // Current system prompt
 	httpClient         *http.Client
-	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
+	providerSpec       *ProviderSpec   // OpenRouter-specific provider routing
+	responseFormat     *ResponseFormat // Structured output format
 	logger             log.Logger
 	firstRequestLogged bool // Flag to log detailed info only on first request
 }
@@ -38,7 +39,8 @@ type OpenAIRequest struct {
 	Tools             []Tool          `json:"tools,omitempty"`
 	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool            `json:"parallel_tool_calls,omitempty"`
-	Provider          *ProviderSpec   `json:"provider,omitempty"` // OpenRouter provider specification
+	Provider          *ProviderSpec   `json:"provider,omitempty"`        // OpenRouter provider specification
+	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"` // Structured output format
 }
 
 // ProviderSpec allows specifying provider routing for OpenRouter
@@ -131,6 +133,11 @@ func (c *OpenAIClient) SetTemperature(temperature float32) {
 // SetSystemPrompt sets the system prompt
 func (c *OpenAIClient) SetSystemPrompt(systemPrompt string) {
 	c.systemPrompt = systemPrompt
+}
+
+// SetResponseFormat sets the structured output format
+func (c *OpenAIClient) SetResponseFormat(format *ResponseFormat) {
+	c.responseFormat = format
 }
 
 // Name returns the provider name
@@ -241,6 +248,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 			ToolChoice:        "auto",
 			ParallelToolCalls: true,
 			Provider:          c.providerSpec,
+			ResponseFormat:    c.responseFormat,
 		}
 
 		// Make API call
