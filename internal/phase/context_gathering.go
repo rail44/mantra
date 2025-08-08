@@ -1,7 +1,6 @@
 package phase
 
 import (
-	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
@@ -10,14 +9,13 @@ import (
 
 // ContextGatheringPhase represents the phase where AI explores the codebase
 type ContextGatheringPhase struct {
-	temperature      float32
-	tools            []tools.Tool
-	logger           log.Logger
-	structuredOutput bool
+	temperature float32
+	tools       []tools.Tool
+	logger      log.Logger
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
-func NewContextGatheringPhase(temperature float32, packagePath string, logger log.Logger, structuredOutput bool) *ContextGatheringPhase {
+func NewContextGatheringPhase(temperature float32, packagePath string, logger log.Logger) *ContextGatheringPhase {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -28,10 +26,9 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger lo
 	}
 
 	return &ContextGatheringPhase{
-		temperature:      temperature,
-		tools:            tools,
-		logger:           logger,
-		structuredOutput: structuredOutput,
+		temperature: temperature,
+		tools:       tools,
+		logger:      logger,
 	}
 }
 
@@ -110,13 +107,3 @@ func (p *ContextGatheringPhase) GetPromptBuilder() *prompt.Builder {
 	return builder
 }
 
-// GetResponseFormat returns the structured output format for context gathering
-func (p *ContextGatheringPhase) GetResponseFormat() *ai.ResponseFormat {
-	if !p.structuredOutput {
-		return nil
-	}
-	return &ai.ResponseFormat{
-		Type:       "json_schema",
-		JSONSchema: ai.ContextGatheringSchema,
-	}
-}
