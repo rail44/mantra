@@ -118,14 +118,13 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 	// Create a target-specific logger with display name
 	logger := uiProgram.CreateTargetLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
 
-	// Create a new AI client with the target-specific logger
-	aiClient, err := llm.NewClient(c.client.GetConfig(), logger)
-	if err != nil {
-		return c.createInitializationFailure(tc.Target, err, targetStart, targetNum, uiProgram)
-	}
+	// Use the shared client directly instead of creating a new one
+	// This enables HTTP connection reuse across all targets
+	// Note: This means all targets share the same logger, but target-specific
+	// logging is handled by the UI program
 
-	// Create phase runner
-	runner := phase.NewRunner(aiClient, logger)
+	// Create phase runner with shared client
+	runner := phase.NewRunner(c.client, logger)
 
 	// Phase 1: Context Gathering
 	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, targetNum, uiProgram)
@@ -212,6 +211,8 @@ func (c *ParallelCoder) displayAllTargetLogs(uiProgram *ui.Program) {
 			for _, logEntry := range logs {
 				// Re-emit each log entry at appropriate level
 				switch logEntry.Level {
+				case "TRACE":
+					c.logger.Trace(logEntry.Message)
 				case "DEBUG":
 					c.logger.Debug(logEntry.Message)
 				case "INFO":
@@ -241,6 +242,8 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 				for _, logEntry := range logs {
 					// Re-emit each log entry at appropriate level
 					switch logEntry.Level {
+					case "TRACE":
+						c.logger.Trace(logEntry.Message)
 					case "DEBUG":
 						c.logger.Debug(logEntry.Message)
 					case "INFO":

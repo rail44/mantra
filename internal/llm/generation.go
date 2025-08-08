@@ -15,12 +15,15 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	var apiCallTime time.Duration
 	var toolCallCount int
 
+	// Get logger from context or use the default
+	logger := LoggerFromContext(ctx, c.logger)
+
 	// Log system prompt at debug level
 	if c.systemPrompt != "" {
-		c.logger.Debug("System prompt set", "length", len(c.systemPrompt))
+		logger.Debug("System prompt set", "length", len(c.systemPrompt))
 		// Log full system prompt at trace level
 		if log.IsTraceEnabled() {
-			c.logger.Trace(fmt.Sprintf("[SYSTEM_PROMPT]\n%s", c.systemPrompt))
+			logger.Trace(fmt.Sprintf("[SYSTEM_PROMPT]\n%s", c.systemPrompt))
 		}
 	}
 
@@ -44,11 +47,11 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 	for round := 0; round < maxRounds; round++ {
 		if round > 0 {
-			c.logger.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
+			logger.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
 		}
 
 		// Log concise message stats
-		c.logger.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
+		logger.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
 
 		// Use the current temperature set by the phase
 		temperature := c.currentTemperature
@@ -94,10 +97,10 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		messages = append(messages, cleanMsg)
 
 		// Debug: Log response
-		c.logger.Debug(fmt.Sprintf("[API] Response: %s (content=%d chars, tools=%d)",
+		logger.Debug(fmt.Sprintf("[API] Response: %s (content=%d chars, tools=%d)",
 			responseMsg.Role, len(responseMsg.Content), len(responseMsg.ToolCalls)))
 		if round >= 5 && len(responseMsg.ToolCalls) > 0 {
-			c.logger.Warn("many tool calls made - model may be stuck", "round", round+1)
+			logger.Warn("many tool calls made - model may be stuck", "round", round+1)
 		}
 
 		// Check if we have tool calls
@@ -113,7 +116,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 			// If result tool exists but wasn't called yet, prompt the AI to use it
 			if hasResultTool && !resultToolCalled && round < maxRounds-1 { // Leave one round for the final attempt
-				c.logger.Debug("No tool calls made but result tool is available, prompting to use it")
+				logger.Debug("No tool calls made but result tool is available, prompting to use it")
 				messages = append(messages, OpenAIMessage{
 					Role:    "user",
 					Content: "Please complete the task by calling the result() tool with the appropriate data. The result() tool is required to finalize this phase.",
@@ -123,19 +126,19 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 			// No tool calls and no result tool, or result tool already called - return the content
 			if responseMsg.Content != "" {
-				c.logger.Debug("Returning final response")
-				c.logTimingStats(overallStart, apiCallTime, toolExecutionTime, toolCallCount)
+				logger.Debug("Returning final response")
+				c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 				return responseMsg.Content, nil
 			}
 
 			// No content and no tool calls - this is unusual
-			c.logger.Warn("No content and no tool calls in response")
-			c.logTimingStats(overallStart, apiCallTime, toolExecutionTime, toolCallCount)
+			logger.Warn("No content and no tool calls in response")
+			c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 			return "", fmt.Errorf("model returned empty response without tool calls")
 		}
 
 		// Execute all tool calls in parallel
-		toolResults, wasResultCalled := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)
+		toolResults, wasResultCalled := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount, logger)
 		if wasResultCalled {
 			resultToolCalled = true
 		}
@@ -146,12 +149,12 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		// Check if any tool is terminal
 		for _, toolCall := range responseMsg.ToolCalls {
 			if toolCall.Type == "function" && executor.IsTerminal(toolCall.Function.Name) {
-				c.logger.Debug(fmt.Sprintf("Terminal tool '%s' executed, ending conversation", toolCall.Function.Name))
+				logger.Debug(fmt.Sprintf("Terminal tool '%s' executed, ending conversation", toolCall.Function.Name))
 
 				// Find and return the result from the terminal tool
 				for _, result := range toolResults {
 					if result.ToolCallID == toolCall.ID {
-						c.logTimingStats(overallStart, apiCallTime, toolExecutionTime, toolCallCount)
+						c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 						return result.Content, nil
 					}
 				}
@@ -159,15 +162,15 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		}
 	}
 
-	c.logger.Warn("Reached maximum rounds of tool calls", "max_rounds", maxRounds)
-	c.logTimingStats(overallStart, apiCallTime, toolExecutionTime, toolCallCount)
+	logger.Warn("Reached maximum rounds of tool calls", "max_rounds", maxRounds)
+	c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 	return "", fmt.Errorf("exceeded maximum rounds (%d) of tool calls", maxRounds)
 }
 
 // logTimingStats logs timing statistics for the generation
-func (c *OpenAIClient) logTimingStats(overallStart time.Time, apiCallTime, toolExecutionTime time.Duration, toolCallCount int) {
+func (c *OpenAIClient) logTimingStats(logger log.Logger, overallStart time.Time, apiCallTime, toolExecutionTime time.Duration, toolCallCount int) {
 	totalTime := time.Since(overallStart)
-	c.logger.Info(fmt.Sprintf("[TIMING] Total: %v, API: %v, Tools: %v (%d calls)",
+	logger.Info(fmt.Sprintf("[TIMING] Total: %v, API: %v, Tools: %v (%d calls)",
 		totalTime.Round(time.Millisecond),
 		apiCallTime.Round(time.Millisecond),
 		toolExecutionTime.Round(time.Millisecond),

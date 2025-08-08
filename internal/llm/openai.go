@@ -112,13 +112,7 @@ func (c *OpenAIClient) SetTemperature(temperature float32) {
 // SetSystemPrompt sets the system prompt
 func (c *OpenAIClient) SetSystemPrompt(systemPrompt string) {
 	c.systemPrompt = systemPrompt
-	c.logger.Debug("System prompt updated", "length", len(systemPrompt))
-	// Log the first 200 chars of system prompt at debug level as a preview
-	if len(systemPrompt) > 200 {
-		c.logger.Debug(fmt.Sprintf("System prompt preview: %s...", systemPrompt[:200]))
-	} else if systemPrompt != "" {
-		c.logger.Debug(fmt.Sprintf("System prompt: %s", systemPrompt))
-	}
+	// Logging is deferred to Generate() where we have access to the context
 }
 
 // Name returns the provider name
@@ -129,18 +123,21 @@ func (c *OpenAIClient) Name() string {
 
 // makeRequest makes a non-streaming request to the API
 func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*OpenAIResponse, error) {
+	// Get logger from context or use the default
+	logger := LoggerFromContext(ctx, c.logger)
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	// Log request summary instead of full JSON
-	c.logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
+	logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
 		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
 	// Log provider info only on first request to reduce noise
 	if !c.firstRequestLogged && c.providerSpec != nil {
-		c.logger.Trace("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
+		logger.Trace("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
 		c.firstRequestLogged = true
 	}
 
@@ -181,7 +178,7 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 
 	// Log provider info only once per client to reduce noise
 	if result.Provider != "" && !c.firstRequestLogged {
-		c.logger.Debug("OpenRouter provider", "provider", result.Provider)
+		logger.Debug("OpenRouter provider", "provider", result.Provider)
 	}
 
 	return &result, nil

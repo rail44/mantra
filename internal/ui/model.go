@@ -334,6 +334,7 @@ func (m *Model) addLog(msg logMsg) {
 	target.mu.Lock()
 	defer target.mu.Unlock()
 
+	// Always store the log for later display
 	target.Logs = append(target.Logs, LogEntry{
 		Level:     msg.Level,
 		Message:   msg.Message,
@@ -343,6 +344,13 @@ func (m *Model) addLog(msg logMsg) {
 	// Auto-update status on first log
 	if target.Status == "pending" && msg.Level == "INFO" {
 		target.Status = "running"
+	}
+
+	// During TUI execution, suppress DEBUG and TRACE logs from real-time display
+	// They are still stored and will be shown in the final log output
+	// This prevents cluttering the TUI with detailed API/tool execution logs
+	if msg.Level == "DEBUG" || msg.Level == "TRACE" {
+		return // Don't trigger display update for verbose logs
 	}
 }
 
