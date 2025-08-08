@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/rail44/mantra/internal/log"
@@ -25,7 +26,7 @@ type Client struct {
 	logger       log.Logger
 }
 
-func NewClient(clientConfig *ClientConfig, logger log.Logger) (*Client, error) {
+func NewClient(clientConfig *ClientConfig, httpClient *http.Client, logger log.Logger) (*Client, error) {
 	if clientConfig == nil {
 		return nil, fmt.Errorf("clientConfig is required")
 	}
@@ -35,31 +36,25 @@ func NewClient(clientConfig *ClientConfig, logger log.Logger) (*Client, error) {
 		logger = log.Default()
 	}
 
-	// Determine provider based on configuration
-	var provider Provider
-	var err error
-
-	// Unified OpenAI-compatible API for all providers
-	apiKey := clientConfig.APIKey
-
 	url := clientConfig.URL
 	if url == "" {
 		return nil, fmt.Errorf("URL is required")
 	}
 
-	provider, err = NewOpenAIClient(
-		apiKey,
-		url,
-		clientConfig.Model,
-		logger,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AI client: %w", err)
+	// Create provider with provided HTTP client
+	opts := &OpenAIClientOptions{
+		APIKey:       clientConfig.APIKey,
+		BaseURL:      url,
+		Model:        clientConfig.Model,
+		Temperature:  0.7,        // Default, will be overridden by phase
+		HTTPClient:   httpClient, // Can be nil, will be created if needed
+		ProviderSpec: clientConfig.Provider,
+		Logger:       logger,
 	}
 
-	// Set provider specification if it's an OpenAIClient and providers are specified
-	if openaiClient, ok := provider.(*OpenAIClient); ok && len(clientConfig.Provider) > 0 {
-		openaiClient.SetProviderSpec(clientConfig.Provider)
+	provider, err := NewOpenAIClientWithOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
 
 	return &Client{

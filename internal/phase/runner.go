@@ -30,8 +30,7 @@ func NewRunner(client *llm.Client, logger log.Logger) *Runner {
 
 // ExecuteContextGathering executes the context gathering phase
 func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, targetNum int, uiProgram *ui.Program) (map[string]interface{}, *parser.FailureReason) {
-	// Add logger to context for this target
-	ctx = llm.WithLogger(ctx, r.logger)
+	// Context is passed through for cancellation
 
 	r.logger.Info("Starting generation")
 	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Starting")
@@ -73,8 +72,7 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 
 // ExecuteImplementation executes the implementation phase
 func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]interface{}, targetNum int, uiProgram *ui.Program) (string, *parser.FailureReason) {
-	// Add logger to context for this target
-	ctx = llm.WithLogger(ctx, r.logger)
+	// Context is passed through for cancellation
 
 	r.logger.Info("Generating implementation...")
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")

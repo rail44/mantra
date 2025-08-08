@@ -45,14 +45,14 @@ func (a *GenerateApp) Run(ctx context.Context, pkgDir string, cfg *config.Config
 		return nil
 	}
 
-	// Setup AI client and generator
-	aiClient, gen, err := a.setupAIClient(cfg, pkgDir)
+	// Setup AI client configuration and generator
+	clientConfig, gen, err := a.setupAIClient(cfg, pkgDir)
 	if err != nil {
 		return err
 	}
 
 	// Process all targets
-	if err := a.processAllTargets(ctx, results, aiClient, gen, cfg); err != nil {
+	if err := a.processAllTargets(ctx, results, clientConfig, gen, cfg); err != nil {
 		return err
 	}
 
@@ -141,8 +141,8 @@ func (a *GenerateApp) detectTargets(pkgDir, destDir string) ([]*detector.FileDet
 	return results, nil
 }
 
-// setupAIClient initializes AI client, tools, and related components
-func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*llm.Client, *codegen.Generator, error) {
+// setupAIClient initializes AI client configuration and code generator
+func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*llm.ClientConfig, *codegen.Generator, error) {
 	// Initialize AI client configuration
 	clientConfig := &llm.ClientConfig{
 		URL:     cfg.URL,
@@ -156,17 +156,10 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*llm.Cli
 		clientConfig.Provider = cfg.OpenRouter.Providers
 	}
 
-	aiClient, err := llm.NewClient(clientConfig, a.logger)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create AI client: %w", err)
-	}
-
 	// Log which provider we're using
 	a.logger.Info("using AI provider",
-		slog.String("provider", aiClient.GetProviderName()),
+		slog.String("url", cfg.URL),
 		slog.String("model", cfg.Model))
-
-	// Don't create tools here - they will be created per phase
 
 	gen := codegen.New(&codegen.Config{
 		Dest:          cfg.Dest,
@@ -174,11 +167,11 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*llm.Cli
 		SourcePackage: filepath.Base(pkgDir),
 	})
 
-	return aiClient, gen, nil
+	return clientConfig, gen, nil
 }
 
 // processAllTargets processes all files, generating implementations for targets and copying files without targets
-func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, aiClient *llm.Client, gen *codegen.Generator, cfg *config.Config) error {
+func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, clientConfig *llm.ClientConfig, gen *codegen.Generator, cfg *config.Config) error {
 	// Collect targets and copy files without targets
 	targets := a.collectTargets(results, gen)
 
@@ -188,7 +181,7 @@ func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector
 	}
 
 	// Create and execute target executor
-	parallelCoder := coder.NewParallelCoder(aiClient, cfg)
+	parallelCoder := coder.NewParallelCoder(clientConfig, cfg)
 	allResults, err := parallelCoder.ExecuteTargets(ctx, targets)
 	if err != nil {
 		return fmt.Errorf("failed to generate implementations: %w", err)

@@ -15,8 +15,8 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	var apiCallTime time.Duration
 	var toolCallCount int
 
-	// Get logger from context or use the default
-	logger := LoggerFromContext(ctx, c.logger)
+	// Use the logger directly
+	logger := c.logger
 
 	// Log system prompt at debug level
 	if c.systemPrompt != "" {

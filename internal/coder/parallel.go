@@ -3,6 +3,7 @@ package coder
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -22,17 +23,21 @@ import (
 
 // ParallelCoder handles parallel code generation for multiple targets
 type ParallelCoder struct {
-	client *llm.Client
-	config *config.Config
-	logger log.Logger
+	clientConfig *llm.ClientConfig
+	config       *config.Config
+	logger       log.Logger
+	httpClient   *http.Client // Shared HTTP client for connection pooling
 }
 
 // NewParallelCoder creates a new parallel coder
-func NewParallelCoder(client *llm.Client, cfg *config.Config) *ParallelCoder {
+func NewParallelCoder(clientConfig *llm.ClientConfig, cfg *config.Config) *ParallelCoder {
 	return &ParallelCoder{
-		client: client,
-		config: cfg,
-		logger: log.Default(),
+		clientConfig: clientConfig,
+		config:       cfg,
+		logger:       log.Default(),
+		httpClient: &http.Client{
+			Timeout: 5 * time.Minute,
+		},
 	}
 }
 
@@ -118,13 +123,16 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 	// Create a target-specific logger with display name
 	logger := uiProgram.CreateTargetLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
 
-	// Use the shared client directly instead of creating a new one
-	// This enables HTTP connection reuse across all targets
-	// Note: This means all targets share the same logger, but target-specific
-	// logging is handled by the UI program
+	// Create a new llm.Client for this target with shared HTTP client
+	// This ensures each target has independent state (temperature, systemPrompt)
+	// while still benefiting from connection pooling
+	client, err := llm.NewClient(c.clientConfig, c.httpClient, logger)
+	if err != nil {
+		return c.createInitializationFailure(tc.Target, err, targetStart, targetNum, uiProgram)
+	}
 
-	// Create phase runner with shared client
-	runner := phase.NewRunner(c.client, logger)
+	// Create phase runner with target-specific client
+	runner := phase.NewRunner(client, logger)
 
 	// Phase 1: Context Gathering
 	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, targetNum, uiProgram)

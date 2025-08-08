@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -24,7 +23,6 @@ type OpenAIClient struct {
 	httpClient         *http.Client
 	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
 	logger             log.Logger
-	firstRequestLogged bool // Flag to log detailed info only on first request
 }
 
 // OpenAIRequest represents a chat completion request
@@ -71,28 +69,64 @@ type OpenAIResponse struct {
 	Provider string `json:"provider,omitempty"` // OpenRouter provider info
 }
 
+// OpenAIClientOptions contains options for creating an OpenAI client
+type OpenAIClientOptions struct {
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Temperature  float32
+	SystemPrompt string
+	HTTPClient   *http.Client
+	ProviderSpec []string // For OpenRouter provider routing
+	Logger       log.Logger
+}
+
 // NewOpenAIClient creates a new OpenAI API client
 func NewOpenAIClient(apiKey, baseURL, model string, logger log.Logger) (*OpenAIClient, error) {
-	// API key is optional for some providers (e.g., local Ollama)
-	if baseURL == "" {
+	return NewOpenAIClientWithOptions(&OpenAIClientOptions{
+		APIKey:      apiKey,
+		BaseURL:     baseURL,
+		Model:       model,
+		Temperature: 0.7, // Default temperature
+		Logger:      logger,
+	})
+}
+
+// NewOpenAIClientWithOptions creates a new OpenAI API client with full options
+func NewOpenAIClientWithOptions(opts *OpenAIClientOptions) (*OpenAIClient, error) {
+	if opts.BaseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
 
-	if logger == nil {
-		logger = log.Default()
+	if opts.Logger == nil {
+		opts.Logger = log.Default()
 	}
 
-	return &OpenAIClient{
-		apiKey:             apiKey,
-		baseURL:            strings.TrimSuffix(baseURL, "/"),
-		model:              model,
-		currentTemperature: 0.7, // Default temperature
-		systemPrompt:       "",  // Will be set by phase
-		httpClient: &http.Client{
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{
 			Timeout: 5 * time.Minute,
-		},
-		logger: logger,
-	}, nil
+		}
+	}
+
+	client := &OpenAIClient{
+		apiKey:             opts.APIKey,
+		baseURL:            strings.TrimSuffix(opts.BaseURL, "/"),
+		model:              opts.Model,
+		currentTemperature: opts.Temperature,
+		systemPrompt:       opts.SystemPrompt,
+		httpClient:         httpClient,
+		logger:             opts.Logger,
+	}
+
+	// Set provider spec if provided
+	if len(opts.ProviderSpec) > 0 {
+		client.providerSpec = &ProviderSpec{
+			Only: opts.ProviderSpec,
+		}
+	}
+
+	return client, nil
 }
 
 // SetProviderSpec sets OpenRouter provider routing specification
@@ -123,8 +157,8 @@ func (c *OpenAIClient) Name() string {
 
 // makeRequest makes a non-streaming request to the API
 func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*OpenAIResponse, error) {
-	// Get logger from context or use the default
-	logger := LoggerFromContext(ctx, c.logger)
+	// Use the logger directly
+	logger := c.logger
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
@@ -134,12 +168,6 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	// Log request summary instead of full JSON
 	logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
 		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
-
-	// Log provider info only on first request to reduce noise
-	if !c.firstRequestLogged && c.providerSpec != nil {
-		logger.Trace("sending request with provider spec", slog.String("provider_spec", fmt.Sprintf("%+v", c.providerSpec)))
-		c.firstRequestLogged = true
-	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -176,8 +204,8 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// Log provider info only once per client to reduce noise
-	if result.Provider != "" && !c.firstRequestLogged {
+	// Log provider info if present
+	if result.Provider != "" {
 		logger.Debug("OpenRouter provider", "provider", result.Provider)
 	}
 
