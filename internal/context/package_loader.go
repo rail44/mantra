@@ -274,7 +274,6 @@ type TypeInfo struct {
 	Methods    []analysis.MethodInfo
 }
 
-
 // extractMethodsForDeclarationWithDoc gets methods with documentation if available
 func (l *PackageLoader) extractMethodsForDeclarationWithDoc(typ types.Type, pkg *packages.Package, typeName string) []MethodInfo {
 	var methods []MethodInfo
@@ -739,7 +738,6 @@ func (l *PackageLoader) createDeclarationFromObjectWithPackageAndPkg(obj types.O
 		return nil, fmt.Errorf("unknown declaration kind")
 	}
 }
-
 
 // getTypeDeclarationWithPackageAndPkg converts a TypeName to appropriate Declaration with package info
 func (l *PackageLoader) getTypeDeclarationWithPackageAndPkg(obj *types.TypeName, pkgName string, pkg *packages.Package) (Declaration, error) {

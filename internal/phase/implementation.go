@@ -1,10 +1,13 @@
 package phase
 
 import (
+	"sync"
+
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 	"github.com/rail44/mantra/internal/tools/impl"
+	"github.com/rail44/mantra/internal/tools/schemas"
 )
 
 // ImplementationPhase represents the phase where AI generates the actual code
@@ -13,6 +16,9 @@ type ImplementationPhase struct {
 	tools       []tools.Tool
 	projectRoot string
 	logger      log.Logger
+	result      interface{}
+	completed   bool
+	mu          sync.Mutex
 }
 
 // NewImplementationPhase creates a new implementation phase
@@ -21,17 +27,33 @@ func NewImplementationPhase(temperature float32, projectRoot string, logger log.
 		logger = log.Default()
 	}
 
-	// Initialize tools for implementation/validation
-	tools := []tools.Tool{
-		impl.NewCheckCodeTool(projectRoot),
-	}
-
-	return &ImplementationPhase{
+	phase := &ImplementationPhase{
 		temperature: temperature,
-		tools:       tools,
 		projectRoot: projectRoot,
 		logger:      logger,
 	}
+
+	// Initialize tools for implementation/validation
+	tools := []tools.Tool{
+		impl.NewCheckCodeTool(projectRoot),
+		impl.NewResultTool(
+			"implementation",
+			&schemas.ImplementationResultSchema{},
+			phase.storeResult,
+		),
+	}
+
+	phase.tools = tools
+	return phase
+}
+
+// storeResult stores the result from the result tool
+func (p *ImplementationPhase) storeResult(result interface{}) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.result = result
+	p.completed = true
+	return nil
 }
 
 // GetTemperature returns the temperature for implementation (lower for accuracy)
@@ -70,12 +92,15 @@ func (p *ImplementationPhase) GetSystemPrompt() string {
 5. Only return code that passes validation
 
 ## Output Format
-After successful validation, return ONLY the implementation code that goes INSIDE the function body.
-- Do NOT include the function signature (func name(...) ...)
-- Do NOT include type definitions or constants
-- Do NOT include the opening and closing braces of the function
-- Do NOT wrap in markdown code blocks
-- Just the pure Go statements that replace <IMPLEMENT_HERE>
+After successful validation, call the result() tool with your final code:
+1. The result() tool takes one parameter: "code" (string)
+2. Pass ONLY the implementation code that goes INSIDE the function body
+   - Do NOT include the function signature (func name(...) ...)
+   - Do NOT include type definitions or constants
+   - Do NOT include the opening and closing braces of the function
+   - Do NOT wrap in markdown code blocks
+   - Just the pure Go statements that replace <IMPLEMENT_HERE>
+3. This will complete the implementation phase
 
 ## Error Handling
 If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
@@ -107,4 +132,19 @@ func (p *ImplementationPhase) GetPromptBuilderWithContext(contextResult string) 
 	// Format the context result appropriately
 	formattedContext := "## Additional Context from Exploration:\n" + contextResult
 	return builder.WithAdditionalContext(formattedContext)
+}
+
+// GetResult returns the phase result and whether it's complete
+func (p *ImplementationPhase) GetResult() (interface{}, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.result, p.completed
+}
+
+// Reset clears the phase state for reuse
+func (p *ImplementationPhase) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.result = nil
+	p.completed = false
 }

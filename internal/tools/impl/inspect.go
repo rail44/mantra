@@ -77,6 +77,11 @@ func (t *InspectTool) Execute(ctx context.Context, params map[string]interface{}
 	return convertDeclarationToMap(decl), nil
 }
 
+// IsTerminal returns false as inspect tool doesn't end the phase
+func (t *InspectTool) IsTerminal() bool {
+	return false
+}
+
 // convertDeclarationToMap converts a Declaration to a JSON-serializable map
 func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{} {
 	result := map[string]interface{}{

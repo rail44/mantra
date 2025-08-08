@@ -18,4 +18,10 @@ type Phase interface {
 
 	// GetPromptBuilder returns a configured prompt builder for this phase
 	GetPromptBuilder() *prompt.Builder
+
+	// GetResult returns the phase result and whether it's complete
+	GetResult() (interface{}, bool)
+
+	// Reset clears the phase state for reuse
+	Reset()
 }

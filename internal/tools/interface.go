@@ -18,6 +18,9 @@ type Tool interface {
 
 	// Execute runs the tool with the given parameters
 	Execute(ctx context.Context, params map[string]interface{}) (interface{}, error)
+
+	// IsTerminal returns true if this tool ends the current phase
+	IsTerminal() bool
 }
 
 // ContextAwareTool is a tool that can receive additional context from the system

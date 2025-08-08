@@ -232,6 +232,11 @@ func (t *CheckCodeTool) replaceViaAST(sourceContent string, target *pkgparser.Ta
 	}, nil
 }
 
+// IsTerminal returns false as check_code tool doesn't end the phase
+func (t *CheckCodeTool) IsTerminal() bool {
+	return false
+}
+
 // matchesTarget checks if a function declaration matches the target
 func (t *CheckCodeTool) matchesTarget(fn *ast.FuncDecl, target *pkgparser.Target) bool {
 	// Check function name

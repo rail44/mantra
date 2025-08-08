@@ -1,10 +1,13 @@
 package phase
 
 import (
+	"sync"
+
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 	"github.com/rail44/mantra/internal/tools/impl"
+	"github.com/rail44/mantra/internal/tools/schemas"
 )
 
 // ContextGatheringPhase represents the phase where AI explores the codebase
@@ -12,6 +15,9 @@ type ContextGatheringPhase struct {
 	temperature float32
 	tools       []tools.Tool
 	logger      log.Logger
+	result      interface{}
+	completed   bool
+	mu          sync.Mutex
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
@@ -20,16 +26,32 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger lo
 		logger = log.Default()
 	}
 
+	phase := &ContextGatheringPhase{
+		temperature: temperature,
+		logger:      logger,
+	}
+
 	// Initialize tools for context gathering (limited to current package)
 	tools := []tools.Tool{
 		impl.NewInspectTool(packagePath), // Use go/packages for accurate type info including implementations
+		impl.NewResultTool(
+			"context gathering",
+			&schemas.ContextGatheringResultSchema{},
+			phase.storeResult,
+		),
 	}
 
-	return &ContextGatheringPhase{
-		temperature: temperature,
-		tools:       tools,
-		logger:      logger,
-	}
+	phase.tools = tools
+	return phase
+}
+
+// storeResult stores the result from the result tool
+func (p *ContextGatheringPhase) storeResult(result interface{}) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.result = result
+	p.completed = true
+	return nil
 }
 
 // GetTemperature returns the temperature for context gathering (higher for exploration)
@@ -60,36 +82,12 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 1. Gather additional context using the tools
 	- Use inspect() to get details of unclear identifier
 	- Prevent to use inspect() on standard library unless necessary
-2. Stop when you have enough context to implement the function
-2. Return your findings as additional context in the format below
+2. When you have enough context to implement the function, call the result() tool
+3. The result() tool should be called with structured data containing:
+	- types: Array of type definitions found
+	- functions: Array of function signatures/implementations found
+	- constants: Array of constant/variable definitions found
 
-## Output Format
-
-` + "```" + `markdown
-### Types
-
-#### <found additional type name>
-
-<definition of the type>
-
-<methods of the type>
-
-### Functions
-
-#### <found additional function name>
-
-<definition of the function>
-
-<implementation of the function if you found it>
-
-### Constants/Variables
-
-#### <found additional constant/variable name>
-
-<definition of the constant/variable>
-` + "```" + `
-
-Each section should be formatted as Go code blocks.
 
 ## Error Handling
 If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
@@ -107,3 +105,17 @@ func (p *ContextGatheringPhase) GetPromptBuilder() *prompt.Builder {
 	return builder
 }
 
+// GetResult returns the phase result and whether it's complete
+func (p *ContextGatheringPhase) GetResult() (interface{}, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.result, p.completed
+}
+
+// Reset clears the phase state for reuse
+func (p *ContextGatheringPhase) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.result = nil
+	p.completed = false
+}

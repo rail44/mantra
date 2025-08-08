@@ -104,6 +104,11 @@ func (t *SearchTool) Execute(ctx context.Context, params map[string]interface{})
 	}, nil
 }
 
+// IsTerminal returns false as search tool doesn't end the phase
+func (t *SearchTool) IsTerminal() bool {
+	return false
+}
+
 // SearchResults represents the search results
 type SearchResults struct {
 	Pattern string         `json:"pattern"`

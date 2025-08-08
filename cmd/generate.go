@@ -639,6 +639,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	logger.Info("Analyzing codebase context...")
 	packagePath := filepath.Dir(target.FilePath) // Get the package directory
 	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger)
+	contextPhase.Reset() // Ensure clean state
 	// Context gathering doesn't need tool context
 	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
 
@@ -662,7 +663,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Execute context gathering
 	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Analyzing codebase")
-	contextResult, err := aiClient.Generate(ctx, initialPrompt)
+	_, err = aiClient.Generate(ctx, initialPrompt)
 	if err != nil {
 		logger.Error("Context gathering failed", "error", err.Error())
 		uiProgram.Fail(targetNum)
@@ -676,6 +677,22 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 			},
 			Duration: time.Since(targetStart),
 		}
+	}
+
+	// Get result from the phase
+	var contextResult string
+	if phaseResult, completed := contextPhase.GetResult(); completed {
+		// Convert result to JSON string for backward compatibility
+		if resultData, err := json.Marshal(phaseResult); err == nil {
+			contextResult = string(resultData)
+		} else {
+			logger.Error("Failed to marshal context result", "error", err.Error())
+			contextResult = "{}"
+		}
+	} else {
+		// Fallback: no result from phase (shouldn't happen with result tool)
+		logger.Warn("Context gathering phase did not complete with result tool")
+		contextResult = "{}"
 	}
 
 	// Parse context gathering response for failure indications
@@ -704,6 +721,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	logger.Info("Generating implementation...")
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
 	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
+	implPhase.Reset() // Ensure clean state
 
 	// Create tool context for static analysis
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)
@@ -729,7 +747,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Generate implementation
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Generating code")
-	implementation, err := aiClient.Generate(ctx, implPrompt)
+	_, err = aiClient.Generate(ctx, implPrompt)
 	if err != nil {
 		logger.Error("Implementation failed", "error", err.Error())
 		uiProgram.Fail(targetNum)
@@ -740,6 +758,42 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 				Phase:   "implementation",
 				Message: "AI implementation generation failed: " + err.Error(),
 				Context: "May be due to complex requirements or AI service issues",
+			},
+			Duration: time.Since(targetStart),
+		}
+	}
+
+	// Get result from the phase
+	var implementation string
+	if phaseResult, completed := implPhase.GetResult(); completed {
+		// The result should be the code string directly (from Transform in ImplementationResultSchema)
+		if codeStr, ok := phaseResult.(string); ok {
+			implementation = codeStr
+		} else {
+			logger.Error("Unexpected result type from implementation phase", "type", fmt.Sprintf("%T", phaseResult))
+			uiProgram.Fail(targetNum)
+			return &parser.GenerationResult{
+				Target:  target,
+				Success: false,
+				FailureReason: &parser.FailureReason{
+					Phase:   "implementation",
+					Message: "Invalid result type from implementation phase",
+					Context: fmt.Sprintf("Expected string, got %T", phaseResult),
+				},
+				Duration: time.Since(targetStart),
+			}
+		}
+	} else {
+		// Fallback: no result from phase (shouldn't happen with result tool)
+		logger.Error("Implementation phase did not complete with result tool")
+		uiProgram.Fail(targetNum)
+		return &parser.GenerationResult{
+			Target:  target,
+			Success: false,
+			FailureReason: &parser.FailureReason{
+				Phase:   "implementation",
+				Message: "Implementation phase did not complete properly",
+				Context: "The result() tool was not called",
 			},
 			Duration: time.Since(targetStart),
 		}

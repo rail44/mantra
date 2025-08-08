@@ -318,10 +318,23 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		// Mark that we've used tools in this session
 
 		// Execute tool calls in parallel
-		toolResults := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)
+		toolResults, hasTerminal := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)
 
 		// Add all tool responses to messages
 		messages = append(messages, toolResults...)
+
+		// Check if any tool was terminal
+		if hasTerminal {
+			c.logger.Debug("Terminal tool executed, ending generation")
+			totalTime := time.Since(overallStart)
+			c.logger.Debug(fmt.Sprintf("[PERF] Total: %s (API=%.1f%%, tools=%.1f%%, %d tool calls)",
+				totalTime.Round(time.Millisecond),
+				float64(apiCallTime)/float64(totalTime)*100,
+				float64(toolExecutionTime)/float64(totalTime)*100,
+				toolCallCount))
+			// Return empty content since result is stored in the phase
+			return "", nil
+		}
 
 	}
 
@@ -329,7 +342,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 }
 
 // executeToolsParallel executes multiple tool calls in parallel
-func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []ToolCall, executor ToolExecutor, toolExecutionTime *time.Duration, toolCallCount *int) []OpenAIMessage {
+func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []ToolCall, executor ToolExecutor, toolExecutionTime *time.Duration, toolCallCount *int) ([]OpenAIMessage, bool) {
 	type toolResult struct {
 		index      int
 		toolCallID string
@@ -462,11 +475,23 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 		return resultSlice[i].index < resultSlice[j].index
 	})
 
-	// Extract messages in order
+	// Extract messages in order and check for terminal tools
 	messages := make([]OpenAIMessage, len(resultSlice))
+	hasTerminal := false
+
 	for i, result := range resultSlice {
 		messages[i] = result.message
+
+		// Check if this tool call was to a terminal tool
+		// We need to check the original toolCalls to get the tool name
+		if result.index < len(toolCalls) {
+			toolName := toolCalls[result.index].Function.Name
+			if executor.IsTerminal(toolName) {
+				hasTerminal = true
+				c.logger.Debug("Terminal tool detected", "tool", toolName)
+			}
+		}
 	}
 
-	return messages
+	return messages, hasTerminal
 }

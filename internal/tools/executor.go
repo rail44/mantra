@@ -41,6 +41,14 @@ func (e *Executor) SetContext(ctx *Context) {
 	e.context = ctx
 }
 
+// IsTerminal checks if a tool is terminal by name
+func (e *Executor) IsTerminal(toolName string) bool {
+	if tool, exists := e.tools[toolName]; exists {
+		return tool.IsTerminal()
+	}
+	return false
+}
+
 // Execute runs a tool by name with the given parameters
 func (e *Executor) Execute(ctx context.Context, toolName string, params map[string]interface{}) (interface{}, error) {
 	// Get the tool from map
