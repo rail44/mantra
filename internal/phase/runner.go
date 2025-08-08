@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/formatter"
+	"github.com/rail44/mantra/internal/llm"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/tools"
@@ -16,12 +16,12 @@ import (
 
 // Runner handles phase execution
 type Runner struct {
-	client *ai.Client
+	client *llm.Client
 	logger log.Logger
 }
 
 // NewRunner creates a new phase runner
-func NewRunner(client *ai.Client, logger log.Logger) *Runner {
+func NewRunner(client *llm.Client, logger log.Logger) *Runner {
 	return &Runner{
 		client: client,
 		logger: logger,
@@ -200,7 +200,7 @@ func (r *Runner) configureClientForPhase(p Phase, toolContext *tools.Context) {
 
 	// Get tools once and convert/create executor
 	phaseTools := p.GetTools()
-	aiTools := ai.ConvertToAITools(phaseTools)
+	aiTools := llm.ConvertToAITools(phaseTools)
 	executor := tools.NewExecutor(phaseTools, r.logger)
 
 	// Set context if provided

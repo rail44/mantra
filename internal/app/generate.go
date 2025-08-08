@@ -10,11 +10,11 @@ import (
 
 	"log/slog"
 
-	"github.com/rail44/mantra/internal/ai"
+	"github.com/rail44/mantra/internal/codegen"
+	"github.com/rail44/mantra/internal/coder"
 	"github.com/rail44/mantra/internal/config"
 	"github.com/rail44/mantra/internal/detector"
-	"github.com/rail44/mantra/internal/coder"
-	"github.com/rail44/mantra/internal/codegen"
+	"github.com/rail44/mantra/internal/llm"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 )
@@ -142,9 +142,9 @@ func (a *GenerateApp) detectTargets(pkgDir, destDir string) ([]*detector.FileDet
 }
 
 // setupAIClient initializes AI client, tools, and related components
-func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *codegen.Generator, error) {
+func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*llm.Client, *codegen.Generator, error) {
 	// Initialize AI client configuration
-	clientConfig := &ai.ClientConfig{
+	clientConfig := &llm.ClientConfig{
 		URL:     cfg.URL,
 		APIKey:  cfg.GetAPIKey(),
 		Model:   cfg.Model,
@@ -156,7 +156,7 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Clie
 		clientConfig.Provider = cfg.OpenRouter.Providers
 	}
 
-	aiClient, err := ai.NewClient(clientConfig, a.logger)
+	aiClient, err := llm.NewClient(clientConfig, a.logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create AI client: %w", err)
 	}
@@ -178,7 +178,7 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Clie
 }
 
 // processAllTargets processes all files, generating implementations for targets and copying files without targets
-func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *codegen.Generator, cfg *config.Config) error {
+func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, aiClient *llm.Client, gen *codegen.Generator, cfg *config.Config) error {
 	// Collect targets and copy files without targets
 	targets := a.collectTargets(results, gen)
 

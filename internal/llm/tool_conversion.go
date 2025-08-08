@@ -1,4 +1,4 @@
-package ai
+package llm
 
 import "github.com/rail44/mantra/internal/tools"
 

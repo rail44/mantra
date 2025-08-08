@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/config"
+	"github.com/rail44/mantra/internal/llm"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/phase"
@@ -22,13 +22,13 @@ import (
 
 // ParallelCoder handles parallel code generation for multiple targets
 type ParallelCoder struct {
-	client *ai.Client
+	client *llm.Client
 	config *config.Config
 	logger log.Logger
 }
 
 // NewParallelCoder creates a new parallel coder
-func NewParallelCoder(client *ai.Client, cfg *config.Config) *ParallelCoder {
+func NewParallelCoder(client *llm.Client, cfg *config.Config) *ParallelCoder {
 	return &ParallelCoder{
 		client: client,
 		config: cfg,
@@ -119,7 +119,7 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 	logger := uiProgram.CreateTargetLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
 
 	// Create a new AI client with the target-specific logger
-	aiClient, err := ai.NewClient(c.client.GetConfig(), logger)
+	aiClient, err := llm.NewClient(c.client.GetConfig(), logger)
 	if err != nil {
 		return c.createInitializationFailure(tc.Target, err, targetStart, targetNum, uiProgram)
 	}
