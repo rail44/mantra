@@ -1,6 +1,8 @@
 package phase
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/rail44/mantra/internal/log"
@@ -18,6 +20,7 @@ type ContextGatheringPhase struct {
 	result      interface{}
 	completed   bool
 	mu          sync.Mutex
+	schema      schemas.ResultSchema
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
@@ -29,6 +32,7 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger lo
 	phase := &ContextGatheringPhase{
 		temperature: temperature,
 		logger:      logger,
+		schema:      &contextGatheringResultSchema{},
 	}
 
 	// Initialize tools for context gathering (limited to current package)
@@ -36,7 +40,7 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger lo
 		impl.NewInspectTool(packagePath), // Use go/packages for accurate type info including implementations
 		impl.NewResultTool(
 			"context gathering",
-			&schemas.ContextGatheringResultSchema{},
+			phase.schema,
 			phase.storeResult,
 		),
 	}
@@ -131,4 +135,186 @@ func (p *ContextGatheringPhase) Reset() {
 	defer p.mu.Unlock()
 	p.result = nil
 	p.completed = false
+}
+
+// GetResultSchema returns the schema for this phase's result tool
+func (p *ContextGatheringPhase) GetResultSchema() schemas.ResultSchema {
+	return p.schema
+}
+
+// contextGatheringResultSchema defines the schema for context gathering phase results
+type contextGatheringResultSchema struct{}
+
+// GetSchema returns the JSON schema for context gathering results
+func (s *contextGatheringResultSchema) GetSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"success": {
+				"type": "boolean",
+				"description": "Whether the context gathering was successful"
+			},
+			"types": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"name": {"type": "string"},
+						"definition": {"type": "string"},
+						"methods": {
+							"type": "array",
+							"items": {"type": "string"}
+						}
+					},
+					"required": ["name", "definition"],
+					"additionalProperties": false
+				}
+			},
+			"functions": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"name": {"type": "string"},
+						"signature": {"type": "string"},
+						"implementation": {"type": "string"}
+					},
+					"required": ["name", "signature"],
+					"additionalProperties": false
+				}
+			},
+			"constants": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"name": {"type": "string"},
+						"type": {"type": "string"},
+						"value": {"type": "string"}
+					},
+					"required": ["name"],
+					"additionalProperties": false
+				}
+			},
+			"error": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "Error message explaining what went wrong"
+					},
+					"details": {
+						"type": "string",
+						"description": "Additional details about the error"
+					}
+				},
+				"required": ["message"],
+				"additionalProperties": false
+			}
+		},
+		"required": ["success"],
+		"additionalProperties": false
+	}`)
+}
+
+// Validate checks if the data conforms to the context gathering schema
+func (s *contextGatheringResultSchema) Validate(data interface{}) error {
+	// Basic type check
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("expected object, got %T", data)
+	}
+
+	// Check for required "success" field
+	success, ok := dataMap["success"]
+	if !ok {
+		return fmt.Errorf("missing required field: success")
+	}
+
+	successBool, ok := success.(bool)
+	if !ok {
+		return fmt.Errorf("success must be a boolean, got %T", success)
+	}
+
+	// If failed, check for error field
+	if !successBool {
+		errorField, ok := dataMap["error"]
+		if !ok {
+			return fmt.Errorf("error field is required when success is false")
+		}
+
+		errorMap, ok := errorField.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("error must be an object, got %T", errorField)
+		}
+
+		if _, ok := errorMap["message"].(string); !ok {
+			return fmt.Errorf("error.message must be a string")
+		}
+
+		return nil // Valid error response
+	}
+
+	// For successful results, check for at least one of types, functions, or constants
+	hasTypes := dataMap["types"] != nil
+	hasFunctions := dataMap["functions"] != nil
+	hasConstants := dataMap["constants"] != nil
+
+	if !hasTypes && !hasFunctions && !hasConstants {
+		return fmt.Errorf("successful result must contain at least one of: types, functions, or constants")
+	}
+
+	// Validate types array if present
+	if types, ok := dataMap["types"].([]interface{}); ok {
+		for i, t := range types {
+			typeMap, ok := t.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("types[%d] must be an object", i)
+			}
+			if _, ok := typeMap["name"].(string); !ok {
+				return fmt.Errorf("types[%d].name must be a string", i)
+			}
+			if _, ok := typeMap["definition"].(string); !ok {
+				return fmt.Errorf("types[%d].definition must be a string", i)
+			}
+		}
+	}
+
+	// Validate functions array if present
+	if functions, ok := dataMap["functions"].([]interface{}); ok {
+		for i, f := range functions {
+			funcMap, ok := f.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("functions[%d] must be an object", i)
+			}
+			if _, ok := funcMap["name"].(string); !ok {
+				return fmt.Errorf("functions[%d].name must be a string", i)
+			}
+			if _, ok := funcMap["signature"].(string); !ok {
+				return fmt.Errorf("functions[%d].signature must be a string", i)
+			}
+		}
+	}
+
+	// Validate constants array if present
+	if constants, ok := dataMap["constants"].([]interface{}); ok {
+		for i, c := range constants {
+			constMap, ok := c.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("constants[%d] must be an object", i)
+			}
+			if _, ok := constMap["name"].(string); !ok {
+				return fmt.Errorf("constants[%d].name must be a string", i)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Transform converts the raw data into ContextGatheringResult
+func (s *contextGatheringResultSchema) Transform(data interface{}) (interface{}, error) {
+	// Return the entire map to preserve success/error information
+	// The cmd/generate.go will handle the structure appropriately
+	return data, nil
 }

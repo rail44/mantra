@@ -3,6 +3,7 @@ package phase
 import (
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
+	"github.com/rail44/mantra/internal/tools/schemas"
 )
 
 // Phase represents a generation phase with its own configuration
@@ -24,4 +25,7 @@ type Phase interface {
 
 	// Reset clears the phase state for reuse
 	Reset()
+
+	// GetResultSchema returns the schema for this phase's result tool
+	GetResultSchema() schemas.ResultSchema
 }

@@ -1,6 +1,8 @@
 package phase
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/rail44/mantra/internal/log"
@@ -19,6 +21,7 @@ type ImplementationPhase struct {
 	result      interface{}
 	completed   bool
 	mu          sync.Mutex
+	schema      schemas.ResultSchema
 }
 
 // NewImplementationPhase creates a new implementation phase
@@ -31,6 +34,7 @@ func NewImplementationPhase(temperature float32, projectRoot string, logger log.
 		temperature: temperature,
 		projectRoot: projectRoot,
 		logger:      logger,
+		schema:      &implementationResultSchema{},
 	}
 
 	// Initialize tools for implementation/validation
@@ -38,7 +42,7 @@ func NewImplementationPhase(temperature float32, projectRoot string, logger log.
 		impl.NewCheckCodeTool(projectRoot),
 		impl.NewResultTool(
 			"implementation",
-			&schemas.ImplementationResultSchema{},
+			phase.schema,
 			phase.storeResult,
 		),
 	}
@@ -161,4 +165,112 @@ func (p *ImplementationPhase) Reset() {
 	defer p.mu.Unlock()
 	p.result = nil
 	p.completed = false
+}
+
+// GetResultSchema returns the schema for this phase's result tool
+func (p *ImplementationPhase) GetResultSchema() schemas.ResultSchema {
+	return p.schema
+}
+
+// implementationResultSchema defines the schema for implementation phase results
+type implementationResultSchema struct{}
+
+// GetSchema returns the JSON schema for implementation results
+func (s *implementationResultSchema) GetSchema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"success": {
+				"type": "boolean",
+				"description": "Whether the implementation generation was successful"
+			},
+			"code": {
+				"type": "string",
+				"description": "The generated Go code implementation"
+			},
+			"error": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "Error message explaining what went wrong"
+					},
+					"details": {
+						"type": "string",
+						"description": "Additional details about what was missing or failed"
+					}
+				},
+				"required": ["message"],
+				"additionalProperties": false
+			}
+		},
+		"required": ["success"],
+		"additionalProperties": false
+	}`)
+}
+
+// Validate checks if the data conforms to the implementation schema
+func (s *implementationResultSchema) Validate(data interface{}) error {
+	// Basic type check
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("expected object, got %T", data)
+	}
+
+	// Check for required "success" field
+	success, ok := dataMap["success"]
+	if !ok {
+		return fmt.Errorf("missing required field: success")
+	}
+
+	successBool, ok := success.(bool)
+	if !ok {
+		return fmt.Errorf("success must be a boolean, got %T", success)
+	}
+
+	// If failed, check for error field
+	if !successBool {
+		errorField, ok := dataMap["error"]
+		if !ok {
+			return fmt.Errorf("error field is required when success is false")
+		}
+
+		errorMap, ok := errorField.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("error must be an object, got %T", errorField)
+		}
+
+		if _, ok := errorMap["message"].(string); !ok {
+			return fmt.Errorf("error.message must be a string")
+		}
+
+		return nil // Valid error response
+	}
+
+	// For successful results, check for required "code" field
+	code, ok := dataMap["code"]
+	if !ok {
+		return fmt.Errorf("missing required field: code when success is true")
+	}
+
+	// Validate that code is a string
+	if _, ok := code.(string); !ok {
+		return fmt.Errorf("code must be a string, got %T", code)
+	}
+
+	// Check that code is not empty
+	if codeStr := code.(string); codeStr == "" {
+		return fmt.Errorf("code cannot be empty")
+	}
+
+	return nil
+}
+
+// Transform converts the raw data into ImplementationResult
+func (s *implementationResultSchema) Transform(data interface{}) (interface{}, error) {
+	dataMap := data.(map[string]interface{})
+
+	// Return the entire map to preserve success/error information
+	// The cmd/generate.go will handle the structure appropriately
+	return dataMap, nil
 }
