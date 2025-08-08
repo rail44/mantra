@@ -20,6 +20,7 @@ type Config struct {
 	// Optional fields
 	APIKey   string `toml:"api_key"`
 	LogLevel string `toml:"log_level"`
+	Verbose  bool   `toml:"verbose"` // CLI flag, not from config file
 
 	// OpenRouter configuration
 	OpenRouter *OpenRouterConfig `toml:"openrouter"`
