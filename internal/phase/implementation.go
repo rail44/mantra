@@ -1,7 +1,6 @@
 package phase
 
 import (
-	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
@@ -10,15 +9,14 @@ import (
 
 // ImplementationPhase represents the phase where AI generates the actual code
 type ImplementationPhase struct {
-	temperature      float32
-	tools            []tools.Tool
-	projectRoot      string
-	logger           log.Logger
-	structuredOutput bool
+	temperature float32
+	tools       []tools.Tool
+	projectRoot string
+	logger      log.Logger
 }
 
 // NewImplementationPhase creates a new implementation phase
-func NewImplementationPhase(temperature float32, projectRoot string, logger log.Logger, structuredOutput bool) *ImplementationPhase {
+func NewImplementationPhase(temperature float32, projectRoot string, logger log.Logger) *ImplementationPhase {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -29,11 +27,10 @@ func NewImplementationPhase(temperature float32, projectRoot string, logger log.
 	}
 
 	return &ImplementationPhase{
-		temperature:      temperature,
-		tools:            tools,
-		projectRoot:      projectRoot,
-		logger:           logger,
-		structuredOutput: structuredOutput,
+		temperature: temperature,
+		tools:       tools,
+		projectRoot: projectRoot,
+		logger:      logger,
 	}
 }
 
@@ -110,15 +107,4 @@ func (p *ImplementationPhase) GetPromptBuilderWithContext(contextResult string) 
 	// Format the context result appropriately
 	formattedContext := "## Additional Context from Exploration:\n" + contextResult
 	return builder.WithAdditionalContext(formattedContext)
-}
-
-// GetResponseFormat returns the structured output format for implementation
-func (p *ImplementationPhase) GetResponseFormat() *ai.ResponseFormat {
-	if !p.structuredOutput {
-		return nil
-	}
-	return &ai.ResponseFormat{
-		Type:       "json_schema",
-		JSONSchema: ai.ImplementationSchema,
-	}
 }

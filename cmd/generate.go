@@ -361,7 +361,6 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 func configureAIClientForPhase(aiClient *ai.Client, p phase.Phase, logger log.Logger, toolContext *tools.Context) {
 	aiClient.SetTemperature(p.GetTemperature())
 	aiClient.SetSystemPrompt(p.GetSystemPrompt())
-	aiClient.SetResponseFormat(p.GetResponseFormat())
 
 	// Get tools once and convert/create executor
 	phaseTools := p.GetTools()
@@ -639,7 +638,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	// Phase 1: Context Gathering
 	logger.Info("Analyzing codebase context...")
 	packagePath := filepath.Dir(target.FilePath) // Get the package directory
-	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger, cfg.StructuredOutput)
+	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger)
 	// Context gathering doesn't need tool context
 	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
 
@@ -704,7 +703,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	// Phase 2: Implementation
 	logger.Info("Generating implementation...")
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
-	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger, cfg.StructuredOutput)
+	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
 
 	// Create tool context for static analysis
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)

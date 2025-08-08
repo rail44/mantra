@@ -60,10 +60,11 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 - inspect(name): Get details of types, package, function and variable from current scope
 
 ## Process
-1. Gather additional context using the tools, until you have enough information to implement the function.
+1. Gather additional context using the tools
 	- Use inspect() to get details of unclear identifier
+	- Prevent to use inspect() on standard library unless necessary
+2. Stop when you have enough context to implement the function
 2. Return your findings as additional context in the format below
-3. Do not return any other text or explanations
 
 ## Output Format
 

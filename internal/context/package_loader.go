@@ -39,6 +39,7 @@ func (l *PackageLoader) Load() error {
 			packages.NeedTypesInfo |
 			packages.NeedName |
 			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
 			packages.NeedImports |
 			packages.NeedDeps,
 		Dir:   l.packagePath,
@@ -143,7 +144,8 @@ func (l *PackageLoader) getPackageDocs(pkg *packages.Package) (*doc.Package, err
 	}
 
 	// Create doc.Package directly from AST files using the modern API
-	docPkg, err := doc.NewFromFiles(pkg.Fset, pkg.Syntax, pkg.PkgPath)
+	// Use doc.AllDecls to include non-exported declarations as well
+	docPkg, err := doc.NewFromFiles(pkg.Fset, pkg.Syntax, pkg.PkgPath, doc.AllDecls)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create doc package: %w", err)
 	}
@@ -272,8 +274,9 @@ type TypeInfo struct {
 	Methods    []analysis.MethodInfo
 }
 
-// extractMethodsForDeclaration gets methods for use in Declaration types
-func (l *PackageLoader) extractMethodsForDeclaration(typ types.Type) []MethodInfo {
+
+// extractMethodsForDeclarationWithDoc gets methods with documentation if available
+func (l *PackageLoader) extractMethodsForDeclarationWithDoc(typ types.Type, pkg *packages.Package, typeName string) []MethodInfo {
 	var methods []MethodInfo
 
 	// Get method set for both value and pointer types
@@ -281,6 +284,24 @@ func (l *PackageLoader) extractMethodsForDeclaration(typ types.Type) []MethodInf
 	ptrMset := types.NewMethodSet(types.NewPointer(typ))
 
 	seen := make(map[string]bool)
+
+	// Get method documentation if available
+	var methodDocs map[string]string
+	if pkg != nil && typeName != "" && len(pkg.Syntax) > 0 {
+		if docPkg, err := l.getPackageDocs(pkg); err == nil && docPkg != nil {
+			methodDocs = make(map[string]string)
+			// Find the type in doc.Package
+			for _, t := range docPkg.Types {
+				if t.Name == typeName {
+					// Extract method documentation
+					for _, method := range t.Methods {
+						methodDocs[method.Name] = method.Doc
+					}
+					break
+				}
+			}
+		}
+	}
 
 	// Add methods from pointer type (includes all methods)
 	for i := 0; i < ptrMset.Len(); i++ {
@@ -291,6 +312,13 @@ func (l *PackageLoader) extractMethodsForDeclaration(typ types.Type) []MethodInf
 			Name:      method.Name(),
 			Signature: l.formatSignature(method.Name(), sig),
 			Receiver:  l.simplifyTypeName("*" + strings.TrimPrefix(typ.String(), "*")),
+		}
+
+		// Add documentation if available
+		if methodDocs != nil {
+			if doc, exists := methodDocs[method.Name()]; exists {
+				methodInfo.Doc = doc
+			}
 		}
 
 		// Check if it's a value receiver method
@@ -537,17 +565,8 @@ func (l *PackageLoader) resolveQualifiedName(parts []string) (Declaration, error
 				}, nil
 			}
 
-			// Check if the imported package has type information
-			if importedPkg.Types == nil || importedPkg.Types.Scope() == nil {
-				// Need to load the imported package explicitly, including syntax for documentation
-				cfg := &packages.Config{
-					Mode: packages.NeedTypes | packages.NeedName | packages.NeedSyntax | packages.NeedTypesInfo,
-				}
-				pkgs, err := packages.Load(cfg, importPath)
-				if err == nil && len(pkgs) > 0 {
-					importedPkg = pkgs[0]
-				}
-			}
+			// External packages are already loaded with NeedImports and NeedDeps
+			// No need to reload them separately
 
 			return l.resolveInPackage(importedPkg, remaining, pkgName)
 		}
@@ -576,19 +595,70 @@ func (l *PackageLoader) resolveInPackage(pkg *packages.Package, parts []string, 
 	}
 
 	// Create declaration with appropriate package info
-	decl, err := l.createDeclarationFromObjectWithPackage(obj, pkgName)
+	decl, err := l.createDeclarationFromObjectWithPackageAndPkg(obj, pkgName, pkg)
 	if err != nil {
 		return nil, err
 	}
 
 	// Try to extract documentation if possible
-	if funcDecl, ok := decl.(*FunctionDeclaration); ok && len(pkg.Syntax) > 0 {
+	if len(pkg.Syntax) > 0 {
 		if docPkg, err := l.getPackageDocs(pkg); err == nil && docPkg != nil {
-			// Look for the function in doc.Package
-			for _, f := range docPkg.Funcs {
-				if f.Name == name {
-					funcDecl.Doc = f.Doc
-					break
+			switch d := decl.(type) {
+			case *FunctionDeclaration:
+				// Look for the function in doc.Package
+				for _, f := range docPkg.Funcs {
+					if f.Name == name {
+						d.Doc = f.Doc
+						break
+					}
+				}
+			case *StructDeclaration:
+				// Look for the type in doc.Package
+				for _, t := range docPkg.Types {
+					if t.Name == name {
+						d.Doc = t.Doc
+						break
+					}
+				}
+			case *InterfaceDeclaration:
+				// Look for the type in doc.Package
+				for _, t := range docPkg.Types {
+					if t.Name == name {
+						d.Doc = t.Doc
+						break
+					}
+				}
+			case *TypeAliasDeclaration:
+				// Look for the type in doc.Package
+				for _, t := range docPkg.Types {
+					if t.Name == name {
+						d.Doc = t.Doc
+						break
+					}
+				}
+			case *ConstantDeclaration:
+				// Look for the constant in doc.Package
+				for _, c := range docPkg.Consts {
+					if c.Names != nil {
+						for _, cName := range c.Names {
+							if cName == name {
+								d.Doc = c.Doc
+								break
+							}
+						}
+					}
+				}
+			case *VariableDeclaration:
+				// Look for the variable in doc.Package
+				for _, v := range docPkg.Vars {
+					if v.Names != nil {
+						for _, vName := range v.Names {
+							if vName == name {
+								d.Doc = v.Doc
+								break
+							}
+						}
+					}
 				}
 			}
 		}
@@ -651,9 +721,14 @@ func (l *PackageLoader) resolveNestedAccess(obj types.Object, parts []string, pk
 
 // createDeclarationFromObjectWithPackage creates a Declaration with specific package info
 func (l *PackageLoader) createDeclarationFromObjectWithPackage(obj types.Object, pkgName string) (Declaration, error) {
+	return l.createDeclarationFromObjectWithPackageAndPkg(obj, pkgName, nil)
+}
+
+// createDeclarationFromObjectWithPackageAndPkg creates a Declaration with package info
+func (l *PackageLoader) createDeclarationFromObjectWithPackageAndPkg(obj types.Object, pkgName string, pkg *packages.Package) (Declaration, error) {
 	switch obj := obj.(type) {
 	case *types.TypeName:
-		return l.getTypeDeclarationWithPackage(obj, pkgName)
+		return l.getTypeDeclarationWithPackageAndPkg(obj, pkgName, pkg)
 	case *types.Func:
 		return l.getFunctionDeclarationWithPackage(obj, pkgName)
 	case *types.Const:
@@ -665,8 +740,9 @@ func (l *PackageLoader) createDeclarationFromObjectWithPackage(obj types.Object,
 	}
 }
 
-// getTypeDeclarationWithPackage converts a TypeName to appropriate Declaration with specific package name
-func (l *PackageLoader) getTypeDeclarationWithPackage(obj *types.TypeName, pkgName string) (Declaration, error) {
+
+// getTypeDeclarationWithPackageAndPkg converts a TypeName to appropriate Declaration with package info
+func (l *PackageLoader) getTypeDeclarationWithPackageAndPkg(obj *types.TypeName, pkgName string, pkg *packages.Package) (Declaration, error) {
 	typ := obj.Type()
 
 	switch underlying := typ.Underlying().(type) {
@@ -691,7 +767,7 @@ func (l *PackageLoader) getTypeDeclarationWithPackage(obj *types.TypeName, pkgNa
 		}
 
 		// Extract methods
-		result.Methods = l.extractMethodsForDeclaration(typ)
+		result.Methods = l.extractMethodsForDeclarationWithDoc(typ, pkg, obj.Name())
 		return result, nil
 
 	case *types.Interface:
@@ -730,7 +806,7 @@ func (l *PackageLoader) getTypeDeclarationWithPackage(obj *types.TypeName, pkgNa
 		}
 
 		// Extract methods for the type (e.g., time.Duration has methods)
-		result.Methods = l.extractMethodsForDeclaration(typ)
+		result.Methods = l.extractMethodsForDeclarationWithDoc(typ, pkg, obj.Name())
 
 		return result, nil
 	}

@@ -95,11 +95,6 @@ func (c *Client) SetSystemPrompt(systemPrompt string) {
 	c.provider.SetSystemPrompt(systemPrompt)
 }
 
-// SetResponseFormat sets the structured output format
-func (c *Client) SetResponseFormat(format *ResponseFormat) {
-	c.provider.SetResponseFormat(format)
-}
-
 // GetConfig returns the client configuration
 func (c *Client) GetConfig() *ClientConfig {
 	return c.clientConfig

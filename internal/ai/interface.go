@@ -15,9 +15,6 @@ type Provider interface {
 
 	// SetSystemPrompt sets the system prompt
 	SetSystemPrompt(systemPrompt string)
-
-	// SetResponseFormat sets the structured output format (optional)
-	SetResponseFormat(format *ResponseFormat)
 }
 
 // ToolExecutor executes tool calls

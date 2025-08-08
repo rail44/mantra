@@ -33,6 +33,7 @@ type StructDeclaration struct {
 	Definition string
 	Fields     []FieldInfo
 	Methods    []MethodInfo
+	Doc        string // Documentation comment
 }
 
 // InterfaceDeclaration represents an interface type
@@ -40,6 +41,7 @@ type InterfaceDeclaration struct {
 	baseDeclaration
 	Definition string
 	Methods    []MethodInfo
+	Doc        string // Documentation comment
 }
 
 // FunctionDeclaration represents a function or method
@@ -56,6 +58,7 @@ type ConstantDeclaration struct {
 	baseDeclaration
 	Type  string
 	Value string
+	Doc   string // Documentation comment
 }
 
 // VariableDeclaration represents a variable
@@ -63,6 +66,7 @@ type VariableDeclaration struct {
 	baseDeclaration
 	Type        string
 	InitPattern string // e.g., "errors.New"
+	Doc         string // Documentation comment
 }
 
 // TypeAliasDeclaration represents a type alias
@@ -71,18 +75,20 @@ type TypeAliasDeclaration struct {
 	Definition string
 	Type       string
 	Methods    []MethodInfo
+	Doc        string // Documentation comment
 }
 
 // FieldInfo represents a struct field
 type FieldInfo struct {
-	Name string
-	Type string
-	Tag  string
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Tag  string `json:"tag,omitempty"`
 }
 
 // MethodInfo represents a method
 type MethodInfo struct {
-	Name      string
-	Signature string
-	Receiver  string
+	Name      string `json:"name"`
+	Signature string `json:"signature"`
+	Receiver  string `json:"receiver,omitempty"`
+	Doc       string `json:"doc,omitempty"` // Documentation comment
 }

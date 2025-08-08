@@ -10,6 +10,7 @@ type MethodInfo struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
 	Receiver  string `json:"receiver,omitempty"`
+	Doc       string `json:"doc,omitempty"` // Documentation comment
 }
 
 // FormatInterfaceType formats an interface type in a readable way

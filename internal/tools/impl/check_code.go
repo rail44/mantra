@@ -60,7 +60,8 @@ func (t *CheckCodeTool) ParametersSchema() json.RawMessage {
 				"description": "The generated function body to validate"
 			}
 		},
-		"required": ["code"]
+		"required": ["code"],
+		"additionalProperties": false
 	}`)
 }
 

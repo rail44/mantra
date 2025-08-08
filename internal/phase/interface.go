@@ -1,7 +1,6 @@
 package phase
 
 import (
-	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 )
@@ -19,7 +18,4 @@ type Phase interface {
 
 	// GetPromptBuilder returns a configured prompt builder for this phase
 	GetPromptBuilder() *prompt.Builder
-
-	// GetResponseFormat returns the structured output format for this phase (optional)
-	GetResponseFormat() *ai.ResponseFormat
 }

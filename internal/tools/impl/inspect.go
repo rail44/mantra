@@ -45,7 +45,8 @@ func (t *InspectTool) ParametersSchema() json.RawMessage {
 				"description": "Name of the declaration to inspect"
 			}
 		},
-		"required": ["name"]
+		"required": ["name"],
+		"additionalProperties": false
 	}`)
 }
 
@@ -95,11 +96,17 @@ func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{}
 		if len(d.Methods) > 0 {
 			result["methods"] = d.Methods
 		}
+		if d.Doc != "" {
+			result["doc"] = d.Doc
+		}
 
 	case *pkgcontext.InterfaceDeclaration:
 		result["definition"] = d.Definition
 		if len(d.Methods) > 0 {
 			result["methods"] = d.Methods
+		}
+		if d.Doc != "" {
+			result["doc"] = d.Doc
 		}
 
 	case *pkgcontext.FunctionDeclaration:
@@ -117,11 +124,17 @@ func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{}
 	case *pkgcontext.ConstantDeclaration:
 		result["type"] = d.Type
 		result["value"] = d.Value
+		if d.Doc != "" {
+			result["doc"] = d.Doc
+		}
 
 	case *pkgcontext.VariableDeclaration:
 		result["type"] = d.Type
 		if d.InitPattern != "" {
 			result["init_pattern"] = d.InitPattern
+		}
+		if d.Doc != "" {
+			result["doc"] = d.Doc
 		}
 
 	case *pkgcontext.TypeAliasDeclaration:
@@ -129,6 +142,9 @@ func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{}
 		result["type"] = d.Type
 		if len(d.Methods) > 0 {
 			result["methods"] = d.Methods
+		}
+		if d.Doc != "" {
+			result["doc"] = d.Doc
 		}
 	}
 

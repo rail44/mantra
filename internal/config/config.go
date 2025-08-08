@@ -18,9 +18,8 @@ type Config struct {
 	Dest  string `toml:"dest"`
 
 	// Optional fields
-	APIKey           string `toml:"api_key"`
-	LogLevel         string `toml:"log_level"`
-	StructuredOutput bool   `toml:"structured_output"` // Enable structured JSON output for supported models
+	APIKey   string `toml:"api_key"`
+	LogLevel string `toml:"log_level"`
 
 	// OpenRouter configuration
 	OpenRouter *OpenRouterConfig `toml:"openrouter"`

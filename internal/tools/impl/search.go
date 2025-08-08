@@ -64,7 +64,8 @@ func (t *SearchTool) ParametersSchema() json.RawMessage {
 				"description": "Maximum number of results"
 			}
 		},
-		"required": ["pattern"]
+		"required": ["pattern"],
+		"additionalProperties": false
 	}`)
 }
 

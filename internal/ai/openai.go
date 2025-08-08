@@ -24,8 +24,7 @@ type OpenAIClient struct {
 	currentTemperature float32 // Current temperature to use
 	systemPrompt       string  // Current system prompt
 	httpClient         *http.Client
-	providerSpec       *ProviderSpec   // OpenRouter-specific provider routing
-	responseFormat     *ResponseFormat // Structured output format
+	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
 	logger             log.Logger
 	firstRequestLogged bool // Flag to log detailed info only on first request
 }
@@ -39,8 +38,7 @@ type OpenAIRequest struct {
 	Tools             []Tool          `json:"tools,omitempty"`
 	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool            `json:"parallel_tool_calls,omitempty"`
-	Provider          *ProviderSpec   `json:"provider,omitempty"`        // OpenRouter provider specification
-	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"` // Structured output format
+	Provider          *ProviderSpec   `json:"provider,omitempty"` // OpenRouter provider specification
 }
 
 // ProviderSpec allows specifying provider routing for OpenRouter
@@ -133,11 +131,13 @@ func (c *OpenAIClient) SetTemperature(temperature float32) {
 // SetSystemPrompt sets the system prompt
 func (c *OpenAIClient) SetSystemPrompt(systemPrompt string) {
 	c.systemPrompt = systemPrompt
-}
-
-// SetResponseFormat sets the structured output format
-func (c *OpenAIClient) SetResponseFormat(format *ResponseFormat) {
-	c.responseFormat = format
+	c.logger.Debug("System prompt updated", "length", len(systemPrompt))
+	// Log the first 200 chars of system prompt at debug level as a preview
+	if len(systemPrompt) > 200 {
+		c.logger.Debug(fmt.Sprintf("System prompt preview: %s...", systemPrompt[:200]))
+	} else if systemPrompt != "" {
+		c.logger.Debug(fmt.Sprintf("System prompt: %s", systemPrompt))
+	}
 }
 
 // Name returns the provider name
@@ -213,6 +213,15 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	var apiCallTime time.Duration
 	var toolCallCount int
 
+	// Log system prompt at debug level
+	if c.systemPrompt != "" {
+		c.logger.Debug("System prompt set", "length", len(c.systemPrompt))
+		// Log full system prompt at trace level
+		if log.IsTraceEnabled() {
+			c.logger.Trace(fmt.Sprintf("[SYSTEM_PROMPT]\n%s", c.systemPrompt))
+		}
+	}
+
 	// Build initial messages with system prompt
 	messages := []OpenAIMessage{
 		{
@@ -248,7 +257,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 			ToolChoice:        "auto",
 			ParallelToolCalls: true,
 			Provider:          c.providerSpec,
-			ResponseFormat:    c.responseFormat,
 		}
 
 		// Make API call
