@@ -20,6 +20,23 @@ func (l *PackageLoader) GetContextForTarget(targetPath string, directlyUsedTypes
 		PackageName: l.pkg.Name,
 	}
 
+	// Extract imports from the target file first (needed for type simplification)
+	var targetImports []*ImportInfo
+	if len(l.pkg.Syntax) > 0 {
+		// Find the file matching targetPath
+		for _, file := range l.pkg.Syntax {
+			pos := l.pkg.Fset.Position(file.Pos())
+			if filepath.Base(pos.Filename) == filepath.Base(targetPath) {
+				targetImports = ExtractImportInfo(file)
+				ctx.Imports = targetImports
+				break
+			}
+		}
+	}
+
+	// Store imports for use in type simplification
+	l.targetImports = targetImports
+
 	// Get all types in the package
 	allTypes, err := l.GetAllTypes()
 	if err != nil {
@@ -74,18 +91,6 @@ func (l *PackageLoader) GetContextForTarget(targetPath string, directlyUsedTypes
 		}
 	}
 
-	// Extract imports from the first syntax file
-	if len(l.pkg.Syntax) > 0 {
-		// Find the file matching targetPath
-		for _, file := range l.pkg.Syntax {
-			pos := l.pkg.Fset.Position(file.Pos())
-			if filepath.Base(pos.Filename) == filepath.Base(targetPath) {
-				ctx.Imports = ExtractImportInfo(file)
-				break
-			}
-		}
-	}
-
 	return ctx, nil
 }
 
@@ -120,77 +125,101 @@ func (l *PackageLoader) buildCompleteTypeDefinition(typeInfo *TypeInfo) string {
 
 // simplifyFieldTypeName simplifies type names for better readability
 func (l *PackageLoader) simplifyFieldTypeName(typeName string) string {
-	// First apply the general simplification
-	simplified := l.simplifyTypeName(typeName)
+	// Handle map types specially
+	if strings.HasPrefix(typeName, "map[") {
+		// Find the closing bracket for the key type
+		bracketPos := strings.Index(typeName, "]")
+		if bracketPos > 0 {
+			keyPart := typeName[:bracketPos+1]   // e.g., "map[string]"
+			valueType := typeName[bracketPos+1:] // e.g., "github.com/rail44/mantra/examples/simple.cacheItem"
 
-	// Handle special cases for field types
-	// Remove unnecessary package qualifiers for common types
-	if strings.Contains(simplified, ".") {
-		parts := strings.Split(simplified, ".")
-		if len(parts) == 2 {
-			pkg := parts[0]
-			name := parts[1]
-
-			// Keep standard library package names
-			standardPkgs := map[string]bool{
-				"time":     true,
-				"sync":     true,
-				"context":  true,
-				"io":       true,
-				"fmt":      true,
-				"errors":   true,
-				"strings":  true,
-				"bytes":    true,
-				"json":     true,
-				"encoding": true,
-			}
-
-			if standardPkgs[pkg] {
-				return simplified // Keep as is
-			}
-
-			// For local packages, just use the type name
-			if pkg == l.pkg.Name {
-				return name
-			}
+			// Simplify the value type
+			simplifiedValue := l.simplifyTypeName(valueType)
+			return keyPart + simplifiedValue
 		}
 	}
 
-	return simplified
+	// Handle slice types
+	if strings.HasPrefix(typeName, "[]") {
+		elemType := typeName[2:]
+		return "[]" + l.simplifyTypeName(elemType)
+	}
+
+	// Handle pointer types
+	if strings.HasPrefix(typeName, "*") {
+		baseType := typeName[1:]
+		return "*" + l.simplifyTypeName(baseType)
+	}
+
+	// For regular types, use the general simplification
+	return l.simplifyTypeName(typeName)
 }
 
-// simplifyTypeName removes package path for types in the same package
+// simplifyTypeName simplifies type names based on import context
 func (l *PackageLoader) simplifyTypeName(typeName string) string {
 	if l.pkg == nil {
 		return typeName
 	}
 
-	// Remove the current package path
-	pkgPath := l.pkg.PkgPath
-	if pkgPath != "" {
-		// Replace full package path with just the type name
-		// e.g., "github.com/rail44/mantra/examples/simple.cacheItem" -> "cacheItem"
-		prefix := pkgPath + "."
-		if strings.HasPrefix(typeName, prefix) {
-			return strings.TrimPrefix(typeName, prefix)
+	// For types with package qualification (contains dot)
+	if strings.Contains(typeName, ".") {
+		// Find the last dot to separate package from type name
+		lastDot := strings.LastIndex(typeName, ".")
+		if lastDot > 0 {
+			pkgPath := typeName[:lastDot]
+			typeNamePart := typeName[lastDot+1:]
+
+			// Check if this is the current package
+			if pkgPath == l.pkg.PkgPath {
+				// Same package - no qualification needed
+				return typeNamePart
+			}
+
+			// Check imports to find the correct alias
+			if l.targetImports != nil {
+				for _, imp := range l.targetImports {
+					if imp.Path == pkgPath {
+						// Skip blank imports - they can't be referenced directly
+						if imp.IsBlank {
+							// Return the full path as we can't use blank imports
+							// The generated code will need to add a proper import
+							return typeName
+						}
+						// Found the import - use its identifier
+						identifier := imp.GetIdentifier()
+						return identifier + "." + typeNamePart
+					}
+				}
+			}
+
+			// If not found in imports, try to extract package name from path
+			// This handles cases where the full package path is in the type name
+			if strings.Contains(pkgPath, "/") {
+				// Extract the last segment as package name
+				segments := strings.Split(pkgPath, "/")
+				packageName := segments[len(segments)-1]
+
+				// Check if this package is imported
+				if l.targetImports != nil {
+					for _, imp := range l.targetImports {
+						if imp.Path == pkgPath || strings.HasSuffix(imp.Path, "/"+packageName) {
+							// Skip blank imports
+							if imp.IsBlank {
+								return typeName
+							}
+							identifier := imp.GetIdentifier()
+							return identifier + "." + typeNamePart
+						}
+					}
+				}
+
+				// Default to using the last segment
+				return packageName + "." + typeNamePart
+			}
+
+			// For simple package names (like "time"), keep as is
+			return typeName
 		}
-
-		// Handle pointer types
-		// e.g., "*github.com/rail44/mantra/examples/simple.SimpleCache" -> "*SimpleCache"
-		if strings.HasPrefix(typeName, "*"+prefix) {
-			return "*" + strings.TrimPrefix(typeName, "*"+prefix)
-		}
-	}
-
-	// Handle slices
-	if strings.HasPrefix(typeName, "[]") {
-		return "[]" + l.simplifyTypeName(typeName[2:])
-	}
-
-	// Handle maps
-	if strings.HasPrefix(typeName, "map[") {
-		// This is more complex, but for now keep as is
-		return typeName
 	}
 
 	return typeName

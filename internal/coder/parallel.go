@@ -135,7 +135,8 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 	runner := phase.NewRunner(client, logger)
 
 	// Phase 1: Context Gathering
-	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, targetNum, uiProgram)
+	// Pass destination directory for PackageLoader to use prepared stub files
+	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, c.config.Dest, targetNum, uiProgram)
 	if contextError != nil {
 		return c.createPhaseFailure(tc.Target, contextError, targetStart, targetNum, uiProgram)
 	}

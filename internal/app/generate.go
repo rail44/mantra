@@ -172,6 +172,11 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*llm.Cli
 
 // processAllTargets processes all files, generating implementations for targets and copying files without targets
 func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, clientConfig *llm.ClientConfig, gen *codegen.Generator, cfg *config.Config) error {
+	// Prepare stub files for all targets before generation
+	if err := a.prepareStubFiles(results, gen); err != nil {
+		return fmt.Errorf("failed to prepare stub files: %w", err)
+	}
+
 	// Collect targets and copy files without targets
 	targets := a.collectTargets(results, gen)
 
@@ -181,6 +186,7 @@ func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector
 	}
 
 	// Create and execute target executor
+	// Now PackageLoader will see the prepared files with correct structure
 	parallelCoder := coder.NewParallelCoder(clientConfig, cfg)
 	allResults, err := parallelCoder.ExecuteTargets(ctx, targets)
 	if err != nil {
@@ -189,6 +195,41 @@ func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector
 
 	// Write generated files
 	return a.writeGeneratedFiles(results, allResults, gen)
+}
+
+// prepareStubFiles prepares stub files for all targets before generation
+func (a *GenerateApp) prepareStubFiles(results []*detector.FileDetectionResult, gen *codegen.Generator) error {
+	for _, result := range results {
+		fileInfo := result.FileInfo
+
+		// Skip files without mantra targets
+		if len(result.Statuses) == 0 {
+			continue
+		}
+
+		// Collect targets that need generation for this file
+		targetsToGenerate := make(map[string]bool)
+		for _, status := range result.Statuses {
+			if status.Status != detector.StatusCurrent {
+				targetsToGenerate[status.Target.GetDisplayName()] = true
+			}
+		}
+
+		// If there are targets to generate, prepare the stub file
+		if len(targetsToGenerate) > 0 {
+			if err := gen.PrepareTargetStubs(fileInfo, targetsToGenerate); err != nil {
+				a.logger.Error("failed to prepare stub file",
+					slog.String("file", fileInfo.FilePath),
+					slog.String("error", err.Error()))
+				return err
+			}
+			a.logger.Debug("prepared stub file",
+				slog.String("file", fileInfo.FilePath),
+				slog.Int("targets_to_generate", len(targetsToGenerate)))
+		}
+	}
+
+	return nil
 }
 
 // collectTargets collects targets that need generation and copies files without targets

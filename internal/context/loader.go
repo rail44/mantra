@@ -8,8 +8,9 @@ import (
 
 // PackageLoader provides go/packages based type resolution
 type PackageLoader struct {
-	packagePath string
-	pkg         *packages.Package
+	packagePath   string
+	pkg           *packages.Package
+	targetImports []*ImportInfo // Imports from the target file for type simplification
 }
 
 // NewPackageLoader creates a new package loader

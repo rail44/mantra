@@ -32,6 +32,147 @@ func New(config *Config) *Generator {
 	return &Generator{config: config}
 }
 
+// PrepareTargetStubs prepares the generated file with stub implementations for targets
+// that are about to be generated. This creates a valid Go file that can be analyzed
+// by go/packages while generation is in progress.
+//
+// For targets to be generated: uses panic("not implemented")
+// For other targets: preserves existing implementation if file exists, otherwise uses panic
+func (g *Generator) PrepareTargetStubs(fileInfo *parser.FileInfo, targetsToGenerate map[string]bool) error {
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(g.config.Dest, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	sourceFileName := filepath.Base(fileInfo.FilePath)
+	outputFile := filepath.Join(g.config.Dest, sourceFileName)
+
+	// Check if file already exists and preserve it if targets are already generated
+	var existingContent string
+	hasExistingFile := false
+	if existingData, err := os.ReadFile(outputFile); err == nil {
+		existingContent = string(existingData)
+		hasExistingFile = true
+	}
+
+	// Build results for file generation
+	var results []*parser.GenerationResult
+	for _, target := range fileInfo.Targets {
+		key := target.GetDisplayName()
+
+		if targetsToGenerate[key] {
+			// Target is about to be generated - use stub (panic)
+			results = append(results, &parser.GenerationResult{
+				Target:         target,
+				Success:        false, // Marks it to use panic("not implemented")
+				Implementation: "",
+			})
+		} else if hasExistingFile {
+			// Try to preserve existing implementation from file
+			// Mark as successful to preserve whatever is in the existing file
+			results = append(results, &parser.GenerationResult{
+				Target:         target,
+				Success:        true,
+				Implementation: "// Preserved from existing file",
+			})
+		} else {
+			// No existing file and not being generated - keep as stub
+			results = append(results, &parser.GenerationResult{
+				Target:         target,
+				Success:        false,
+				Implementation: "",
+			})
+		}
+	}
+
+	// If we have an existing file and some implementations to preserve,
+	// we need to be smarter about merging
+	var content string
+	var err error
+
+	if hasExistingFile && len(results) > 0 {
+		// Use existing content as base for targets not being regenerated
+		content, err = g.mergeWithExisting(fileInfo, results, existingContent)
+	} else {
+		// Generate fresh content
+		content, err = g.generateFileContent(fileInfo, results, "")
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to generate file content: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
+
+// mergeWithExisting intelligently merges new stubs with existing implementations
+func (g *Generator) mergeWithExisting(fileInfo *parser.FileInfo, results []*parser.GenerationResult, existingContent string) (string, error) {
+	// For targets marked as successful (to be preserved), we'll keep the existing file
+	// For targets marked as failed (to be regenerated), we'll use panic stubs
+
+	// Parse the existing file to extract implementations
+	fset := token.NewFileSet()
+	existingAST, err := goparser.ParseFile(fset, "", existingContent, goparser.ParseComments)
+	if err != nil {
+		// If we can't parse existing file, fall back to fresh generation
+		return g.generateFileContent(fileInfo, results, "")
+	}
+
+	// Build a map of which targets to regenerate (use stubs)
+	useStub := make(map[string]bool)
+	for _, result := range results {
+		if !result.Success {
+			useStub[result.Target.GetDisplayName()] = true
+		}
+	}
+
+	// Walk through the existing AST and replace only targets to be regenerated
+	ast.Inspect(existingAST, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok {
+			funcName := fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) > 0 {
+				// Method - check if it needs stub
+				for _, result := range results {
+					if result.Target.Name == funcName && useStub[result.Target.GetDisplayName()] {
+						// Replace with panic stub
+						fn.Body = &ast.BlockStmt{
+							List: []ast.Stmt{
+								&ast.ExprStmt{
+									X: &ast.CallExpr{
+										Fun: &ast.Ident{Name: "panic"},
+										Args: []ast.Expr{
+											&ast.BasicLit{
+												Kind:  token.STRING,
+												Value: `"not implemented"`,
+											},
+										},
+									},
+								},
+							},
+						}
+						break
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	// Format the modified AST back to source code
+	var buf strings.Builder
+	if err := format.Node(&buf, fset, existingAST); err != nil {
+		// Fall back to fresh generation if formatting fails
+		return g.generateFileContent(fileInfo, results, "")
+	}
+
+	return buf.String(), nil
+}
+
 // GenerateFile generates a complete file with implementations for all targets
 func (g *Generator) GenerateFile(fileInfo *parser.FileInfo, results []*parser.GenerationResult) error {
 	// Create output directory if it doesn't exist

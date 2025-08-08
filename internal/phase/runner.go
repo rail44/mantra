@@ -29,7 +29,7 @@ func NewRunner(client *llm.Client, logger log.Logger) *Runner {
 }
 
 // ExecuteContextGathering executes the context gathering phase
-func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, targetNum int, uiProgram *ui.Program) (map[string]interface{}, *parser.FailureReason) {
+func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, targetNum int, uiProgram *ui.Program) (map[string]interface{}, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
 	r.logger.Info("Starting generation")
@@ -37,7 +37,11 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 
 	// Setup phase
 	r.logger.Info("Analyzing codebase context...")
-	packagePath := filepath.Dir(target.FilePath)
+	// Use destination directory if provided, otherwise use source directory
+	packagePath := destDir
+	if packagePath == "" {
+		packagePath = filepath.Dir(target.FilePath)
+	}
 	contextPhase := NewContextGatheringPhase(0.6, packagePath, r.logger)
 	contextPhase.Reset() // Ensure clean state
 	r.configureClientForPhase(contextPhase, nil)
