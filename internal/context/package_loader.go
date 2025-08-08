@@ -599,71 +599,88 @@ func (l *PackageLoader) resolveInPackage(pkg *packages.Package, parts []string, 
 		return nil, err
 	}
 
-	// Try to extract documentation if possible
-	if len(pkg.Syntax) > 0 {
-		if docPkg, err := l.getPackageDocs(pkg); err == nil && docPkg != nil {
+	// Extract documentation if possible
+	l.attachDocumentation(decl, name, pkg)
+
+	return decl, nil
+}
+
+// attachDocumentation attaches documentation to the declaration if available
+func (l *PackageLoader) attachDocumentation(decl Declaration, name string, pkg *packages.Package) {
+	if len(pkg.Syntax) == 0 {
+		return
+	}
+
+	docPkg, err := l.getPackageDocs(pkg)
+	if err != nil || docPkg == nil {
+		return
+	}
+
+	switch d := decl.(type) {
+	case *FunctionDeclaration:
+		l.attachFunctionDoc(d, name, docPkg)
+	case *StructDeclaration, *InterfaceDeclaration, *TypeAliasDeclaration:
+		l.attachTypeDoc(decl, name, docPkg)
+	case *ConstantDeclaration:
+		l.attachConstantDoc(d, name, docPkg)
+	case *VariableDeclaration:
+		l.attachVariableDoc(d, name, docPkg)
+	}
+}
+
+// attachFunctionDoc attaches documentation to a function declaration
+func (l *PackageLoader) attachFunctionDoc(decl *FunctionDeclaration, name string, docPkg *doc.Package) {
+	for _, f := range docPkg.Funcs {
+		if f.Name == name {
+			decl.Doc = f.Doc
+			break
+		}
+	}
+}
+
+// attachTypeDoc attaches documentation to type declarations
+func (l *PackageLoader) attachTypeDoc(decl Declaration, name string, docPkg *doc.Package) {
+	for _, t := range docPkg.Types {
+		if t.Name == name {
 			switch d := decl.(type) {
-			case *FunctionDeclaration:
-				// Look for the function in doc.Package
-				for _, f := range docPkg.Funcs {
-					if f.Name == name {
-						d.Doc = f.Doc
-						break
-					}
-				}
 			case *StructDeclaration:
-				// Look for the type in doc.Package
-				for _, t := range docPkg.Types {
-					if t.Name == name {
-						d.Doc = t.Doc
-						break
-					}
-				}
+				d.Doc = t.Doc
 			case *InterfaceDeclaration:
-				// Look for the type in doc.Package
-				for _, t := range docPkg.Types {
-					if t.Name == name {
-						d.Doc = t.Doc
-						break
-					}
-				}
+				d.Doc = t.Doc
 			case *TypeAliasDeclaration:
-				// Look for the type in doc.Package
-				for _, t := range docPkg.Types {
-					if t.Name == name {
-						d.Doc = t.Doc
-						break
-					}
-				}
-			case *ConstantDeclaration:
-				// Look for the constant in doc.Package
-				for _, c := range docPkg.Consts {
-					if c.Names != nil {
-						for _, cName := range c.Names {
-							if cName == name {
-								d.Doc = c.Doc
-								break
-							}
-						}
-					}
-				}
-			case *VariableDeclaration:
-				// Look for the variable in doc.Package
-				for _, v := range docPkg.Vars {
-					if v.Names != nil {
-						for _, vName := range v.Names {
-							if vName == name {
-								d.Doc = v.Doc
-								break
-							}
-						}
-					}
+				d.Doc = t.Doc
+			}
+			break
+		}
+	}
+}
+
+// attachConstantDoc attaches documentation to a constant declaration
+func (l *PackageLoader) attachConstantDoc(decl *ConstantDeclaration, name string, docPkg *doc.Package) {
+	for _, c := range docPkg.Consts {
+		if c.Names != nil {
+			for _, cName := range c.Names {
+				if cName == name {
+					decl.Doc = c.Doc
+					return
 				}
 			}
 		}
 	}
+}
 
-	return decl, nil
+// attachVariableDoc attaches documentation to a variable declaration
+func (l *PackageLoader) attachVariableDoc(decl *VariableDeclaration, name string, docPkg *doc.Package) {
+	for _, v := range docPkg.Vars {
+		if v.Names != nil {
+			for _, vName := range v.Names {
+				if vName == name {
+					decl.Doc = v.Doc
+					return
+				}
+			}
+		}
+	}
 }
 
 // resolveNestedAccess resolves nested access like Type.Method

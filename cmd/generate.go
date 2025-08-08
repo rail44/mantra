@@ -246,24 +246,35 @@ type targetWithContext struct {
 
 // processTargetsByFile processes all files, generating implementations for targets and copying files without targets
 func processTargetsByFile(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, destDir string, cfg *config.Config) error {
-	// Collect all targets that need generation across all files
+	// Collect targets and copy files without targets
+	allTargets := collectTargetsAndCopyFiles(results, gen)
+
+	// Skip if no targets need generation
+	if len(allTargets) == 0 {
+		return nil
+	}
+
+	// Generate all targets in parallel
+	allResults, err := generateAllTargetsInParallel(ctx, allTargets, aiClient, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to generate implementations: %w", err)
+	}
+
+	// Write generated files
+	return writeGeneratedFiles(results, allResults, gen)
+}
+
+// collectTargetsAndCopyFiles collects targets that need generation and copies files without targets
+func collectTargetsAndCopyFiles(results []*detector.FileDetectionResult, gen *generator.Generator) []targetWithContext {
 	var allTargets []targetWithContext
 
-	// First pass: collect targets and handle files without targets
 	for _, result := range results {
 		fileInfo := result.FileInfo
 		filePath := fileInfo.FilePath
 
 		// Handle files without mantra targets
 		if len(result.Statuses) == 0 {
-			// Simply copy the file with package name change
-			if err := gen.GenerateFile(fileInfo, []*parser.GenerationResult{}); err != nil {
-				log.Error("failed to copy file without mantra targets",
-					slog.String("file", filePath),
-					slog.String("error", err.Error()))
-			} else {
-				log.Info(fmt.Sprintf("Copied: %s", filepath.Base(filePath)))
-			}
+			copyFileWithoutTargets(fileInfo, gen)
 			continue
 		}
 
@@ -288,31 +299,24 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 		}
 	}
 
-	// Skip if no targets need generation
-	if len(allTargets) == 0 {
-		return nil
-	}
+	return allTargets
+}
 
-	// Generate all targets in parallel
-	allResults, err := generateAllTargetsInParallel(ctx, allTargets, aiClient, cfg)
-	if err != nil {
-		return fmt.Errorf("failed to generate implementations: %w", err)
+// copyFileWithoutTargets copies a file that has no mantra targets
+func copyFileWithoutTargets(fileInfo *parser.FileInfo, gen *generator.Generator) {
+	if err := gen.GenerateFile(fileInfo, []*parser.GenerationResult{}); err != nil {
+		log.Error("failed to copy file without mantra targets",
+			slog.String("file", fileInfo.FilePath),
+			slog.String("error", err.Error()))
+	} else {
+		log.Info(fmt.Sprintf("Copied: %s", filepath.Base(fileInfo.FilePath)))
 	}
+}
 
-	// Create implementation map for backward compatibility during transition
-	implementations := make(map[string]string)
-	for _, result := range allResults {
-		if result.Success {
-			implementations[result.Target.Name] = result.Implementation
-		}
-	}
-
-	// Group results by file and generate output files
-	fileResults := make(map[string][]*parser.GenerationResult)
-	for _, genResult := range allResults {
-		filePath := genResult.Target.FilePath
-		fileResults[filePath] = append(fileResults[filePath], genResult)
-	}
+// writeGeneratedFiles writes all generated files with their results
+func writeGeneratedFiles(results []*detector.FileDetectionResult, allResults []*parser.GenerationResult, gen *generator.Generator) error {
+	// Group results by file
+	fileResults := groupResultsByFile(allResults)
 
 	for _, result := range results {
 		if len(result.Statuses) == 0 {
@@ -322,25 +326,8 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 		fileInfo := result.FileInfo
 		filePath := fileInfo.FilePath
 
-		// Collect GenerationResults for this file
-		var fileGenerationResults []*parser.GenerationResult
-
-		// Add results from generation
-		if genResults, exists := fileResults[filePath]; exists {
-			fileGenerationResults = append(fileGenerationResults, genResults...)
-		}
-
-		// Add existing implementations as successful results
-		for _, status := range result.Statuses {
-			if status.Status == detector.StatusCurrent {
-				fileGenerationResults = append(fileGenerationResults, &parser.GenerationResult{
-					Target:         status.Target,
-					Success:        true,
-					Implementation: status.ExistingImpl,
-					Duration:       0, // No generation time for existing implementations
-				})
-			}
-		}
+		// Collect all results for this file
+		fileGenerationResults := collectFileGenerationResults(result, fileResults[filePath])
 
 		// Generate file with all results
 		if len(fileGenerationResults) > 0 {
@@ -355,6 +342,40 @@ func processTargetsByFile(ctx context.Context, results []*detector.FileDetection
 	}
 
 	return nil
+}
+
+// groupResultsByFile groups generation results by their source file
+func groupResultsByFile(allResults []*parser.GenerationResult) map[string][]*parser.GenerationResult {
+	fileResults := make(map[string][]*parser.GenerationResult)
+	for _, genResult := range allResults {
+		filePath := genResult.Target.FilePath
+		fileResults[filePath] = append(fileResults[filePath], genResult)
+	}
+	return fileResults
+}
+
+// collectFileGenerationResults collects all generation results for a file
+func collectFileGenerationResults(detectionResult *detector.FileDetectionResult, generatedResults []*parser.GenerationResult) []*parser.GenerationResult {
+	var fileGenerationResults []*parser.GenerationResult
+
+	// Add newly generated results
+	if generatedResults != nil {
+		fileGenerationResults = append(fileGenerationResults, generatedResults...)
+	}
+
+	// Add existing implementations as successful results
+	for _, status := range detectionResult.Statuses {
+		if status.Status == detector.StatusCurrent {
+			fileGenerationResults = append(fileGenerationResults, &parser.GenerationResult{
+				Target:         status.Target,
+				Success:        true,
+				Implementation: status.ExistingImpl,
+				Duration:       0, // No generation time for existing implementations
+			})
+		}
+	}
+
+	return fileGenerationResults
 }
 
 // configureAIClientForPhase configures the AI client with phase-specific settings
@@ -592,257 +613,24 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	logger := uiProgram.CreateTargetLogger(target.GetDisplayName(), targetNum, totalTargets)
 
 	// Create a new AI client with the target-specific logger
-	// This avoids concurrent access issues with shared client
-	aiClient, err := ai.NewClient(baseAIClient.GetConfig(), logger)
+	aiClient, err := createTargetAIClient(baseAIClient, logger)
 	if err != nil {
-		logger.Error("Failed to create AI client", "error", err.Error())
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:  target,
-			Success: false,
-			FailureReason: &parser.FailureReason{
-				Phase:   "initialization",
-				Message: "Failed to create AI client: " + err.Error(),
-				Context: "Client configuration error",
-			},
-			Duration: time.Since(targetStart),
-		}
+		return createInitializationFailure(target, err, targetStart, targetNum, uiProgram)
 	}
-
-	logger.Info("Starting generation")
-	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Starting")
 
 	// Phase 1: Context Gathering
-	logger.Info("Analyzing codebase context...")
-	packagePath := filepath.Dir(target.FilePath) // Get the package directory
-	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger)
-	contextPhase.Reset() // Ensure clean state
-	// Context gathering doesn't need tool context
-	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
-
-	// Build initial prompt
-	contextPromptBuilder := contextPhase.GetPromptBuilder()
-	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
-	if err != nil {
-		logger.Error("Failed to build prompt", "error", err.Error())
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:  target,
-			Success: false,
-			FailureReason: &parser.FailureReason{
-				Phase:   "context_gathering",
-				Message: "Failed to build context gathering prompt: " + err.Error(),
-				Context: "Prompt construction error",
-			},
-			Duration: time.Since(targetStart),
-		}
-	}
-
-	// Execute context gathering
-	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Analyzing codebase")
-	_, err = aiClient.Generate(ctx, initialPrompt)
-	if err != nil {
-		logger.Error("Context gathering failed", "error", err.Error())
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:  target,
-			Success: false,
-			FailureReason: &parser.FailureReason{
-				Phase:   "context_gathering",
-				Message: "AI context gathering failed: " + err.Error(),
-				Context: "May be due to insufficient codebase information or AI service issues",
-			},
-			Duration: time.Since(targetStart),
-		}
-	}
-
-	// Get result from the phase
-	var contextResult map[string]interface{}
-	var contextError *parser.FailureReason
-	if phaseResult, completed := contextPhase.GetResult(); completed {
-		// Check if it's an error result
-		if resultMap, ok := phaseResult.(map[string]interface{}); ok {
-			if success, hasSuccess := resultMap["success"].(bool); hasSuccess && !success {
-				// Extract error information
-				if errorField, hasError := resultMap["error"].(map[string]interface{}); hasError {
-					message := ""
-					details := ""
-					if msg, ok := errorField["message"].(string); ok {
-						message = msg
-					}
-					if det, ok := errorField["details"].(string); ok {
-						details = det
-					}
-					contextError = &parser.FailureReason{
-						Phase:   "context_gathering",
-						Message: message,
-						Context: details,
-					}
-				}
-			} else if success {
-				// Store the successful result directly
-				contextResult = resultMap
-			}
-		}
-	} else {
-		// Fallback: no result from phase (shouldn't happen with result tool)
-		logger.Warn("Context gathering phase did not complete with result tool")
-		contextError = &parser.FailureReason{
-			Phase:   "context_gathering",
-			Message: "Phase did not complete properly",
-			Context: "The result() tool was not called",
-		}
-	}
-
-	// Check if we have an error from the result tool
+	contextResult, contextError := executeContextGatheringPhase(ctx, target, fileContent, aiClient, logger, targetNum, uiProgram)
 	if contextError != nil {
-		logger.Error("Context gathering failed",
-			"phase", contextError.Phase,
-			"message", contextError.Message,
-			"context", contextError.Context,
-			"target", target.Name)
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:        target,
-			Success:       false,
-			FailureReason: contextError,
-			Duration:      time.Since(targetStart),
-		}
-	}
-
-	if contextResult != nil {
-		// Convert to JSON for logging
-		if resultJSON, err := json.Marshal(contextResult); err == nil {
-			logger.Debug("Context gathering result", "length", len(resultJSON))
-			logger.Trace("Context gathering output", "content", string(resultJSON))
-		}
+		return createPhaseFailure(target, contextError, targetStart, targetNum, uiProgram)
 	}
 
 	// Phase 2: Implementation
-	logger.Info("Generating implementation...")
-	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
-	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
-	implPhase.Reset() // Ensure clean state
-
-	// Create tool context for static analysis
-	toolContext := tools.NewContext(fileInfo, target, projectRoot)
-	configureAIClientForPhase(aiClient, implPhase, logger, toolContext)
-
-	// Build implementation prompt with context from phase 1
-	// Convert contextResult to Markdown format for better AI understanding
-	contextResultMarkdown := formatContextResultAsMarkdown(contextResult)
-	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResultMarkdown)
-	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
-	if err != nil {
-		logger.Error("Failed to build implementation prompt", "error", err.Error())
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:  target,
-			Success: false,
-			FailureReason: &parser.FailureReason{
-				Phase:   "implementation",
-				Message: "Failed to build implementation prompt: " + err.Error(),
-				Context: "Error occurred while incorporating context from phase 1",
-			},
-			Duration: time.Since(targetStart),
-		}
-	}
-
-	// Generate implementation
-	uiProgram.UpdatePhase(targetNum, "Implementation", "Generating code")
-	_, err = aiClient.Generate(ctx, implPrompt)
-	if err != nil {
-		logger.Error("Implementation failed", "error", err.Error())
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:  target,
-			Success: false,
-			FailureReason: &parser.FailureReason{
-				Phase:   "implementation",
-				Message: "AI implementation generation failed: " + err.Error(),
-				Context: "May be due to complex requirements or AI service issues",
-			},
-			Duration: time.Since(targetStart),
-		}
-	}
-
-	// Get result from the phase
-	var implementation string
-	var implError *parser.FailureReason
-	if phaseResult, completed := implPhase.GetResult(); completed {
-		// Check if it's a map with success/error structure
-		if resultMap, ok := phaseResult.(map[string]interface{}); ok {
-			if success, hasSuccess := resultMap["success"].(bool); hasSuccess {
-				if !success {
-					// Extract error information
-					if errorField, hasError := resultMap["error"].(map[string]interface{}); hasError {
-						message := ""
-						details := ""
-						if msg, ok := errorField["message"].(string); ok {
-							message = msg
-						}
-						if det, ok := errorField["details"].(string); ok {
-							details = det
-						}
-						implError = &parser.FailureReason{
-							Phase:   "implementation",
-							Message: message,
-							Context: details,
-						}
-					}
-				} else {
-					// Extract the code for successful result
-					if code, hasCode := resultMap["code"].(string); hasCode {
-						implementation = code
-					} else {
-						implError = &parser.FailureReason{
-							Phase:   "implementation",
-							Message: "Missing code field in successful result",
-							Context: "The result() tool was called with success=true but no code was provided",
-						}
-					}
-				}
-			} else {
-				implError = &parser.FailureReason{
-					Phase:   "implementation",
-					Message: "Invalid result structure",
-					Context: "The result() tool response is missing the success field",
-				}
-			}
-		} else {
-			logger.Error("Unexpected result type from implementation phase", "type", fmt.Sprintf("%T", phaseResult))
-			implError = &parser.FailureReason{
-				Phase:   "implementation",
-				Message: "Invalid result type from implementation phase",
-				Context: fmt.Sprintf("Expected map, got %T", phaseResult),
-			}
-		}
-	} else {
-		// Fallback: no result from phase (shouldn't happen with result tool)
-		logger.Error("Implementation phase did not complete with result tool")
-		implError = &parser.FailureReason{
-			Phase:   "implementation",
-			Message: "Implementation phase did not complete properly",
-			Context: "The result() tool was not called",
-		}
-	}
-
-	// Check if we have an error from the result tool
+	implementation, implError := executeImplementationPhase(ctx, target, fileContent, fileInfo, aiClient, projectRoot, contextResult, logger, targetNum, uiProgram)
 	if implError != nil {
-		logger.Error("Implementation failed",
-			"phase", implError.Phase,
-			"message", implError.Message,
-			"context", implError.Context,
-			"target", target.Name)
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:        target,
-			Success:       false,
-			FailureReason: implError,
-			Duration:      time.Since(targetStart),
-		}
+		return createPhaseFailure(target, implError, targetStart, targetNum, uiProgram)
 	}
 
+	// Success
 	duration := time.Since(targetStart).Round(time.Millisecond)
 	logger.Info("Successfully generated implementation", "duration", duration)
 	uiProgram.Complete(targetNum)
@@ -852,5 +640,204 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 		Success:        true,
 		Implementation: implementation,
 		Duration:       duration,
+	}
+}
+
+// createTargetAIClient creates a new AI client with target-specific logger
+func createTargetAIClient(baseAIClient *ai.Client, logger log.Logger) (*ai.Client, error) {
+	// This avoids concurrent access issues with shared client
+	return ai.NewClient(baseAIClient.GetConfig(), logger)
+}
+
+// createInitializationFailure creates a failure result for initialization errors
+func createInitializationFailure(target *parser.Target, err error, startTime time.Time, targetNum int, uiProgram *ui.Program) *parser.GenerationResult {
+	logger := log.Default()
+	logger.Error("Failed to create AI client", "error", err.Error())
+	uiProgram.Fail(targetNum)
+	return &parser.GenerationResult{
+		Target:  target,
+		Success: false,
+		FailureReason: &parser.FailureReason{
+			Phase:   "initialization",
+			Message: "Failed to create AI client: " + err.Error(),
+			Context: "Client configuration error",
+		},
+		Duration: time.Since(startTime),
+	}
+}
+
+// createPhaseFailure creates a failure result for phase errors
+func createPhaseFailure(target *parser.Target, failureReason *parser.FailureReason, startTime time.Time, targetNum int, uiProgram *ui.Program) *parser.GenerationResult {
+	uiProgram.Fail(targetNum)
+	return &parser.GenerationResult{
+		Target:        target,
+		Success:       false,
+		FailureReason: failureReason,
+		Duration:      time.Since(startTime),
+	}
+}
+
+// executeContextGatheringPhase executes the context gathering phase
+func executeContextGatheringPhase(ctx context.Context, target *parser.Target, fileContent string, aiClient *ai.Client, logger log.Logger, targetNum int, uiProgram *ui.Program) (map[string]interface{}, *parser.FailureReason) {
+	logger.Info("Starting generation")
+	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Starting")
+
+	// Setup phase
+	logger.Info("Analyzing codebase context...")
+	packagePath := filepath.Dir(target.FilePath)
+	contextPhase := phase.NewContextGatheringPhase(0.6, packagePath, logger)
+	contextPhase.Reset() // Ensure clean state
+	configureAIClientForPhase(aiClient, contextPhase, logger, nil)
+
+	// Build prompt
+	contextPromptBuilder := contextPhase.GetPromptBuilder()
+	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
+	if err != nil {
+		logger.Error("Failed to build prompt", "error", err.Error())
+		return nil, &parser.FailureReason{
+			Phase:   "context_gathering",
+			Message: "Failed to build context gathering prompt: " + err.Error(),
+			Context: "Prompt construction error",
+		}
+	}
+
+	// Execute
+	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Analyzing codebase")
+	_, err = aiClient.Generate(ctx, initialPrompt)
+	if err != nil {
+		logger.Error("Context gathering failed", "error", err.Error())
+		return nil, &parser.FailureReason{
+			Phase:   "context_gathering",
+			Message: "AI context gathering failed: " + err.Error(),
+			Context: "May be due to insufficient codebase information or AI service issues",
+		}
+	}
+
+	// Process result
+	return processPhaseResult(contextPhase, "context_gathering", logger)
+}
+
+// executeImplementationPhase executes the implementation phase
+func executeImplementationPhase(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, aiClient *ai.Client, projectRoot string, contextResult map[string]interface{}, logger log.Logger, targetNum int, uiProgram *ui.Program) (string, *parser.FailureReason) {
+	logger.Info("Generating implementation...")
+	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
+
+	// Setup phase
+	implPhase := phase.NewImplementationPhase(0.2, projectRoot, logger)
+	implPhase.Reset() // Ensure clean state
+
+	// Create tool context for static analysis
+	toolContext := tools.NewContext(fileInfo, target, projectRoot)
+	configureAIClientForPhase(aiClient, implPhase, logger, toolContext)
+
+	// Build prompt with context
+	contextResultMarkdown := formatContextResultAsMarkdown(contextResult)
+	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResultMarkdown)
+	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
+	if err != nil {
+		logger.Error("Failed to build implementation prompt", "error", err.Error())
+		return "", &parser.FailureReason{
+			Phase:   "implementation",
+			Message: "Failed to build implementation prompt: " + err.Error(),
+			Context: "Error occurred while incorporating context from phase 1",
+		}
+	}
+
+	// Execute
+	uiProgram.UpdatePhase(targetNum, "Implementation", "Generating code")
+	_, err = aiClient.Generate(ctx, implPrompt)
+	if err != nil {
+		logger.Error("Implementation failed", "error", err.Error())
+		return "", &parser.FailureReason{
+			Phase:   "implementation",
+			Message: "AI implementation generation failed: " + err.Error(),
+			Context: "May be due to complex requirements or AI service issues",
+		}
+	}
+
+	// Process result
+	result, failureReason := processPhaseResult(implPhase, "implementation", logger)
+	if failureReason != nil {
+		return "", failureReason
+	}
+
+	// Extract implementation code
+	if result != nil {
+		if code, hasCode := result["code"].(string); hasCode {
+			return code, nil
+		}
+		return "", &parser.FailureReason{
+			Phase:   "implementation",
+			Message: "Missing code field in successful result",
+			Context: "The result() tool was called with success=true but no code was provided",
+		}
+	}
+
+	return "", &parser.FailureReason{
+		Phase:   "implementation",
+		Message: "No result from implementation phase",
+		Context: "Unexpected state",
+	}
+}
+
+// processPhaseResult processes the result from a phase
+func processPhaseResult(p phase.Phase, phaseName string, logger log.Logger) (map[string]interface{}, *parser.FailureReason) {
+	phaseResult, completed := p.GetResult()
+	if !completed {
+		logger.Warn(fmt.Sprintf("%s phase did not complete with result tool", phaseName))
+		return nil, &parser.FailureReason{
+			Phase:   phaseName,
+			Message: "Phase did not complete properly",
+			Context: "The result() tool was not called",
+		}
+	}
+
+	resultMap, ok := phaseResult.(map[string]interface{})
+	if !ok {
+		logger.Error(fmt.Sprintf("Unexpected result type from %s phase", phaseName), "type", fmt.Sprintf("%T", phaseResult))
+		return nil, &parser.FailureReason{
+			Phase:   phaseName,
+			Message: fmt.Sprintf("Invalid result type from %s phase", phaseName),
+			Context: fmt.Sprintf("Expected map, got %T", phaseResult),
+		}
+	}
+
+	// Check for success/error structure
+	if success, hasSuccess := resultMap["success"].(bool); hasSuccess {
+		if !success {
+			// Extract error information
+			if errorField, hasError := resultMap["error"].(map[string]interface{}); hasError {
+				message := ""
+				details := ""
+				if msg, ok := errorField["message"].(string); ok {
+					message = msg
+				}
+				if det, ok := errorField["details"].(string); ok {
+					details = det
+				}
+				return nil, &parser.FailureReason{
+					Phase:   phaseName,
+					Message: message,
+					Context: details,
+				}
+			}
+			return nil, &parser.FailureReason{
+				Phase:   phaseName,
+				Message: "Phase failed without error details",
+				Context: "success=false but no error information",
+			}
+		}
+		// Success - log and return
+		if resultJSON, err := json.Marshal(resultMap); err == nil {
+			logger.Debug(fmt.Sprintf("%s result", phaseName), "length", len(resultJSON))
+			logger.Trace(fmt.Sprintf("%s output", phaseName), "content", string(resultJSON))
+		}
+		return resultMap, nil
+	}
+
+	return nil, &parser.FailureReason{
+		Phase:   phaseName,
+		Message: "Invalid result structure",
+		Context: "The result() tool response is missing the success field",
 	}
 }
