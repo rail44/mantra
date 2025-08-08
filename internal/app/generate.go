@@ -13,7 +13,8 @@ import (
 	"github.com/rail44/mantra/internal/ai"
 	"github.com/rail44/mantra/internal/config"
 	"github.com/rail44/mantra/internal/detector"
-	"github.com/rail44/mantra/internal/generator"
+	"github.com/rail44/mantra/internal/coder"
+	"github.com/rail44/mantra/internal/codegen"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 )
@@ -141,7 +142,7 @@ func (a *GenerateApp) detectTargets(pkgDir, destDir string) ([]*detector.FileDet
 }
 
 // setupAIClient initializes AI client, tools, and related components
-func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *generator.Generator, error) {
+func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Client, *codegen.Generator, error) {
 	// Initialize AI client configuration
 	clientConfig := &ai.ClientConfig{
 		URL:     cfg.URL,
@@ -167,7 +168,7 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Clie
 
 	// Don't create tools here - they will be created per phase
 
-	gen := generator.New(&generator.Config{
+	gen := codegen.New(&codegen.Config{
 		Dest:          cfg.Dest,
 		PackageName:   cfg.GetPackageName(),
 		SourcePackage: filepath.Base(pkgDir),
@@ -177,7 +178,7 @@ func (a *GenerateApp) setupAIClient(cfg *config.Config, pkgDir string) (*ai.Clie
 }
 
 // processAllTargets processes all files, generating implementations for targets and copying files without targets
-func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *generator.Generator, cfg *config.Config) error {
+func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector.FileDetectionResult, aiClient *ai.Client, gen *codegen.Generator, cfg *config.Config) error {
 	// Collect targets and copy files without targets
 	targets := a.collectTargets(results, gen)
 
@@ -187,8 +188,8 @@ func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector
 	}
 
 	// Create and execute target executor
-	executor := generator.NewTargetExecutor(aiClient, cfg)
-	allResults, err := executor.ExecuteTargetsInParallel(ctx, targets)
+	parallelCoder := coder.NewParallelCoder(aiClient, cfg)
+	allResults, err := parallelCoder.ExecuteTargets(ctx, targets)
 	if err != nil {
 		return fmt.Errorf("failed to generate implementations: %w", err)
 	}
@@ -198,8 +199,8 @@ func (a *GenerateApp) processAllTargets(ctx context.Context, results []*detector
 }
 
 // collectTargets collects targets that need generation and copies files without targets
-func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, gen *generator.Generator) []generator.TargetContext {
-	var targets []generator.TargetContext
+func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, gen *codegen.Generator) []coder.TargetContext {
+	var targets []coder.TargetContext
 
 	for _, result := range results {
 		fileInfo := result.FileInfo
@@ -223,7 +224,7 @@ func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, ge
 		// Collect targets that need generation
 		for _, status := range result.Statuses {
 			if status.Status != detector.StatusCurrent {
-				targets = append(targets, generator.TargetContext{
+				targets = append(targets, coder.TargetContext{
 					Target:      status.Target,
 					FileContent: string(content),
 					FileInfo:    result.FileInfo,
@@ -236,7 +237,7 @@ func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, ge
 }
 
 // copyFileWithoutTargets copies a file that has no mantra targets
-func (a *GenerateApp) copyFileWithoutTargets(fileInfo *parser.FileInfo, gen *generator.Generator) {
+func (a *GenerateApp) copyFileWithoutTargets(fileInfo *parser.FileInfo, gen *codegen.Generator) {
 	if err := gen.GenerateFile(fileInfo, []*parser.GenerationResult{}); err != nil {
 		a.logger.Error("failed to copy file without mantra targets",
 			slog.String("file", fileInfo.FilePath),
@@ -247,7 +248,7 @@ func (a *GenerateApp) copyFileWithoutTargets(fileInfo *parser.FileInfo, gen *gen
 }
 
 // writeGeneratedFiles writes all generated files with their results
-func (a *GenerateApp) writeGeneratedFiles(results []*detector.FileDetectionResult, allResults []*parser.GenerationResult, gen *generator.Generator) error {
+func (a *GenerateApp) writeGeneratedFiles(results []*detector.FileDetectionResult, allResults []*parser.GenerationResult, gen *codegen.Generator) error {
 	// Group results by file
 	fileResults := a.groupResultsByFile(allResults)
 
