@@ -65,10 +65,13 @@ mantra generate .
 
 mantra uses a two-phase approach:
 
-1. **Context Gathering**: AI explores your codebase to understand types and patterns
-2. **Implementation**: Generates code using the gathered context
+1. **Context Gathering** (Temperature 0.6): AI explores your codebase to understand types and patterns
+2. **Implementation** (Temperature 0.2): Generates precise code using the gathered context
 
-Generated code is saved to a separate directory, keeping your source files unchanged.
+Generated code is saved to a separate directory, keeping your source files unchanged. Files are only regenerated when:
+- New functions with `// mantra:` comments are added
+- Existing function signatures or instructions change
+- Implementation files are missing
 
 ## Configuration
 
@@ -91,6 +94,9 @@ api_key = "${OPENAI_API_KEY}"
 
 # Log level: error, warn, info, debug, trace
 log_level = "info"
+
+# Show detailed logs for all targets (can also use -v flag)
+# verbose = true
 ```
 
 ### Provider Examples
@@ -133,10 +139,14 @@ providers = ["Cerebras"]  # Optional: route to specific providers
 ## Usage
 
 ```bash
-mantra generate [package-dir]
+mantra generate [package-dir] [flags]
 ```
 
 Generates implementations for all functions with `// mantra:` comments.
+
+**Flags:**
+- `-v, --verbose`: Show detailed logs for all targets
+- `--log-level string`: Override log level (error, warn, info, debug, trace)
 
 ```bash
 # Current directory
@@ -183,7 +193,7 @@ func (s *UserService) GetAllUsers(ctx context.Context) ([]*User, error) {
 
 ## Logging and Debugging
 
-Use different log levels to see what's happening:
+Set the log level in your `mantra.toml` or use command-line flags:
 
 ```bash
 # See detailed progress
@@ -191,7 +201,12 @@ mantra generate . --log-level debug
 
 # See tool execution details
 mantra generate . --log-level trace
+
+# Show detailed logs for all targets
+mantra generate . -v
 ```
+
+**Note:** Command-line flags take precedence over config file settings.
 
 ## Best Practices
 

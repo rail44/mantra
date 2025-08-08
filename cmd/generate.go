@@ -14,7 +14,10 @@ import (
 	"github.com/rail44/mantra/internal/log"
 )
 
-var verbose bool
+var (
+	verbose  bool
+	logLevel string
+)
 
 var generateCmd = &cobra.Command{
 	Use:   "generate [package-dir]",
@@ -64,20 +67,26 @@ their implementations based on the natural language instructions provided.`,
 
 func init() {
 	generateCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed logs for all targets")
+	generateCmd.Flags().StringVar(&logLevel, "log-level", "", "Override log level (error, warn, info, debug, trace)")
 	rootCmd.AddCommand(generateCmd)
 }
 
 func setupLogging(cfg *config.Config) {
-	logLevel := cfg.LogLevel
-	if logLevel == "" {
-		logLevel = "info"
+	// Command line flag takes precedence over config file
+	level := logLevel
+	if level == "" {
+		level = cfg.LogLevel
 	}
-	level, err := log.ParseLevel(logLevel)
+	if level == "" {
+		level = "info"
+	}
+
+	parsedLevel, err := log.ParseLevel(level)
 	if err != nil {
-		log.Error("invalid log level", slog.String("level", logLevel))
+		log.Error("invalid log level", slog.String("level", level))
 		os.Exit(1)
 	}
-	if err := log.SetLevel(level); err != nil {
+	if err := log.SetLevel(parsedLevel); err != nil {
 		log.Error("failed to set log level", slog.String("error", err.Error()))
 		os.Exit(1)
 	}

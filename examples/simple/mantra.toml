@@ -13,9 +13,6 @@ api_key = "${OPENROUTER_API_KEY}"
 # Debug logging to see generation details
 log_level = "trace"
 
-# Enable structured JSON output for compatible models
-structured_output = true
-
 # OpenRouter-specific configuration
 [openrouter]
 providers = ["mistral"]
