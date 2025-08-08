@@ -92,29 +92,43 @@ func (p *ImplementationPhase) GetSystemPrompt() string {
 5. Only return code that passes validation
 
 ## Output Format
-After successful validation, call the result() tool with your final code:
-1. The result() tool takes one parameter: "code" (string)
-2. Pass ONLY the implementation code that goes INSIDE the function body
-   - Do NOT include the function signature (func name(...) ...)
-   - Do NOT include type definitions or constants
-   - Do NOT include the opening and closing braces of the function
-   - Do NOT wrap in markdown code blocks
-   - Just the pure Go statements that replace <IMPLEMENT_HERE>
-3. This will complete the implementation phase
+After validation, call the result() tool with JSON containing:
 
-## Error Handling
-If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
+### For successful implementation:
+{
+  "success": true,
+  "code": "// Your implementation code here\n// Multiple lines of Go code\n// That goes INSIDE the function body"
+}
 
-Include in the reason:
-- What you were looking for
-- Where you searched
-- What you found instead (if relevant)
-- What information is needed to proceed
+Important for the code field:
+- Pass ONLY the implementation code that goes INSIDE the function body
+- Do NOT include the function signature (func name(...) ...)
+- Do NOT include type definitions or constants
+- Do NOT include the opening and closing braces of the function
+- Do NOT wrap in markdown code blocks
+- Just the pure Go statements that replace <IMPLEMENT_HERE>
 
-Examples:
-  - GENERATION_FAILED: Method 'GetUserByID' not found on 'UserService' - found 'GetUser' and 'GetUserByEmail' instead
-  - GENERATION_FAILED: Return type 'ValidationResult' not defined - need import path or type definition
-  - GENERATION_FAILED: Instruction requires 'cache TTL' but no duration specified and no default found in codebase`
+### For failures:
+{
+  "success": false,
+  "error": {
+    "message": "Brief description of what prevented implementation",
+    "details": "Specific missing items, what was found instead, what's needed to proceed"
+  }
+}
+
+## Example Error Cases
+- Missing method: "Method 'GetUserByID' not found on 'UserService'"
+  Details: "Found 'GetUser' and 'GetUserByEmail' instead. Need the exact method signature."
+- Missing type: "Return type 'ValidationResult' not defined"
+  Details: "Need import path or type definition for ValidationResult"
+- Unclear requirements: "Instruction requires 'cache TTL' but not specified"
+  Details: "No duration specified in instruction and no default found in codebase"
+
+## Important
+- ALWAYS call the result() tool to complete the phase
+- Use success: false when you cannot generate valid implementation
+- Provide specific, actionable error messages`
 }
 
 // GetPromptBuilder returns a prompt builder configured for implementation

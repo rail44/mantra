@@ -681,21 +681,64 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Get result from the phase
 	var contextResult string
+	var contextError *parser.FailureReason
 	if phaseResult, completed := contextPhase.GetResult(); completed {
-		// Convert result to JSON string for backward compatibility
-		if resultData, err := json.Marshal(phaseResult); err == nil {
-			contextResult = string(resultData)
-		} else {
-			logger.Error("Failed to marshal context result", "error", err.Error())
-			contextResult = "{}"
+		// Check if it's an error result
+		if resultMap, ok := phaseResult.(map[string]interface{}); ok {
+			if success, hasSuccess := resultMap["success"].(bool); hasSuccess && !success {
+				// Extract error information
+				if errorField, hasError := resultMap["error"].(map[string]interface{}); hasError {
+					message := ""
+					details := ""
+					if msg, ok := errorField["message"].(string); ok {
+						message = msg
+					}
+					if det, ok := errorField["details"].(string); ok {
+						details = det
+					}
+					contextError = &parser.FailureReason{
+						Phase:   "context_gathering",
+						Message: message,
+						Context: details,
+					}
+				}
+			} else if success {
+				// Convert successful result to JSON string for backward compatibility
+				if resultData, err := json.Marshal(phaseResult); err == nil {
+					contextResult = string(resultData)
+				} else {
+					logger.Error("Failed to marshal context result", "error", err.Error())
+					contextResult = "{}"
+				}
+			}
 		}
 	} else {
 		// Fallback: no result from phase (shouldn't happen with result tool)
 		logger.Warn("Context gathering phase did not complete with result tool")
-		contextResult = "{}"
+		contextError = &parser.FailureReason{
+			Phase:   "context_gathering",
+			Message: "Phase did not complete properly",
+			Context: "The result() tool was not called",
+		}
 	}
 
-	// Parse context gathering response for failure indications
+	// Check if we have an error from the result tool
+	if contextError != nil {
+		logger.Error("Context gathering failed",
+			"phase", contextError.Phase,
+			"message", contextError.Message,
+			"context", contextError.Context,
+			"target", target.Name)
+		uiProgram.Fail(targetNum)
+		return &parser.GenerationResult{
+			Target:        target,
+			Success:       false,
+			FailureReason: contextError,
+			Duration:      time.Since(targetStart),
+		}
+	}
+
+	// Parse context gathering response for failure indications (legacy GENERATION_FAILED handling)
 	parsedContext, contextFailure := parseAIResponse(contextResult, "context_gathering")
 	if contextFailure != nil {
 		logger.Error("Context gathering indicated failure",
@@ -765,41 +808,82 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 
 	// Get result from the phase
 	var implementation string
+	var implError *parser.FailureReason
 	if phaseResult, completed := implPhase.GetResult(); completed {
-		// The result should be the code string directly (from Transform in ImplementationResultSchema)
-		if codeStr, ok := phaseResult.(string); ok {
-			implementation = codeStr
+		// Check if it's a map with success/error structure
+		if resultMap, ok := phaseResult.(map[string]interface{}); ok {
+			if success, hasSuccess := resultMap["success"].(bool); hasSuccess {
+				if !success {
+					// Extract error information
+					if errorField, hasError := resultMap["error"].(map[string]interface{}); hasError {
+						message := ""
+						details := ""
+						if msg, ok := errorField["message"].(string); ok {
+							message = msg
+						}
+						if det, ok := errorField["details"].(string); ok {
+							details = det
+						}
+						implError = &parser.FailureReason{
+							Phase:   "implementation",
+							Message: message,
+							Context: details,
+						}
+					}
+				} else {
+					// Extract the code for successful result
+					if code, hasCode := resultMap["code"].(string); hasCode {
+						implementation = code
+					} else {
+						implError = &parser.FailureReason{
+							Phase:   "implementation",
+							Message: "Missing code field in successful result",
+							Context: "The result() tool was called with success=true but no code was provided",
+						}
+					}
+				}
+			} else {
+				implError = &parser.FailureReason{
+					Phase:   "implementation",
+					Message: "Invalid result structure",
+					Context: "The result() tool response is missing the success field",
+				}
+			}
 		} else {
 			logger.Error("Unexpected result type from implementation phase", "type", fmt.Sprintf("%T", phaseResult))
-			uiProgram.Fail(targetNum)
-			return &parser.GenerationResult{
-				Target:  target,
-				Success: false,
-				FailureReason: &parser.FailureReason{
-					Phase:   "implementation",
-					Message: "Invalid result type from implementation phase",
-					Context: fmt.Sprintf("Expected string, got %T", phaseResult),
-				},
-				Duration: time.Since(targetStart),
+			implError = &parser.FailureReason{
+				Phase:   "implementation",
+				Message: "Invalid result type from implementation phase",
+				Context: fmt.Sprintf("Expected map, got %T", phaseResult),
 			}
 		}
 	} else {
 		// Fallback: no result from phase (shouldn't happen with result tool)
 		logger.Error("Implementation phase did not complete with result tool")
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:  target,
-			Success: false,
-			FailureReason: &parser.FailureReason{
-				Phase:   "implementation",
-				Message: "Implementation phase did not complete properly",
-				Context: "The result() tool was not called",
-			},
-			Duration: time.Since(targetStart),
+		implError = &parser.FailureReason{
+			Phase:   "implementation",
+			Message: "Implementation phase did not complete properly",
+			Context: "The result() tool was not called",
 		}
 	}
 
-	// Parse implementation response for failure indications
+	// Check if we have an error from the result tool
+	if implError != nil {
+		logger.Error("Implementation failed",
+			"phase", implError.Phase,
+			"message", implError.Message,
+			"context", implError.Context,
+			"target", target.Name)
+		uiProgram.Fail(targetNum)
+		return &parser.GenerationResult{
+			Target:        target,
+			Success:       false,
+			FailureReason: implError,
+			Duration:      time.Since(targetStart),
+		}
+	}
+
+	// Parse implementation response for failure indications (legacy GENERATION_FAILED handling)
 	parsedImplementation, implementationFailure := parseAIResponse(implementation, "implementation")
 	if implementationFailure != nil {
 		logger.Error("Implementation indicated failure",

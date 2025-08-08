@@ -77,25 +77,38 @@ func (p *ContextGatheringPhase) GetSystemPrompt() string {
 
 ## Available Tools
 - inspect(name): Get details of types, package, function and variable from current scope
+- result(): Submit the final result and complete this phase
 
 ## Process
 1. Gather additional context using the tools
 	- Use inspect() to get details of unclear identifier
 	- Prevent to use inspect() on standard library unless necessary
-2. When you have enough context to implement the function, call the result() tool
-3. The result() tool should be called with structured data containing:
-	- types: Array of type definitions found
-	- functions: Array of function signatures/implementations found
-	- constants: Array of constant/variable definitions found
+2. When you have enough context or cannot proceed, call the result() tool
 
+## Result Tool Usage
+Call result() with JSON containing:
 
-## Error Handling
-If generation cannot proceed, respond with: GENERATION_FAILED: [reason]
+### For successful gathering:
+{
+  "success": true,
+  "types": [...],      // Array of type definitions found
+  "functions": [...],  // Array of function signatures/implementations found
+  "constants": [...]   // Array of constant/variable definitions found
+}
 
-Include in the reason:
-- What you were looking for
-- What you found instead (if relevant)
-- What information is needed to proceed`
+### For failures:
+{
+  "success": false,
+  "error": {
+    "message": "Brief description of what went wrong",
+    "details": "What you were looking for, what you found instead, what's needed to proceed"
+  }
+}
+
+## Important
+- ALWAYS call the result() tool to complete the phase
+- Use success: false when you cannot gather enough context
+- Provide clear error messages to help diagnose issues`
 }
 
 // GetPromptBuilder returns a prompt builder configured for context gathering

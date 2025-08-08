@@ -25,6 +25,10 @@ func (s *ContextGatheringResultSchema) GetSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
+			"success": {
+				"type": "boolean",
+				"description": "Whether the context gathering was successful"
+			},
 			"types": {
 				"type": "array",
 				"items": {
@@ -66,8 +70,24 @@ func (s *ContextGatheringResultSchema) GetSchema() json.RawMessage {
 					"required": ["name"],
 					"additionalProperties": false
 				}
+			},
+			"error": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "Error message explaining what went wrong"
+					},
+					"details": {
+						"type": "string",
+						"description": "Additional details about the error"
+					}
+				},
+				"required": ["message"],
+				"additionalProperties": false
 			}
 		},
+		"required": ["success"],
 		"additionalProperties": false
 	}`)
 }
@@ -80,13 +100,43 @@ func (s *ContextGatheringResultSchema) Validate(data interface{}) error {
 		return fmt.Errorf("expected object, got %T", data)
 	}
 
-	// Check for at least one of types, functions, or constants
+	// Check for required "success" field
+	success, ok := dataMap["success"]
+	if !ok {
+		return fmt.Errorf("missing required field: success")
+	}
+
+	successBool, ok := success.(bool)
+	if !ok {
+		return fmt.Errorf("success must be a boolean, got %T", success)
+	}
+
+	// If failed, check for error field
+	if !successBool {
+		errorField, ok := dataMap["error"]
+		if !ok {
+			return fmt.Errorf("error field is required when success is false")
+		}
+
+		errorMap, ok := errorField.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("error must be an object, got %T", errorField)
+		}
+
+		if _, ok := errorMap["message"].(string); !ok {
+			return fmt.Errorf("error.message must be a string")
+		}
+
+		return nil // Valid error response
+	}
+
+	// For successful results, check for at least one of types, functions, or constants
 	hasTypes := dataMap["types"] != nil
 	hasFunctions := dataMap["functions"] != nil
 	hasConstants := dataMap["constants"] != nil
 
 	if !hasTypes && !hasFunctions && !hasConstants {
-		return fmt.Errorf("result must contain at least one of: types, functions, or constants")
+		return fmt.Errorf("successful result must contain at least one of: types, functions, or constants")
 	}
 
 	// Validate types array if present
@@ -139,8 +189,8 @@ func (s *ContextGatheringResultSchema) Validate(data interface{}) error {
 
 // Transform converts the raw data into ContextGatheringResult
 func (s *ContextGatheringResultSchema) Transform(data interface{}) (interface{}, error) {
-	// For now, just return the validated data as-is
-	// In the future, we could transform this into a strongly-typed struct
+	// Return the entire map to preserve success/error information
+	// The cmd/generate.go will handle the structure appropriately
 	return data, nil
 }
 
@@ -152,12 +202,31 @@ func (s *ImplementationResultSchema) GetSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
+			"success": {
+				"type": "boolean",
+				"description": "Whether the implementation generation was successful"
+			},
 			"code": {
 				"type": "string",
 				"description": "The generated Go code implementation"
+			},
+			"error": {
+				"type": "object",
+				"properties": {
+					"message": {
+						"type": "string",
+						"description": "Error message explaining what went wrong"
+					},
+					"details": {
+						"type": "string",
+						"description": "Additional details about what was missing or failed"
+					}
+				},
+				"required": ["message"],
+				"additionalProperties": false
 			}
 		},
-		"required": ["code"],
+		"required": ["success"],
 		"additionalProperties": false
 	}`)
 }
@@ -170,10 +239,40 @@ func (s *ImplementationResultSchema) Validate(data interface{}) error {
 		return fmt.Errorf("expected object, got %T", data)
 	}
 
-	// Check for required "code" field
+	// Check for required "success" field
+	success, ok := dataMap["success"]
+	if !ok {
+		return fmt.Errorf("missing required field: success")
+	}
+
+	successBool, ok := success.(bool)
+	if !ok {
+		return fmt.Errorf("success must be a boolean, got %T", success)
+	}
+
+	// If failed, check for error field
+	if !successBool {
+		errorField, ok := dataMap["error"]
+		if !ok {
+			return fmt.Errorf("error field is required when success is false")
+		}
+
+		errorMap, ok := errorField.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("error must be an object, got %T", errorField)
+		}
+
+		if _, ok := errorMap["message"].(string); !ok {
+			return fmt.Errorf("error.message must be a string")
+		}
+
+		return nil // Valid error response
+	}
+
+	// For successful results, check for required "code" field
 	code, ok := dataMap["code"]
 	if !ok {
-		return fmt.Errorf("missing required field: code")
+		return fmt.Errorf("missing required field: code when success is true")
 	}
 
 	// Validate that code is a string
@@ -191,7 +290,9 @@ func (s *ImplementationResultSchema) Validate(data interface{}) error {
 
 // Transform converts the raw data into ImplementationResult
 func (s *ImplementationResultSchema) Transform(data interface{}) (interface{}, error) {
-	// Extract the code string
 	dataMap := data.(map[string]interface{})
-	return dataMap["code"], nil
+
+	// Return the entire map to preserve success/error information
+	// The cmd/generate.go will handle the structure appropriately
+	return dataMap, nil
 }

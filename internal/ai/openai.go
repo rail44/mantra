@@ -237,6 +237,9 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	// Maximum rounds of tool calls to prevent infinite loops
 	const maxRounds = 30
 
+	// Track if result tool has been called
+	resultToolCalled := false
+
 	for round := 0; round < maxRounds; round++ {
 		if round > 0 {
 			c.logger.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
@@ -298,7 +301,26 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 		// Check if we have tool calls
 		if len(responseMsg.ToolCalls) == 0 {
-			// No tool calls, return the content
+			// Check if there's a result tool available but not used
+			hasResultTool := false
+			for _, tool := range tools {
+				if tool.Function.Name == "result" {
+					hasResultTool = true
+					break
+				}
+			}
+
+			// If result tool exists but wasn't called yet, prompt the AI to use it
+			if hasResultTool && !resultToolCalled && round < maxRounds-1 { // Leave one round for the final attempt
+				c.logger.Debug("No tool calls made but result tool is available, prompting to use it")
+				messages = append(messages, OpenAIMessage{
+					Role:    "user",
+					Content: "Please complete the task by calling the result() tool with the appropriate data. The result() tool is required to finalize this phase.",
+				})
+				continue // Go to next round
+			}
+
+			// No tool calls and no result tool, or result already called, or max rounds reached
 			totalTime := time.Since(overallStart)
 			c.logger.Debug("tool usage completed", "rounds", round+1)
 			c.logger.Debug(fmt.Sprintf("[PERF] Total: %s (API=%.1f%%, tools=%.1f%%, %d tool calls)",
@@ -320,11 +342,20 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		// Execute tool calls in parallel
 		toolResults, hasTerminal := c.executeToolsParallel(ctx, responseMsg.ToolCalls, executor, &toolExecutionTime, &toolCallCount)
 
+		// Check if result tool was called in this batch
+		for _, toolCall := range responseMsg.ToolCalls {
+			if toolCall.Function.Name == "result" {
+				resultToolCalled = true
+				break
+			}
+		}
+
 		// Add all tool responses to messages
 		messages = append(messages, toolResults...)
 
 		// Check if any tool was terminal
 		if hasTerminal {
+			resultToolCalled = true
 			c.logger.Debug("Terminal tool executed, ending generation")
 			totalTime := time.Since(overallStart)
 			c.logger.Debug(fmt.Sprintf("[PERF] Total: %s (API=%.1f%%, tools=%.1f%%, %d tool calls)",

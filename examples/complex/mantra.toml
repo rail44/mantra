@@ -1,8 +1,5 @@
-# mantra Configuration for Complex Examples
-# This example uses OpenRouter with Claude-3 Sonnet
-
 # Model configuration
-model = "openai/gpt-oss-20b"
+model = "mistralai/devstral-small"
 
 # OpenRouter API endpoint
 url = "https://openrouter.ai/api/v1"
@@ -16,6 +13,9 @@ api_key = "${OPENROUTER_API_KEY}"
 # Debug logging to see generation details
 log_level = "trace"
 
+# Enable structured JSON output for compatible models
+structured_output = true
+
 # OpenRouter-specific configuration
 [openrouter]
-providers = ["fireworks"]
+providers = ["mistral"]
