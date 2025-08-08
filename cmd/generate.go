@@ -509,102 +509,79 @@ func generateAllTargetsInParallel(ctx context.Context, targets []targetWithConte
 	return allResults, nil
 }
 
-// parseAIResponse parses AI response and detects if it contains a failure indication
-func parseAIResponse(response, phase string) (implementation string, failure *parser.FailureReason) {
-	// Try to parse as JSON first
-	trimmed := strings.TrimSpace(response)
-	if strings.HasPrefix(trimmed, "{") {
-		// Appears to be JSON response from structured output
-		switch phase {
-		case "context_gathering":
-			var result struct {
-				Imports   []interface{} `json:"imports"`
-				Types     []interface{} `json:"types"`
-				Functions []interface{} `json:"functions"`
-				Summary   string        `json:"summary"`
-			}
-			if err := json.Unmarshal([]byte(trimmed), &result); err == nil {
-				// Format the JSON result back into the expected markdown format
-				var formatted strings.Builder
+// formatContextResultAsMarkdown converts the context gathering result from JSON to readable Markdown
+func formatContextResultAsMarkdown(contextResult map[string]interface{}) string {
+	if contextResult == nil {
+		return ""
+	}
 
-				if len(result.Types) > 0 {
-					formatted.WriteString("### Types\n\n")
-					for _, t := range result.Types {
-						if typeMap, ok := t.(map[string]interface{}); ok {
-							if name, ok := typeMap["name"].(string); ok {
-								formatted.WriteString(fmt.Sprintf("#### %s\n\n", name))
-								if def, ok := typeMap["definition"].(string); ok {
-									formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", def))
-								}
-							}
+	var formatted strings.Builder
+
+	// Format types section
+	if types, ok := contextResult["types"].([]interface{}); ok && len(types) > 0 {
+		formatted.WriteString("### Discovered Types\n\n")
+		for _, t := range types {
+			if typeMap, ok := t.(map[string]interface{}); ok {
+				if name, ok := typeMap["name"].(string); ok {
+					formatted.WriteString(fmt.Sprintf("#### %s\n", name))
+				}
+				if definition, ok := typeMap["definition"].(string); ok {
+					formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n", definition))
+				}
+				if methods, ok := typeMap["methods"].([]interface{}); ok && len(methods) > 0 {
+					formatted.WriteString("**Methods:**\n")
+					for _, method := range methods {
+						if methodStr, ok := method.(string); ok {
+							formatted.WriteString(fmt.Sprintf("- %s\n", methodStr))
 						}
 					}
 				}
+				formatted.WriteString("\n")
+			}
+		}
+	}
 
-				if len(result.Functions) > 0 {
-					formatted.WriteString("### Functions\n\n")
-					for _, f := range result.Functions {
-						if funcMap, ok := f.(map[string]interface{}); ok {
-							if name, ok := funcMap["name"].(string); ok {
-								formatted.WriteString(fmt.Sprintf("#### %s\n\n", name))
-								if sig, ok := funcMap["signature"].(string); ok {
-									formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n\n", sig))
-								}
-							}
-						}
-					}
+	// Format functions section
+	if functions, ok := contextResult["functions"].([]interface{}); ok && len(functions) > 0 {
+		formatted.WriteString("### Discovered Functions\n\n")
+		for _, f := range functions {
+			if funcMap, ok := f.(map[string]interface{}); ok {
+				if name, ok := funcMap["name"].(string); ok {
+					formatted.WriteString(fmt.Sprintf("#### %s\n", name))
 				}
-
-				return formatted.String(), nil
-			}
-
-		case "implementation":
-			var result struct {
-				Code        string   `json:"code"`
-				Explanation string   `json:"explanation"`
-				Assumptions []string `json:"assumptions"`
-			}
-			if err := json.Unmarshal([]byte(trimmed), &result); err == nil {
-				if result.Code == "" {
-					return "", &parser.FailureReason{
-						Phase:   phase,
-						Message: "No code generated",
-						Context: result.Explanation,
-					}
+				if signature, ok := funcMap["signature"].(string); ok {
+					formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n", signature))
 				}
-				return result.Code, nil
+				if implementation, ok := funcMap["implementation"].(string); ok && implementation != "" {
+					formatted.WriteString("**Implementation:**\n")
+					formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n", implementation))
+				}
+				formatted.WriteString("\n")
 			}
 		}
 	}
 
-	// Fall back to original text-based parsing
-	// Check for explicit failure indication
-	if strings.HasPrefix(trimmed, "GENERATION_FAILED:") {
-		// Extract failure message
-		message := strings.TrimPrefix(trimmed, "GENERATION_FAILED:")
-		message = strings.TrimSpace(message)
-
-		return "", &parser.FailureReason{
-			Phase:   phase,
-			Message: message,
-			Context: "AI explicitly indicated generation cannot be completed",
+	// Format constants section
+	if constants, ok := contextResult["constants"].([]interface{}); ok && len(constants) > 0 {
+		formatted.WriteString("### Discovered Constants/Variables\n\n")
+		for _, c := range constants {
+			if constMap, ok := c.(map[string]interface{}); ok {
+				if name, ok := constMap["name"].(string); ok {
+					formatted.WriteString(fmt.Sprintf("- **%s**", name))
+					if typeStr, ok := constMap["type"].(string); ok && typeStr != "" {
+						formatted.WriteString(fmt.Sprintf(" (`%s`)", typeStr))
+					}
+					if value, ok := constMap["value"].(string); ok && value != "" {
+						formatted.WriteString(fmt.Sprintf(" = `%s`", value))
+					}
+					formatted.WriteString("\n")
+				}
+			}
 		}
+		formatted.WriteString("\n")
 	}
 
-	// Check for common failure patterns in responses
-	lower := strings.ToLower(response)
-	if strings.Contains(lower, "cannot implement") ||
-		strings.Contains(lower, "unable to implement") ||
-		strings.Contains(lower, "insufficient information") ||
-		strings.Contains(lower, "not enough context") {
-		return "", &parser.FailureReason{
-			Phase:   phase,
-			Message: "AI indicated implementation difficulties: " + response,
-			Context: "AI response suggests implementation issues",
-		}
-	}
-
-	return response, nil
+	return formatted.String()
 }
 
 // generateImplementationForTargetWithUI generates implementation with TUI logger
@@ -680,7 +657,7 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	}
 
 	// Get result from the phase
-	var contextResult string
+	var contextResult map[string]interface{}
 	var contextError *parser.FailureReason
 	if phaseResult, completed := contextPhase.GetResult(); completed {
 		// Check if it's an error result
@@ -703,13 +680,8 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 					}
 				}
 			} else if success {
-				// Convert successful result to JSON string for backward compatibility
-				if resultData, err := json.Marshal(phaseResult); err == nil {
-					contextResult = string(resultData)
-				} else {
-					logger.Error("Failed to marshal context result", "error", err.Error())
-					contextResult = "{}"
-				}
+				// Store the successful result directly
+				contextResult = resultMap
 			}
 		}
 	} else {
@@ -738,27 +710,13 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 		}
 	}
 
-	// Parse context gathering response for failure indications (legacy GENERATION_FAILED handling)
-	parsedContext, contextFailure := parseAIResponse(contextResult, "context_gathering")
-	if contextFailure != nil {
-		logger.Error("Context gathering indicated failure",
-			"phase", contextFailure.Phase,
-			"message", contextFailure.Message,
-			"context", contextFailure.Context,
-			"target", target.Name)
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:        target,
-			Success:       false,
-			FailureReason: contextFailure,
-			Duration:      time.Since(targetStart),
+	if contextResult != nil {
+		// Convert to JSON for logging
+		if resultJSON, err := json.Marshal(contextResult); err == nil {
+			logger.Debug("Context gathering result", "length", len(resultJSON))
+			logger.Trace("Context gathering output", "content", string(resultJSON))
 		}
 	}
-	contextResult = parsedContext
-
-	logger.Debug("Context gathering result", "length", len(contextResult))
-	// Log the actual context content at trace level
-	logger.Trace("Context gathering output", "content", contextResult)
 
 	// Phase 2: Implementation
 	logger.Info("Generating implementation...")
@@ -771,7 +729,9 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 	configureAIClientForPhase(aiClient, implPhase, logger, toolContext)
 
 	// Build implementation prompt with context from phase 1
-	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResult)
+	// Convert contextResult to Markdown format for better AI understanding
+	contextResultMarkdown := formatContextResultAsMarkdown(contextResult)
+	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResultMarkdown)
 	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
 	if err != nil {
 		logger.Error("Failed to build implementation prompt", "error", err.Error())
@@ -882,24 +842,6 @@ func generateImplementationForTargetWithUI(ctx context.Context, target *parser.T
 			Duration:      time.Since(targetStart),
 		}
 	}
-
-	// Parse implementation response for failure indications (legacy GENERATION_FAILED handling)
-	parsedImplementation, implementationFailure := parseAIResponse(implementation, "implementation")
-	if implementationFailure != nil {
-		logger.Error("Implementation indicated failure",
-			"phase", implementationFailure.Phase,
-			"message", implementationFailure.Message,
-			"context", implementationFailure.Context,
-			"target", target.Name)
-		uiProgram.Fail(targetNum)
-		return &parser.GenerationResult{
-			Target:        target,
-			Success:       false,
-			FailureReason: implementationFailure,
-			Duration:      time.Since(targetStart),
-		}
-	}
-	implementation = parsedImplementation
 
 	duration := time.Since(targetStart).Round(time.Millisecond)
 	logger.Info("Successfully generated implementation", "duration", duration)
