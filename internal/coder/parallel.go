@@ -118,6 +118,10 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	select {
 	case <-done:
 		// Generation completed, TUI will be quit automatically
+		// Wait for TUI to actually finish if it's enabled
+		if uiProgram.IsTUIEnabled() {
+			<-tuiDone
+		}
 	case err := <-tuiDone:
 		// TUI finished (shouldn't happen normally)
 		if err != nil {
