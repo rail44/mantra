@@ -26,6 +26,11 @@ func (p *Program) IsTerminal() bool {
 	return p.isTerminal
 }
 
+// IsTUIEnabled returns whether the TUI is enabled
+func (p *Program) IsTUIEnabled() bool {
+	return p.isTerminal && !p.plain
+}
+
 // NewProgram creates a new TUI program with default options
 func NewProgram() *Program {
 	return NewProgramWithOptions(ProgramOptions{})
@@ -67,8 +72,8 @@ func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger
 	// Add target to model
 	p.model.addTarget(name, index, total)
 
-	// In plain mode or non-terminal mode, print a simple progress message
-	if p.plain || !p.isTerminal {
+	// Print initial progress message for plain output
+	if p.shouldShowPlainOutput() {
 		fmt.Fprintf(os.Stderr, "[%d/%d] Processing: %s\n", index, total, name)
 	}
 
@@ -85,6 +90,32 @@ func (p *Program) sendLog(targetIndex int, level, message string) {
 	})
 }
 
+// shouldShowPlainOutput returns true if plain text output should be shown
+func (p *Program) shouldShowPlainOutput() bool {
+	return p.plain || !p.isTerminal
+}
+
+// printProgress prints a progress message for plain output mode
+func (p *Program) printProgress(targetIndex int, format string, args ...interface{}) {
+	if !p.shouldShowPlainOutput() {
+		return
+	}
+
+	p.model.mu.RLock()
+	defer p.model.mu.RUnlock()
+
+	if targetIndex > 0 && targetIndex <= len(p.model.targets) {
+		target := p.model.targets[targetIndex-1]
+		prefix := fmt.Sprintf("[%d/%d]", targetIndex, len(p.model.targets))
+		if format == "" {
+			fmt.Fprintf(os.Stderr, "%s %s\n", prefix, target.Name)
+		} else {
+			msg := fmt.Sprintf(format, args...)
+			fmt.Fprintf(os.Stderr, "%s %s: %s\n", prefix, msg, target.Name)
+		}
+	}
+}
+
 // Complete marks a target as completed
 func (p *Program) Complete(targetIndex int) {
 	p.teaProgram.Send(statusMsg{
@@ -92,15 +123,7 @@ func (p *Program) Complete(targetIndex int) {
 		Status:      "completed",
 	})
 
-	// In plain mode or non-terminal mode, print completion message
-	if p.plain || !p.isTerminal {
-		p.model.mu.RLock()
-		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
-			target := p.model.targets[targetIndex-1]
-			fmt.Fprintf(os.Stderr, "[%d/%d] Completed: %s\n", targetIndex, len(p.model.targets), target.Name)
-		}
-		p.model.mu.RUnlock()
-	}
+	p.printProgress(targetIndex, "Completed")
 }
 
 // Fail marks a target as failed
@@ -110,15 +133,7 @@ func (p *Program) Fail(targetIndex int) {
 		Status:      "failed",
 	})
 
-	// In plain mode or non-terminal mode, print failure message
-	if p.plain || !p.isTerminal {
-		p.model.mu.RLock()
-		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
-			target := p.model.targets[targetIndex-1]
-			fmt.Fprintf(os.Stderr, "[%d/%d] Failed: %s\n", targetIndex, len(p.model.targets), target.Name)
-		}
-		p.model.mu.RUnlock()
-	}
+	p.printProgress(targetIndex, "Failed")
 }
 
 // UpdatePhase updates the phase information for a target
@@ -129,8 +144,8 @@ func (p *Program) UpdatePhase(targetIndex int, phase string, detail string) {
 		Detail:      detail,
 	})
 
-	// In plain mode or non-terminal mode, print phase update
-	if p.plain || !p.isTerminal {
+	// Print phase update for plain output
+	if p.shouldShowPlainOutput() {
 		p.model.mu.RLock()
 		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
 			target := p.model.targets[targetIndex-1]

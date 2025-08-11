@@ -129,7 +129,7 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	// Display logs for failed targets
 	// TUI mode already shows progress, so only display failures
 	// Plain mode shows simple progress, so also only display failures
-	if uiProgram.IsTerminal() {
+	if uiProgram.IsTUIEnabled() {
 		// Add a newline after TUI to ensure clean output
 		fmt.Fprintln(os.Stderr, "")
 	}
@@ -227,9 +227,9 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 	// Display logs only for failed targets
 	failedTargets := uiProgram.GetFailedTargets()
 	if len(failedTargets) > 0 {
-		// In non-terminal mode, be more concise
-		if !uiProgram.IsTerminal() {
-			// Only show ERROR level logs for non-terminal mode
+		// In plain output mode, be more concise
+		if !uiProgram.IsTUIEnabled() {
+			// Only show ERROR level logs for plain output mode
 			for _, target := range failedTargets {
 				logs := target.GetAllLogs()
 				for _, logEntry := range logs {
