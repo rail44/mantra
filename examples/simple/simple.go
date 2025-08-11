@@ -28,3 +28,23 @@ func (c *SimpleCache) Set(key string, value any, ttl time.Duration) {
 func (c *SimpleCache) Delete(key string) {
 	panic("not implemented")
 }
+
+// mantra: キャッシュを全てクリアする  
+func (c *SimpleCache) Clear() {
+	panic("not implemented")
+}
+
+// mantra: キャッシュのサイズを返す
+func (c *SimpleCache) Size() int {
+	panic("not implemented")
+}
+
+// mantra: キャッシュが空かどうかを返す
+func (c *SimpleCache) IsEmpty() bool {
+	panic("not implemented")
+}
+
+// mantra: 全てのキーを返す
+func (c *SimpleCache) Keys() []string {
+	panic("not implemented")
+}

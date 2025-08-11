@@ -1,27 +1,63 @@
 package ui
 
 import (
+	"fmt"
+	"os"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 )
+
+// ProgramOptions contains options for creating a Program
+type ProgramOptions struct {
+	Plain bool // Use plain text output instead of TUI
+}
 
 // Program manages the TUI program and provides logger creation
 type Program struct {
 	model      *Model
 	teaProgram *tea.Program
+	isTerminal bool // Whether stdout is a terminal
+	plain      bool // Whether to use plain text output
 }
 
-// NewProgram creates a new TUI program
+// IsTerminal returns whether the program is running in a terminal
+func (p *Program) IsTerminal() bool {
+	return p.isTerminal
+}
+
+// NewProgram creates a new TUI program with default options
 func NewProgram() *Program {
+	return NewProgramWithOptions(ProgramOptions{})
+}
+
+// NewProgramWithOptions creates a new TUI program with specified options
+func NewProgramWithOptions(opts ProgramOptions) *Program {
 	model := newModel()
+
+	// Check if stdout is a terminal
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+
+	var teaProgram *tea.Program
+	if opts.Plain || !isTerminal {
+		// Plain mode or non-terminal mode - disable TUI rendering
+		teaProgram = tea.NewProgram(model, tea.WithInput(nil), tea.WithoutRenderer())
+	} else {
+		// Normal terminal mode - use TUI without alt screen to keep previous logs visible
+		teaProgram = tea.NewProgram(model)
+	}
+
 	return &Program{
 		model:      model,
-		teaProgram: tea.NewProgram(model), // Remove WithAltScreen to keep output in terminal
+		teaProgram: teaProgram,
+		isTerminal: isTerminal,
+		plain:      opts.Plain,
 	}
 }
 
 // Start starts the TUI program (blocks until Quit is called)
 func (p *Program) Start() error {
-	// Run the program (blocks until quit)
+	// Run the program (blocks until quit in terminal mode, returns immediately in non-terminal mode)
 	_, err := p.teaProgram.Run()
 	return err
 }
@@ -30,6 +66,11 @@ func (p *Program) Start() error {
 func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger {
 	// Add target to model
 	p.model.addTarget(name, index, total)
+
+	// In plain mode or non-terminal mode, print a simple progress message
+	if p.plain || !p.isTerminal {
+		fmt.Fprintf(os.Stderr, "[%d/%d] Processing: %s\n", index, total, name)
+	}
 
 	// No longer auto-start TUI here - Start() must be called explicitly
 	return newTargetLogger(p, name, index)
@@ -50,6 +91,16 @@ func (p *Program) Complete(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "completed",
 	})
+
+	// In plain mode or non-terminal mode, print completion message
+	if p.plain || !p.isTerminal {
+		p.model.mu.RLock()
+		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
+			target := p.model.targets[targetIndex-1]
+			fmt.Fprintf(os.Stderr, "[%d/%d] Completed: %s\n", targetIndex, len(p.model.targets), target.Name)
+		}
+		p.model.mu.RUnlock()
+	}
 }
 
 // Fail marks a target as failed
@@ -58,6 +109,16 @@ func (p *Program) Fail(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "failed",
 	})
+
+	// In plain mode or non-terminal mode, print failure message
+	if p.plain || !p.isTerminal {
+		p.model.mu.RLock()
+		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
+			target := p.model.targets[targetIndex-1]
+			fmt.Fprintf(os.Stderr, "[%d/%d] Failed: %s\n", targetIndex, len(p.model.targets), target.Name)
+		}
+		p.model.mu.RUnlock()
+	}
 }
 
 // UpdatePhase updates the phase information for a target
@@ -67,11 +128,23 @@ func (p *Program) UpdatePhase(targetIndex int, phase string, detail string) {
 		Phase:       phase,
 		Detail:      detail,
 	})
+
+	// In plain mode or non-terminal mode, print phase update
+	if p.plain || !p.isTerminal {
+		p.model.mu.RLock()
+		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
+			target := p.model.targets[targetIndex-1]
+			fmt.Fprintf(os.Stderr, "[%d/%d] %s - %s: %s\n", targetIndex, len(p.model.targets), target.Name, phase, detail)
+		}
+		p.model.mu.RUnlock()
+	}
 }
 
 // Quit stops the TUI program
 func (p *Program) Quit() {
-	p.teaProgram.Quit()
+	if p.isTerminal {
+		p.teaProgram.Quit()
+	}
 }
 
 // GetFailedTargets returns information about all failed targets

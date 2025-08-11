@@ -58,7 +58,10 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	projectRoot := findProjectRoot(filepath.Dir(targets[0].Target.FilePath))
 
 	// Create TUI program for parallel execution
-	uiProgram := ui.NewProgram()
+	// Use plain console output if --plain flag is set
+	uiProgram := ui.NewProgramWithOptions(ui.ProgramOptions{
+		Plain: c.config.Plain,
+	})
 
 	// Thread-safe collections for collecting results
 	var mu sync.Mutex
@@ -105,13 +108,32 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 		uiProgram.Quit()
 	}()
 
-	// Run TUI (blocks until Quit is called)
-	if err := uiProgram.Start(); err != nil {
-		<-done // Ensure generation completes even if TUI fails
+	// Start TUI in background
+	tuiDone := make(chan error, 1)
+	go func() {
+		tuiDone <- uiProgram.Start()
+	}()
+
+	// Wait for either TUI to finish or generation to complete
+	select {
+	case <-done:
+		// Generation completed, TUI will be quit automatically
+	case err := <-tuiDone:
+		// TUI finished (shouldn't happen normally)
+		if err != nil {
+			c.logger.Debug("TUI error", "error", err)
+		}
+		<-done // Still wait for generation to complete
 	}
 
-	// Display logs based on verbose flag
-	c.displayLogs(uiProgram)
+	// Display logs for failed targets
+	// TUI mode already shows progress, so only display failures
+	// Plain mode shows simple progress, so also only display failures
+	if uiProgram.IsTerminal() {
+		// Add a newline after TUI to ensure clean output
+		fmt.Fprintln(os.Stderr, "")
+	}
+	c.displayFailedTargetLogs(uiProgram)
 
 	return allResults, nil
 }
@@ -200,69 +222,45 @@ func (c *ParallelCoder) createPhaseFailure(target *parser.Target, failureReason 
 	}
 }
 
-// displayLogs displays logs based on configuration
-func (c *ParallelCoder) displayLogs(uiProgram *ui.Program) {
-	if c.config.Verbose {
-		c.displayAllTargetLogs(uiProgram)
-	} else {
-		c.displayFailedTargetLogs(uiProgram)
-	}
-}
-
-// displayAllTargetLogs displays logs for all targets
-func (c *ParallelCoder) displayAllTargetLogs(uiProgram *ui.Program) {
-	// Display all captured logs for all targets
-	allTargets := uiProgram.GetAllTargets()
-	for _, target := range allTargets {
-		logs := target.GetAllLogs()
-		if len(logs) > 0 {
-			c.logger.Info(fmt.Sprintf("=== Logs for %s ===", target.Name))
-			for _, logEntry := range logs {
-				// Re-emit each log entry at appropriate level
-				switch logEntry.Level {
-				case "TRACE":
-					c.logger.Trace(logEntry.Message)
-				case "DEBUG":
-					c.logger.Debug(logEntry.Message)
-				case "INFO":
-					c.logger.Info(logEntry.Message)
-				case "WARN":
-					c.logger.Warn(logEntry.Message)
-				case "ERROR":
-					c.logger.Error(logEntry.Message)
-				default:
-					c.logger.Info(logEntry.Message)
-				}
-			}
-		}
-	}
-}
-
 // displayFailedTargetLogs displays logs only for failed targets
 func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 	// Display logs only for failed targets
 	failedTargets := uiProgram.GetFailedTargets()
 	if len(failedTargets) > 0 {
-		c.logger.Info("=== Logs for failed targets ===")
-		for _, target := range failedTargets {
-			logs := target.GetAllLogs()
-			if len(logs) > 0 {
-				c.logger.Info(fmt.Sprintf("--- %s ---", target.Name))
+		// In non-terminal mode, be more concise
+		if !uiProgram.IsTerminal() {
+			// Only show ERROR level logs for non-terminal mode
+			for _, target := range failedTargets {
+				logs := target.GetAllLogs()
 				for _, logEntry := range logs {
-					// Re-emit each log entry at appropriate level
-					switch logEntry.Level {
-					case "TRACE":
-						c.logger.Trace(logEntry.Message)
-					case "DEBUG":
-						c.logger.Debug(logEntry.Message)
-					case "INFO":
-						c.logger.Info(logEntry.Message)
-					case "WARN":
-						c.logger.Warn(logEntry.Message)
-					case "ERROR":
-						c.logger.Error(logEntry.Message)
-					default:
-						c.logger.Info(logEntry.Message)
+					if logEntry.Level == "ERROR" {
+						c.logger.Error(fmt.Sprintf("[%s] %s", target.Name, logEntry.Message))
+					}
+				}
+			}
+		} else {
+			// Terminal mode: show all logs as before
+			c.logger.Info("=== Logs for failed targets ===")
+			for _, target := range failedTargets {
+				logs := target.GetAllLogs()
+				if len(logs) > 0 {
+					c.logger.Info(fmt.Sprintf("--- %s ---", target.Name))
+					for _, logEntry := range logs {
+						// Re-emit each log entry at appropriate level
+						switch logEntry.Level {
+						case "TRACE":
+							c.logger.Trace(logEntry.Message)
+						case "DEBUG":
+							c.logger.Debug(logEntry.Message)
+						case "INFO":
+							c.logger.Info(logEntry.Message)
+						case "WARN":
+							c.logger.Warn(logEntry.Message)
+						case "ERROR":
+							c.logger.Error(logEntry.Message)
+						default:
+							c.logger.Info(logEntry.Message)
+						}
 					}
 				}
 			}

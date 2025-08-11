@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	verbose  bool
+	plain    bool
 	logLevel string
 )
 
@@ -53,8 +53,8 @@ their implementations based on the natural language instructions provided.`,
 			os.Exit(1)
 		}
 
-		// Set verbose flag in config
-		cfg.Verbose = verbose
+		// Set plain output flag in config
+		cfg.Plain = plain
 
 		// Run generation
 		generateApp := app.NewGenerateApp()
@@ -66,7 +66,7 @@ their implementations based on the natural language instructions provided.`,
 }
 
 func init() {
-	generateCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed logs for all targets")
+	generateCmd.Flags().BoolVar(&plain, "plain", false, "Use plain text output instead of interactive TUI")
 	generateCmd.Flags().StringVar(&logLevel, "log-level", "", "Override log level (error, warn, info, debug, trace)")
 	rootCmd.AddCommand(generateCmd)
 }
