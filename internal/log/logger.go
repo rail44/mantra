@@ -3,12 +3,20 @@ package log
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 )
 
 // Level is the global log level for all handlers.
 // It can be changed dynamically using Level.Set(level).
 var Level = new(slog.LevelVar) // Info by default
+
+func init() {
+	// Set the default slog handler to our custom handler
+	handler := NewHandler(os.Stderr)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+}
 
 // ParseLevel converts a string to slog.Level
 func ParseLevel(s string) (slog.Level, error) {

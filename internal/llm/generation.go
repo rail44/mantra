@@ -18,12 +18,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	// Use the logger directly
 	logger := c.logger
 
-	// Log system prompt at debug level
-	if c.systemPrompt != "" {
-		logger.Debug("System prompt set", "length", len(c.systemPrompt))
-		// Log full system prompt at debug level
-		logger.Debug(fmt.Sprintf("[SYSTEM_PROMPT]\n%s", c.systemPrompt))
-	}
+	// System prompt is set but not logged
 
 	// Build initial messages with system prompt
 	messages := []OpenAIMessage{
@@ -44,12 +39,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	resultToolCalled := false
 
 	for round := 0; round < maxRounds; round++ {
-		if round > 0 {
-			logger.Debug("tool usage round", "round", round+1, "max_rounds", maxRounds)
-		}
-
-		// Log concise message stats
-		logger.Debug(fmt.Sprintf("[ROUND] %d/%d: %d messages", round+1, maxRounds, len(messages)))
 
 		// Use the current temperature set by the phase
 		temperature := c.currentTemperature
@@ -94,9 +83,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		}
 		messages = append(messages, cleanMsg)
 
-		// Debug: Log response
-		logger.Debug(fmt.Sprintf("[API] Response: %s (content=%d chars, tools=%d)",
-			responseMsg.Role, len(responseMsg.Content), len(responseMsg.ToolCalls)))
 		if round >= 5 && len(responseMsg.ToolCalls) > 0 {
 			logger.Warn("many tool calls made - model may be stuck", "round", round+1)
 		}
@@ -114,7 +100,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 			// If result tool exists but wasn't called yet, prompt the AI to use it
 			if hasResultTool && !resultToolCalled && round < maxRounds-1 { // Leave one round for the final attempt
-				logger.Debug("No tool calls made but result tool is available, prompting to use it")
 				messages = append(messages, OpenAIMessage{
 					Role:    "user",
 					Content: "Please complete the task by calling the result() tool with the appropriate data. The result() tool is required to finalize this phase.",
@@ -124,7 +109,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 			// No tool calls and no result tool, or result tool already called - return the content
 			if responseMsg.Content != "" {
-				logger.Debug("Returning final response")
 				c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 				return responseMsg.Content, nil
 			}
@@ -147,8 +131,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 		// Check if any tool is terminal
 		for _, toolCall := range responseMsg.ToolCalls {
 			if toolCall.Type == "function" && executor.IsTerminal(toolCall.Function.Name) {
-				logger.Debug(fmt.Sprintf("Terminal tool '%s' executed, ending conversation", toolCall.Function.Name))
-
 				// Find and return the result from the terminal tool
 				for _, result := range toolResults {
 					if result.ToolCallID == toolCall.ID {

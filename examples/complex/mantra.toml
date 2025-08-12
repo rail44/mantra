@@ -10,9 +10,6 @@ dest = "../complex_mantra"
 # API key from environment variable
 api_key = "${OPENROUTER_API_KEY}"
 
-# Debug logging to see generation details
-log_level = "trace"
-
 # OpenRouter-specific configuration
 [openrouter]
 providers = ["mistral"]

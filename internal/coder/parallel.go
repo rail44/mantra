@@ -67,9 +67,10 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	var allResults []*parser.GenerationResult
 
 	// Start TUI in background
-	tuiDone := make(chan error, 1)
+	tuiDone := make(chan *ui.Model, 1)
 	go func() {
-		tuiDone <- uiProgram.Start()
+		model, _ := uiProgram.Start()
+		tuiDone <- model
 	}()
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -105,14 +106,15 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	time.Sleep(100 * time.Millisecond) // Allow final render
 	uiProgram.Quit()
 
-	if uiProgram.IsTUIEnabled() {
-		<-tuiDone
-	}
+	// Wait for UI to finish and get final model
+	finalModel := <-tuiDone
 
 	// Display logs for failed targets
-	// TUI mode already shows progress, so only display failures
-	// Plain mode shows simple progress, so also only display failures
-	c.displayFailedTargetLogs(ctx, uiProgram)
+	// Only needed in TUI mode where logs are captured
+	// In plain mode, logs are already displayed in real-time
+	if finalModel.IsTUIEnabled() {
+		c.displayFailedTargetLogs(ctx, finalModel)
+	}
 
 	return allResults, nil
 }
@@ -181,18 +183,12 @@ func (t *TargetCoder) createClient() (*llm.Client, error) {
 
 // executeContextGathering executes the context gathering phase
 func (t *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]any, *parser.FailureReason) {
-	stepCallback := func(step string) {
-		t.sendPhaseEvent(phase.PhaseContextGathering, step)
-	}
-	return runner.ExecuteContextGathering(t.ctx, t.target.Target, t.target.FileContent, t.coder.config.Dest, stepCallback)
+	return runner.ExecuteContextGathering(t.ctx, t.target.Target, t.target.FileContent, t.coder.config.Dest)
 }
 
 // executeImplementation executes the implementation phase
 func (t *TargetCoder) executeImplementation(runner *phase.Runner, contextResult map[string]any) (string, *parser.FailureReason) {
-	stepCallback := func(step string) {
-		t.sendPhaseEvent(phase.PhaseImplementation, step)
-	}
-	return runner.ExecuteImplementation(t.ctx, t.target.Target, t.target.FileContent, t.target.FileInfo, t.projectRoot, contextResult, stepCallback)
+	return runner.ExecuteImplementation(t.ctx, t.target.Target, t.target.FileContent, t.target.FileInfo, t.projectRoot, contextResult)
 }
 
 // successResult creates a successful generation result
@@ -252,20 +248,9 @@ func (t *TargetCoder) markFailed() {
 	t.uiProgram.Fail(t.target.Index)
 }
 
-// sendPhaseEvent sends a phase event to the UI
-func (t *TargetCoder) sendPhaseEvent(phaseName, step string) {
-	t.uiProgram.UpdatePhase(t.target.Index, phaseName, step)
-}
-
 // displayFailedTargetLogs displays logs only for failed targets in TUI mode
-func (c *ParallelCoder) displayFailedTargetLogs(ctx context.Context, uiProgram *ui.Program) {
-	// Only needed in TUI mode where logs are captured
-	// In plain mode, logs are already displayed in real-time
-	if !uiProgram.IsTUIEnabled() {
-		return
-	}
-
-	failedTargets := uiProgram.GetFailedTargets()
+func (c *ParallelCoder) displayFailedTargetLogs(ctx context.Context, model *ui.Model) {
+	failedTargets := model.GetFailedTargets()
 	if len(failedTargets) == 0 {
 		return
 	}

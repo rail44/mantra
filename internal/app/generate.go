@@ -89,7 +89,6 @@ func (a *GenerateApp) detectTargets(pkgDir, destDir string) ([]*detector.FileDet
 	for _, result := range results {
 		if len(result.Statuses) == 0 {
 			filesWithoutTargets++
-			a.logger.Debug(fmt.Sprintf("[FILE] No targets: %s", filepath.Base(result.FileInfo.FilePath)))
 			continue
 		}
 
@@ -109,7 +108,6 @@ func (a *GenerateApp) detectTargets(pkgDir, destDir string) ([]*detector.FileDet
 					slog.String("new_checksum", status.CurrentChecksum))
 			case detector.StatusCurrent:
 				current++
-				a.logger.Debug(fmt.Sprintf("[SKIP] Up-to-date: %s.%s", filepath.Base(status.Target.FilePath), status.Target.GetDisplayName()))
 			}
 		}
 	}
@@ -222,9 +220,6 @@ func (a *GenerateApp) prepareStubFiles(results []*detector.FileDetectionResult, 
 					slog.String("error", err.Error()))
 				return err
 			}
-			a.logger.Debug("prepared stub file",
-				slog.String("file", fileInfo.FilePath),
-				slog.Int("targets_to_generate", len(targetsToGenerate)))
 		}
 	}
 
@@ -235,6 +230,7 @@ func (a *GenerateApp) prepareStubFiles(results []*detector.FileDetectionResult, 
 func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, gen *codegen.Generator) []coder.TargetContext {
 	var targets []coder.TargetContext
 
+	index := 0
 	for _, result := range results {
 		fileInfo := result.FileInfo
 		filePath := fileInfo.FilePath
@@ -255,10 +251,9 @@ func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, ge
 		}
 
 		// Collect targets that need generation
-		index := 0
 		for _, status := range result.Statuses {
-			index += 1
 			if status.Status != detector.StatusCurrent {
+				index += 1
 				targets = append(targets, coder.TargetContext{
 					Target:      status.Target,
 					FileContent: string(content),

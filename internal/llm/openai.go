@@ -156,17 +156,10 @@ func (c *OpenAIClient) Name() string {
 
 // makeRequest makes a non-streaming request to the API
 func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*OpenAIResponse, error) {
-	// Use the logger directly
-	logger := c.logger
-
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-
-	// Log request summary instead of full JSON
-	logger.Debug(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
-		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -201,11 +194,6 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	var result OpenAIResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	// Log provider info if present
-	if result.Provider != "" {
-		logger.Debug("OpenRouter provider", "provider", result.Provider)
 	}
 
 	return &result, nil

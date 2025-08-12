@@ -64,12 +64,9 @@ func (h *CallbackHandler) WithGroup(name string) slog.Handler {
 
 // Handler is a slog.Handler for formatted output with optional target information
 type Handler struct {
-	level        slog.Leveler // Use Leveler interface for dynamic level
-	mu           sync.Mutex
-	targetNum    int
-	totalTargets int
-	targetName   string
-	output       io.Writer
+	level  slog.Leveler // Use Leveler interface for dynamic level
+	mu     sync.Mutex
+	output io.Writer
 }
 
 // NewHandler creates a new handler for formatted output
@@ -77,17 +74,6 @@ func NewHandler(output io.Writer) *Handler {
 	return &Handler{
 		level:  Level,
 		output: output,
-	}
-}
-
-// NewHandlerWithTarget creates a new handler with target information
-func NewHandlerWithTarget(targetNum, totalTargets int, targetName string, output io.Writer) *Handler {
-	return &Handler{
-		level:        Level,
-		targetNum:    targetNum,
-		totalTargets: totalTargets,
-		targetName:   targetName,
-		output:       output,
 	}
 }
 
@@ -116,23 +102,30 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		levelStr = "[TRACE] "
 	}
 
-	// Format target info if available
-	var targetInfo string
-	if h.targetName != "" {
-		targetInfo = fmt.Sprintf("[%d/%d %s] ", h.targetNum, h.totalTargets, h.targetName)
-	}
-
-	// Build the message with attributes, excluding target-related ones
 	formattedMsg := r.Message
+	var targetIndex, totalTargets int
+	var targetName string
 	r.Attrs(func(a slog.Attr) bool {
-		// Skip target-related attributes and time
-		if a.Key == "targetIndex" || a.Key == "totalTargets" || a.Key == "targetName" || a.Key == slog.TimeKey {
-			return true
+		switch a.Key {
+		case "targetIndex":
+			targetIndex = int(a.Value.Int64())
+		case "totalTargets":
+			totalTargets = int(a.Value.Int64())
+		case "targetName":
+			targetName = a.Value.String()
+		default:
+			formattedMsg += fmt.Sprintf(" %s=%v", a.Key, a.Value.Any())
 		}
+
 		// Format other attributes inline
-		formattedMsg += fmt.Sprintf(" %s=%v", a.Key, a.Value.Any())
 		return true
 	})
+
+	// Format target info if available
+	var targetInfo string
+	if targetName != "" {
+		targetInfo = fmt.Sprintf("[%d/%d %s] ", targetIndex, totalTargets, targetName)
+	}
 
 	// Write to output
 	fmt.Fprintf(h.output, "%s%s%s\n", levelStr, targetInfo, formattedMsg)

@@ -1,10 +1,10 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,14 +21,10 @@ type TargetView struct {
 	Logs        []slog.Record
 	StartTime   time.Time
 	EndTime     time.Time
-	mu          sync.RWMutex
 }
 
 // GetAllLogs returns a copy of all logs for the target
 func (t *TargetView) GetAllLogs() []slog.Record {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
 	// Create a copy to avoid data races
 	logs := make([]slog.Record, len(t.Logs))
 	copy(logs, t.Logs)
@@ -37,24 +33,26 @@ func (t *TargetView) GetAllLogs() []slog.Record {
 
 // Model is the Bubble Tea model for the TUI
 type Model struct {
-	targets []*TargetView
-	width   int
-	height  int
-	mu      sync.RWMutex
+	targets    []*TargetView
+	width      int
+	height     int
+	tuiEnabled bool
 }
 
 // newModel creates a new TUI model
-func newModel() *Model {
+func newModel(tuiEnabled bool) *Model {
 	return &Model{
-		targets: make([]*TargetView, 0),
+		targets:    make([]*TargetView, 0),
+		tuiEnabled: tuiEnabled,
 	}
+}
+
+func (m *Model) IsTUIEnabled() bool {
+	return m.tuiEnabled
 }
 
 // addTarget adds a new target to track
 func (m *Model) addTarget(name string, index, total int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	target := &TargetView{
 		Name:      name,
 		Index:     index,
@@ -65,20 +63,6 @@ func (m *Model) addTarget(name string, index, total int) {
 		StartTime: time.Now(),
 	}
 	m.targets = append(m.targets, target)
-}
-
-// updatePhase updates the phase information for a target
-func (m *Model) updatePhase(targetIndex int, phase string, detail string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.validateTargetIndex(targetIndex) {
-		target := m.targets[targetIndex-1]
-		target.mu.Lock()
-		target.Phase = phase
-		target.PhaseDetail = detail
-		target.mu.Unlock()
-	}
 }
 
 // Init initializes the model
@@ -117,9 +101,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update target status
 		m.updateStatus(msg)
 
-	case phaseMsg:
-		// Update target phase
-		m.updatePhase(msg.TargetIndex, msg.Phase, msg.Detail)
+	case addTargetMsg:
+		// Add new target
+		m.addTarget(msg.Name, msg.Index, msg.Total)
 	}
 
 	return m, nil
@@ -127,9 +111,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the UI
 func (m *Model) View() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	if len(m.targets) == 0 {
 		return "Initializing..."
 	}
@@ -285,19 +266,33 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 		var targetLine string
 
 		if target.Status == "running" || target.Status == "pending" {
-			// Active target - show with current status and phase
+			// Active target - show with current status
 			spinner := m.getSpinner(target.Status)
-			targetLine = fmt.Sprintf("%s %s", spinner, target.Name)
 
-			target.mu.RLock()
-
-			// Add phase information if available
+			// Format phase/step info to be right-aligned
+			phaseInfo := ""
 			if target.Phase != "" && target.Phase != "Initializing" {
-				targetLine += fmt.Sprintf(" [%s", target.Phase)
+				phaseInfo = fmt.Sprintf("[%s", target.Phase)
 				if target.PhaseDetail != "" {
-					targetLine += fmt.Sprintf(": %s", target.PhaseDetail)
+					phaseInfo += fmt.Sprintf(": %s", target.PhaseDetail)
 				}
-				targetLine += "]"
+				phaseInfo += "]"
+			}
+
+			// Calculate padding for right alignment
+			baseText := fmt.Sprintf("%s %s", spinner, target.Name)
+			if phaseInfo != "" && m.width > 0 {
+				// Calculate available space for padding
+				totalLen := len(baseText) + len(phaseInfo)
+				if totalLen < m.width-2 {
+					padding := m.width - 2 - totalLen
+					targetLine = fmt.Sprintf("%s%*s%s", baseText, padding, "", phaseInfo)
+				} else {
+					// If not enough space, just append normally
+					targetLine = fmt.Sprintf("%s %s", baseText, phaseInfo)
+				}
+			} else {
+				targetLine = baseText
 			}
 
 			// Always add log area (show latest log or placeholder)
@@ -318,8 +313,6 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 				targetLine += "\n"
 			}
 
-			target.mu.RUnlock()
-
 			activeTargets = append(activeTargets, targetLine)
 		} else {
 			// Completed/failed - show in compact form
@@ -328,7 +321,6 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			targetLine = fmt.Sprintf("%s %s (%s)", icon, target.Name, duration)
 
 			// Add final result message as a separate indented line (same as active targets)
-			target.mu.RLock()
 			logFound := false
 			if len(target.Logs) > 0 {
 				// Show the latest log entry (already filtered by CallbackLogger)
@@ -349,7 +341,6 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 					targetLine += "\n    • Failed"
 				}
 			}
-			target.mu.RUnlock()
 
 			completedTargets = append(completedTargets, targetLine)
 		}
@@ -388,33 +379,50 @@ func (m *Model) validateTargetIndex(index int) bool {
 }
 
 func (m *Model) addLog(msg logMsg) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.validateTargetIndex(msg.TargetIndex) {
-		return
-	}
-
-	target := m.targets[msg.TargetIndex-1] // Convert to 0-based index
-	target.mu.Lock()
-	defer target.mu.Unlock()
-
-	// Always store the log record for later display
-	target.Logs = append(target.Logs, msg.Record)
-}
-
-func (m *Model) updateStatus(msg statusMsg) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if !m.validateTargetIndex(msg.TargetIndex) {
 		return
 	}
 
 	target := m.targets[msg.TargetIndex-1]
-	target.mu.Lock()
-	defer target.mu.Unlock()
+	target.Logs = append(target.Logs, msg.Record)
 
+	// Check for phase/step information in the log record
+	var phase, step string
+	msg.Record.Attrs(func(a slog.Attr) bool {
+		switch a.Key {
+		case "phase":
+			phase = a.Value.String()
+		case "step":
+			step = a.Value.String()
+		}
+		return true
+	})
+
+	// Update phase/step if present
+	if phase != "" || step != "" {
+		if phase != "" {
+			target.Phase = phase
+		}
+		if step != "" {
+			target.PhaseDetail = step
+		}
+	}
+
+	if !m.tuiEnabled {
+		m.PlainLog(msg.Record)
+	}
+}
+
+func (m *Model) PlainLog(record slog.Record) {
+	slog.Default().Handler().Handle(context.Background(), record)
+}
+
+func (m *Model) updateStatus(msg statusMsg) {
+	if !m.validateTargetIndex(msg.TargetIndex) {
+		return
+	}
+
+	target := m.targets[msg.TargetIndex-1]
 	target.Status = msg.Status
 	if msg.Status == "completed" || msg.Status == "failed" {
 		target.EndTime = time.Now()
@@ -434,8 +442,19 @@ type statusMsg struct {
 	Status      string
 }
 
-type phaseMsg struct {
-	TargetIndex int
-	Phase       string
-	Detail      string
+type addTargetMsg struct {
+	Name  string
+	Index int
+	Total int
+}
+
+// GetFailedTargets returns all failed targets
+func (m *Model) GetFailedTargets() []*TargetView {
+	var failed []*TargetView
+	for _, target := range m.targets {
+		if target.Status == "failed" {
+			failed = append(failed, target)
+		}
+	}
+	return failed
 }

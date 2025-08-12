@@ -2,7 +2,6 @@ package phase
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -23,13 +22,11 @@ type TargetEvent struct {
 	Time        time.Time
 }
 
-// StepCallback is called when a phase step changes
-type StepCallback func(step string)
-
 // Runner handles phase execution
 type Runner struct {
-	client *llm.Client
-	logger *slog.Logger
+	client      *llm.Client
+	logger      *slog.Logger
+	phaseLogger *slog.Logger // Current phase-aware logger
 }
 
 // NewRunner creates a new phase runner
@@ -41,10 +38,8 @@ func NewRunner(client *llm.Client, logger *slog.Logger) *Runner {
 }
 
 // ExecuteContextGathering executes the context gathering phase
-func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, setStep StepCallback) (map[string]any, *parser.FailureReason) {
+func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string) (map[string]any, *parser.FailureReason) {
 	// Context is passed through for cancellation
-
-	setStep(StateContextInitializing)
 
 	// Setup phase
 	// Use destination directory if provided, otherwise use source directory
@@ -52,12 +47,16 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	if packagePath == "" {
 		packagePath = filepath.Dir(target.FilePath)
 	}
-	contextPhase := NewContextGatheringPhase(0.6, packagePath, r.logger, setStep)
+	contextPhase := NewContextGatheringPhase(0.6, packagePath, r.logger)
 	contextPhase.Reset() // Ensure clean state
 
 	// Create tool context
 	toolContext := tools.NewContext(nil, target, packagePath)
 	r.configureClientForPhase(contextPhase, toolContext)
+
+	// Log phase step change
+	r.phaseLogger.Info("Phase step",
+		slog.String("step", StateContextInitializing))
 
 	// Build prompt
 	contextPromptBuilder := contextPhase.PromptBuilder()
@@ -72,7 +71,8 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	}
 
 	// Execute
-	setStep(StateContextAnalyzing)
+	r.phaseLogger.Info("Phase step",
+		slog.String("step", StateContextAnalyzing))
 	_, err = r.client.Generate(ctx, initialPrompt)
 	if err != nil {
 		r.logger.Error("Context gathering failed", "error", err.Error())
@@ -88,18 +88,20 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 }
 
 // ExecuteImplementation executes the implementation phase
-func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]any, setStep StepCallback) (string, *parser.FailureReason) {
+func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]any) (string, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
-	setStep(StateImplPreparing)
-
 	// Setup phase
-	implPhase := NewImplementationPhase(0.2, projectRoot, r.logger, setStep)
+	implPhase := NewImplementationPhase(0.2, projectRoot, r.logger)
 	implPhase.Reset() // Ensure clean state
 
 	// Create tool context for static analysis
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)
 	r.configureClientForPhase(implPhase, toolContext)
+
+	// Log phase step
+	r.phaseLogger.Info("Phase step",
+		slog.String("step", StateImplPreparing))
 
 	// Build prompt with context
 	contextResultMarkdown := formatter.FormatContextAsMarkdown(contextResult)
@@ -115,7 +117,8 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 	}
 
 	// Execute
-	setStep(StateImplGenerating)
+	r.phaseLogger.Info("Phase step",
+		slog.String("step", StateImplGenerating))
 	_, err = r.client.Generate(ctx, implPrompt)
 	if err != nil {
 		r.logger.Error("Implementation failed", "error", err.Error())
@@ -198,11 +201,7 @@ func (r *Runner) processResult(p Phase, phaseName string) (map[string]any, *pars
 				Context: "success=false but no error information",
 			}
 		}
-		// Success - log and return
-		if resultJSON, err := json.Marshal(resultMap); err == nil {
-			r.logger.Debug(fmt.Sprintf("%s result", phaseName), "length", len(resultJSON))
-			r.logger.Debug(fmt.Sprintf("%s output", phaseName), "content", string(resultJSON))
-		}
+		// Success - return
 		return resultMap, nil
 	}
 
@@ -218,10 +217,13 @@ func (r *Runner) configureClientForPhase(p Phase, toolContext *tools.Context) {
 	r.client.SetTemperature(p.Temperature())
 	r.client.SetSystemPrompt(p.SystemPrompt())
 
+	// Create and store phase-aware logger
+	r.phaseLogger = r.logger.With(slog.String("phase", p.Name()))
+
 	// Get tools once and convert/create executor
 	phaseTools := p.Tools()
 	aiTools := llm.ConvertToAITools(phaseTools)
-	executor := tools.NewExecutor(phaseTools, r.logger)
+	executor := tools.NewExecutor(phaseTools, r.phaseLogger)
 
 	// Set context if provided
 	if toolContext != nil {
@@ -229,4 +231,7 @@ func (r *Runner) configureClientForPhase(p Phase, toolContext *tools.Context) {
 	}
 
 	r.client.SetTools(aiTools, executor)
+
+	// Update client's logger to include phase information
+	r.client.SetLogger(r.phaseLogger)
 }

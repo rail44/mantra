@@ -21,11 +21,10 @@ type ContextGatheringPhase struct {
 	completed   bool
 	mu          sync.Mutex
 	schema      schemas.ResultSchema
-	setStep     StepCallback
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
-func NewContextGatheringPhase(temperature float32, packagePath string, logger *slog.Logger, setStep StepCallback) *ContextGatheringPhase {
+func NewContextGatheringPhase(temperature float32, packagePath string, logger *slog.Logger) *ContextGatheringPhase {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -34,7 +33,6 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger *s
 		temperature: temperature,
 		logger:      logger,
 		schema:      &contextGatheringResultSchema{},
-		setStep:     setStep,
 	}
 
 	// Initialize tools for context gathering (limited to current package)

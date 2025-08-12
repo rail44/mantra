@@ -22,11 +22,10 @@ type ImplementationPhase struct {
 	completed   bool
 	mu          sync.Mutex
 	schema      schemas.ResultSchema
-	setStep     StepCallback
 }
 
 // NewImplementationPhase creates a new implementation phase
-func NewImplementationPhase(temperature float32, projectRoot string, logger *slog.Logger, setStep StepCallback) *ImplementationPhase {
+func NewImplementationPhase(temperature float32, projectRoot string, logger *slog.Logger) *ImplementationPhase {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -36,7 +35,6 @@ func NewImplementationPhase(temperature float32, projectRoot string, logger *slo
 		projectRoot: projectRoot,
 		logger:      logger,
 		schema:      &implementationResultSchema{},
-		setStep:     setStep,
 	}
 
 	// Initialize tools for implementation/validation

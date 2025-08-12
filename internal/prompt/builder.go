@@ -115,31 +115,5 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 
 	fullPrompt := prompt.String()
 
-	// Log the generated prompt at trace level for debugging
-	totalMethods := 0
-	for _, methods := range ctx.Methods {
-		totalMethods += len(methods)
-	}
-	b.logger.Debug(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d methods, %d imports",
-		target.Name, len(fullPrompt), len(ctx.Types), totalMethods, len(ctx.Imports)))
-
-	// Log the full prompt content for debugging
-	b.logger.Debug(fmt.Sprintf("[PROMPT_CONTENT] %s:\n%s", target.Name, fullPrompt))
-
-	// Log imports separately for debugging
-	if len(ctx.Imports) > 0 {
-		var importPaths []string
-		for _, imp := range ctx.Imports {
-			if imp.IsBlank {
-				importPaths = append(importPaths, "_ "+imp.Path)
-			} else if imp.Alias != "" {
-				importPaths = append(importPaths, imp.Alias+" "+imp.Path)
-			} else {
-				importPaths = append(importPaths, imp.Path)
-			}
-		}
-		b.logger.Debug(fmt.Sprintf("         imports: %v", importPaths))
-	}
-
 	return fullPrompt
 }
