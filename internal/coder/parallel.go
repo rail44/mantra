@@ -204,11 +204,7 @@ func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc
 	// UI program will handle the difference between TUI and plain mode
 	// Create a callback handler with target attributes
 	callbackHandler := log.NewCallbackHandler(
-		func(record slog.Record) {
-			if callbacks.SendLog != nil {
-				callbacks.SendLog(record)
-			}
-		},
+		callbacks.SendLog,
 	).WithAttrs([]slog.Attr{
 		slog.Int("targetIndex", targetNum),
 		slog.Int("totalTargets", totalTargets),
