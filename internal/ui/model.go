@@ -42,7 +42,6 @@ type Model struct {
 	height       int
 	mu           sync.RWMutex
 	logLevel     slog.Level // Current log level for filtering
-	lastLineCount int        // Track number of lines in last render
 }
 
 // newModel creates a new TUI model
@@ -108,8 +107,6 @@ func (m *Model) Init() tea.Cmd {
 
 // Update handles messages and updates the model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Only handle quit commands
@@ -123,8 +120,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tickMsg:
-		// Schedule next tick
-		cmd = tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		// Refresh display
+		return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 			return tickMsg(t)
 		})
 
@@ -141,7 +138,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePhase(msg.TargetIndex, msg.Phase, msg.Detail)
 	}
 
-	return m, cmd
+	return m, nil
 }
 
 // View renders the UI
@@ -426,13 +423,6 @@ func (m *Model) addLog(msg logMsg) {
 	// Auto-update status on first log
 	if target.Status == "pending" && msg.Level == slog.LevelInfo {
 		target.Status = "running"
-	}
-
-	// During TUI execution, suppress DEBUG and TRACE logs from real-time display
-	// They are still stored and will be shown in the final log output
-	// This prevents cluttering the TUI with detailed API/tool execution logs
-	if msg.Level <= slog.LevelDebug {
-		return // Don't trigger display update for verbose logs (DEBUG and TRACE)
 	}
 }
 

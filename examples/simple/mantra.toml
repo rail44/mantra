@@ -1,5 +1,5 @@
 # Model configuration
-model = "openai/gpt-oss-20b"
+model = "inception/mercury-coder"
 
 # OpenRouter API endpoint
 url = "https://openrouter.ai/api/v1"
@@ -11,5 +11,5 @@ dest = "../simple_mantra"
 api_key = "${OPENROUTER_API_KEY}"
 
 # OpenRouter-specific configuration
-[openrouter]
-providers = ["fireworks"]
+# [openrouter]
+# providers = ["fireworks"]

@@ -125,10 +125,13 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 		}
 	case err := <-tuiDone:
 		// TUI finished (shouldn't happen normally)
+		// Don't log here as it might corrupt the display
+		// Store the error for later if needed
+		<-done // Still wait for generation to complete
 		if err != nil {
+			// Log after everything is done
 			c.logger.Debug("TUI error", "error", err)
 		}
-		<-done // Still wait for generation to complete
 	}
 
 	// Display logs for failed targets
@@ -198,9 +201,8 @@ func (c *ParallelCoder) createInitializationFailure(target *parser.Target, err e
 	}
 
 	uiProgram.Fail(targetNum)
-	c.logger.Error("Failed to create AI client",
-		slog.String("target", target.GetDisplayName()),
-		slog.String("error", err.Error()))
+	// Don't log directly during TUI execution - it corrupts the display
+	// The error will be shown in the TUI and logged after completion
 
 	return &parser.GenerationResult{
 		Target:        target,
@@ -214,11 +216,8 @@ func (c *ParallelCoder) createInitializationFailure(target *parser.Target, err e
 func (c *ParallelCoder) createPhaseFailure(target *parser.Target, failureReason *parser.FailureReason, startTime time.Time, targetNum int, uiProgram *ui.Program) *parser.GenerationResult {
 	duration := time.Since(startTime).Round(time.Millisecond)
 	uiProgram.Fail(targetNum)
-
-	c.logger.Error("Phase execution failed",
-		slog.String("target", target.GetDisplayName()),
-		slog.String("phase", failureReason.Phase),
-		slog.String("message", failureReason.Message))
+	// Don't log directly during TUI execution - it corrupts the display
+	// The error will be shown in the TUI and logged after completion
 
 	return &parser.GenerationResult{
 		Target:        target,
