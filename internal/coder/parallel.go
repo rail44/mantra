@@ -105,7 +105,23 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 					}
 				}
 
-				result := c.generateSingleTargetWithCallback(ctx, targetCtx, projectRoot, index, total, uiProgram, eventCallback)
+				// Create target callbacks
+				targetCallbacks := TargetCallbacks{
+					CreateLogger: func(displayName string, targetNum, totalTargets int) log.Logger {
+						return uiProgram.CreateTargetLogger(displayName, targetNum, totalTargets)
+					},
+					MarkRunning: func(targetNum int) {
+						uiProgram.MarkAsRunning(targetNum)
+					},
+					Complete: func(targetNum int) {
+						uiProgram.Complete(targetNum)
+					},
+					Fail: func(targetNum int) {
+						uiProgram.Fail(targetNum)
+					},
+				}
+
+				result := c.generateSingleTargetWithCallback(ctx, targetCtx, projectRoot, index, total, targetCallbacks, eventCallback)
 
 				mu.Lock()
 				allResults = append(allResults, result)
@@ -169,25 +185,33 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	return allResults, nil
 }
 
+// TargetCallbacks contains callbacks for target lifecycle events
+type TargetCallbacks struct {
+	CreateLogger func(displayName string, targetNum, totalTargets int) log.Logger
+	MarkRunning  func(targetNum int)
+	Complete     func(targetNum int)
+	Fail         func(targetNum int)
+}
+
 // generateSingleTargetWithCallback generates implementation for a single target with event callback
-func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program, eventCallback func(string, string)) *parser.GenerationResult {
+func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, callbacks TargetCallbacks, eventCallback func(string, string)) *parser.GenerationResult {
 	targetStart := time.Now()
 
 	// Create a target-specific logger with display name
-	logger := uiProgram.CreateTargetLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
+	logger := callbacks.CreateLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
 
 	// Log generation start
 	logger.Info("Starting generation")
 
 	// Explicitly mark target as running now that we're starting execution
-	uiProgram.MarkAsRunning(targetNum)
+	callbacks.MarkRunning(targetNum)
 
 	// Create a new llm.Client for this target with shared HTTP client
 	// This ensures each target has independent state (temperature, systemPrompt)
 	// while still benefiting from connection pooling
 	client, err := llm.NewClient(c.clientConfig, c.httpClient, logger)
 	if err != nil {
-		return c.createInitializationFailure(tc.Target, err, targetStart, targetNum, uiProgram)
+		return c.createInitializationFailure(tc.Target, err, targetStart, targetNum, callbacks.Fail)
 	}
 
 	// Create phase runner with target-specific client
@@ -200,7 +224,7 @@ func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc
 	}
 	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, c.config.Dest, contextStepCallback)
 	if contextError != nil {
-		return c.createPhaseFailure(tc.Target, contextError, targetStart, targetNum, uiProgram)
+		return c.createPhaseFailure(tc.Target, contextError, targetStart, targetNum, callbacks.Fail)
 	}
 
 	// Phase 2: Implementation
@@ -209,14 +233,14 @@ func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc
 	}
 	implementation, implError := runner.ExecuteImplementation(ctx, tc.Target, tc.FileContent, tc.FileInfo, projectRoot, contextResult, implStepCallback)
 	if implError != nil {
-		return c.createPhaseFailure(tc.Target, implError, targetStart, targetNum, uiProgram)
+		return c.createPhaseFailure(tc.Target, implError, targetStart, targetNum, callbacks.Fail)
 	}
 
 	// Success
 	duration := time.Since(targetStart).Round(time.Millisecond)
 	// Log through the target logger which will send to TUI
 	logger.Info("Successfully generated implementation", "duration", duration)
-	uiProgram.Complete(targetNum)
+	callbacks.Complete(targetNum)
 
 	return &parser.GenerationResult{
 		Target:         tc.Target,
@@ -227,7 +251,7 @@ func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc
 }
 
 // createInitializationFailure creates a failure result for initialization errors
-func (c *ParallelCoder) createInitializationFailure(target *parser.Target, err error, startTime time.Time, targetNum int, uiProgram *ui.Program) *parser.GenerationResult {
+func (c *ParallelCoder) createInitializationFailure(target *parser.Target, err error, startTime time.Time, targetNum int, failCallback func(int)) *parser.GenerationResult {
 	duration := time.Since(startTime).Round(time.Millisecond)
 	failureReason := &parser.FailureReason{
 		Phase:   "initialization",
@@ -235,7 +259,7 @@ func (c *ParallelCoder) createInitializationFailure(target *parser.Target, err e
 		Context: "Check your API configuration and network connection",
 	}
 
-	uiProgram.Fail(targetNum)
+	failCallback(targetNum)
 	// Don't log directly during TUI execution - it corrupts the display
 	// The error will be shown in the TUI and logged after completion
 
@@ -248,9 +272,9 @@ func (c *ParallelCoder) createInitializationFailure(target *parser.Target, err e
 }
 
 // createPhaseFailure creates a failure result for phase execution errors
-func (c *ParallelCoder) createPhaseFailure(target *parser.Target, failureReason *parser.FailureReason, startTime time.Time, targetNum int, uiProgram *ui.Program) *parser.GenerationResult {
+func (c *ParallelCoder) createPhaseFailure(target *parser.Target, failureReason *parser.FailureReason, startTime time.Time, targetNum int, failCallback func(int)) *parser.GenerationResult {
 	duration := time.Since(startTime).Round(time.Millisecond)
-	uiProgram.Fail(targetNum)
+	failCallback(targetNum)
 	// Don't log directly during TUI execution - it corrupts the display
 	// The error will be shown in the TUI and logged after completion
 
