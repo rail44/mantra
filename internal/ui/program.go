@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"log/slog"
 	"os"
 
@@ -19,8 +20,8 @@ type ProgramOptions struct {
 type Program struct {
 	model        *Model
 	teaProgram   *tea.Program
-	tuiEnabled   bool                     // Whether TUI rendering is enabled
-	plainLoggers map[int]*log.PlainLogger // Plain loggers for each target (plain mode only)
+	tuiEnabled   bool                  // Whether TUI rendering is enabled
+	plainLoggers map[int]*slog.Logger // Plain loggers for each target (plain mode only)
 }
 
 // IsTUIEnabled returns whether the TUI is enabled
@@ -62,7 +63,7 @@ func NewProgramWithOptions(opts ProgramOptions) *Program {
 
 	// Initialize plain loggers map for plain mode
 	if !tuiEnabled {
-		program.plainLoggers = make(map[int]*log.PlainLogger)
+		program.plainLoggers = make(map[int]*slog.Logger)
 	}
 
 	return program
@@ -80,9 +81,10 @@ func (p *Program) AddTarget(name string, index, total int) {
 	// Add target to model
 	p.model.addTarget(name, index, total)
 
-	// Create PlainLogger for this target in plain mode
+	// Create slog.Logger with PlainTargetHandler for this target in plain mode
 	if !p.tuiEnabled {
-		p.plainLoggers[index] = log.NewPlainLogger(index, total, name, os.Stderr, log.GetCurrentLevel()).(*log.PlainLogger)
+		handler := log.NewPlainTargetHandler(index, total, name, os.Stderr, log.GetCurrentLevel())
+		p.plainLoggers[index] = slog.New(handler)
 	}
 }
 
@@ -95,22 +97,15 @@ func (p *Program) SendLog(targetIndex int, record slog.Record) {
 			Record:      record,
 		})
 	} else {
-		// Plain mode: output via PlainLogger
+		// Plain mode: output via slog.Logger
 		if logger, ok := p.plainLoggers[targetIndex]; ok {
-			// Use the PlainLogger's formatAndWrite method internally
-			// Since we can't call it directly, we need to route through the appropriate log level method
-			switch {
-			case record.Level >= slog.LevelError:
-				logger.Error(record.Message)
-			case record.Level >= slog.LevelWarn:
-				logger.Warn(record.Message)
-			case record.Level >= slog.LevelInfo:
-				logger.Info(record.Message)
-			case record.Level >= slog.LevelDebug:
-				logger.Debug(record.Message)
-			default:
-				logger.Trace(record.Message)
-			}
+			// Use LogAttrs to preserve all record attributes
+			var attrs []slog.Attr
+			record.Attrs(func(a slog.Attr) bool {
+				attrs = append(attrs, a)
+				return true
+			})
+			logger.LogAttrs(context.Background(), record.Level, record.Message, attrs...)
 		}
 	}
 }

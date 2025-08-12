@@ -127,6 +127,54 @@ func (h *CallbackHandler) WithGroup(name string) slog.Handler {
 	return h
 }
 
+// PlainTargetHandler is a slog.Handler for plain mode output with target information
+type PlainTargetHandler struct {
+	BaseHandler
+	targetNum    int
+	totalTargets int
+	targetName   string
+	output       io.Writer
+}
+
+// NewPlainTargetHandler creates a new handler for plain mode with target information
+func NewPlainTargetHandler(targetNum, totalTargets int, targetName string, output io.Writer, level slog.Level) *PlainTargetHandler {
+	return &PlainTargetHandler{
+		BaseHandler:  BaseHandler{level: level},
+		targetNum:    targetNum,
+		totalTargets: totalTargets,
+		targetName:   targetName,
+		output:       output,
+	}
+}
+
+// Handle processes the Record and outputs formatted log
+func (h *PlainTargetHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Format level prefix and message
+	levelStr, formattedMsg := h.FormatRecord(r)
+
+	// Format target info
+	targetInfo := fmt.Sprintf("[%d/%d %s]", h.targetNum, h.totalTargets, h.targetName)
+
+	// Write to output
+	fmt.Fprintf(h.output, "%s%s %s\n", levelStr, targetInfo, formattedMsg)
+	return nil
+}
+
+// WithAttrs returns a new Handler with the given attributes
+func (h *PlainTargetHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	// For simplicity, we don't support WithAttrs
+	return h
+}
+
+// WithGroup returns a new Handler with the given group name
+func (h *PlainTargetHandler) WithGroup(name string) slog.Handler {
+	// For simplicity, we don't support WithGroup
+	return h
+}
+
 // PlainLogger is a logger that outputs formatted logs for plain mode
 type PlainLogger struct {
 	targetNum    int
@@ -145,6 +193,44 @@ func NewPlainLogger(targetNum, totalTargets int, targetName string, output io.Wr
 		output:       output,
 		level:        level,
 	}
+}
+
+// HandleRecord processes a log record directly
+func (l *PlainLogger) HandleRecord(record slog.Record) {
+	// Check log level
+	if record.Level < l.level {
+		return
+	}
+
+	// Format level prefix
+	var levelStr string
+	switch {
+	case record.Level >= slog.LevelError:
+		levelStr = "[ERROR] "
+	case record.Level >= slog.LevelWarn:
+		levelStr = "[WARN] "
+	case record.Level >= slog.LevelInfo:
+		levelStr = "" // No prefix for INFO
+	case record.Level >= slog.LevelDebug:
+		levelStr = "[DEBUG] "
+	default:
+		levelStr = "[TRACE] "
+	}
+
+	// Format target info
+	targetInfo := fmt.Sprintf("[%d/%d %s]", l.targetNum, l.totalTargets, l.targetName)
+
+	// Format message with attributes from the record
+	formattedMsg := record.Message
+	record.Attrs(func(a slog.Attr) bool {
+		if a.Key != slog.TimeKey { // Skip time attribute
+			formattedMsg += fmt.Sprintf(" %s=%v", a.Key, a.Value.Any())
+		}
+		return true
+	})
+
+	// Write to output
+	fmt.Fprintf(l.output, "%s%s %s\n", levelStr, targetInfo, formattedMsg)
 }
 
 func (l *PlainLogger) formatAndWrite(level slog.Level, msg string, args ...any) {
