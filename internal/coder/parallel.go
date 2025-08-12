@@ -112,33 +112,27 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	return allResults, nil
 }
 
-// TargetCallbacks contains callbacks for target lifecycle events
-type TargetCallbacks struct {
-	SendLog     func(record slog.Record)
-	MarkRunning func(targetNum int)
-	Complete    func(targetNum int)
-	Fail        func(targetNum int)
-}
-
 // TargetCoder handles the code generation for a single target
 type TargetCoder struct {
-	coder        *ParallelCoder
-	ctx          context.Context
-	target       TargetContext
-	projectRoot  string
-	index        int
-	total        int
-	callbacks    TargetCallbacks
-	eventCallback func(string, string)
-	logger       *slog.Logger
-	startTime    time.Time
+	coder       *ParallelCoder
+	ctx         context.Context
+	target      TargetContext
+	projectRoot string
+	index       int
+	total       int
+	uiProgram   *ui.Program
+	eventCh     chan phase.TargetEvent
+	logger      *slog.Logger
+	startTime   time.Time
 }
 
 // NewTargetCoder creates a new target coder
-func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetContext, projectRoot string, index, total int, callbacks TargetCallbacks, eventCallback func(string, string)) *TargetCoder {
+func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetContext, projectRoot string, index, total int, uiProgram *ui.Program, eventCh chan phase.TargetEvent) *TargetCoder {
 	// Create a callback handler with target attributes
 	callbackHandler := log.NewCallbackHandler(
-		callbacks.SendLog,
+		func(record slog.Record) {
+			uiProgram.SendLog(record)
+		},
 	).WithAttrs([]slog.Attr{
 		slog.Int("targetIndex", index),
 		slog.Int("totalTargets", total),
@@ -146,16 +140,16 @@ func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetCont
 	})
 
 	return &TargetCoder{
-		coder:         coder,
-		ctx:           ctx,
-		target:        target,
-		projectRoot:   projectRoot,
-		index:         index,
-		total:         total,
-		callbacks:     callbacks,
-		eventCallback: eventCallback,
-		logger:        slog.New(callbackHandler),
-		startTime:     time.Now(),
+		coder:       coder,
+		ctx:         ctx,
+		target:      target,
+		projectRoot: projectRoot,
+		index:       index,
+		total:       total,
+		uiProgram:   uiProgram,
+		eventCh:     eventCh,
+		logger:      slog.New(callbackHandler),
+		startTime:   time.Now(),
 	}
 }
 
@@ -165,7 +159,7 @@ func (g *TargetCoder) Generate() *parser.GenerationResult {
 	g.logger.Info("Starting generation")
 
 	// Mark target as running
-	g.callbacks.MarkRunning(g.index)
+	g.markRunning()
 
 	// Create LLM client
 	client, err := g.createClient()
@@ -200,7 +194,7 @@ func (g *TargetCoder) createClient() (*llm.Client, error) {
 // executeContextGathering executes the context gathering phase
 func (g *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]interface{}, *parser.FailureReason) {
 	stepCallback := func(step string) {
-		g.eventCallback(phase.PhaseContextGathering, step)
+		g.sendPhaseEvent(phase.PhaseContextGathering, step)
 	}
 	return runner.ExecuteContextGathering(g.ctx, g.target.Target, g.target.FileContent, g.coder.config.Dest, stepCallback)
 }
@@ -208,7 +202,7 @@ func (g *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]
 // executeImplementation executes the implementation phase
 func (g *TargetCoder) executeImplementation(runner *phase.Runner, contextResult map[string]interface{}) (string, *parser.FailureReason) {
 	stepCallback := func(step string) {
-		g.eventCallback(phase.PhaseImplementation, step)
+		g.sendPhaseEvent(phase.PhaseImplementation, step)
 	}
 	return runner.ExecuteImplementation(g.ctx, g.target.Target, g.target.FileContent, g.target.FileInfo, g.projectRoot, contextResult, stepCallback)
 }
@@ -217,7 +211,7 @@ func (g *TargetCoder) executeImplementation(runner *phase.Runner, contextResult 
 func (g *TargetCoder) successResult(implementation string) *parser.GenerationResult {
 	duration := time.Since(g.startTime).Round(time.Millisecond)
 	g.logger.Info("Successfully generated implementation", "duration", duration)
-	g.callbacks.Complete(g.index)
+	g.markComplete()
 
 	return &parser.GenerationResult{
 		Target:         g.target.Target,
@@ -229,7 +223,7 @@ func (g *TargetCoder) successResult(implementation string) *parser.GenerationRes
 
 // failureResult creates a failure result
 func (g *TargetCoder) failureResult(phase, message, context string) *parser.GenerationResult {
-	g.callbacks.Fail(g.index)
+	g.markFailed()
 	return &parser.GenerationResult{
 		Target:  g.target.Target,
 		Success: false,
@@ -244,12 +238,39 @@ func (g *TargetCoder) failureResult(phase, message, context string) *parser.Gene
 
 // phaseFailureResult creates a failure result from a phase error
 func (g *TargetCoder) phaseFailureResult(failureReason *parser.FailureReason) *parser.GenerationResult {
-	g.callbacks.Fail(g.index)
+	g.markFailed()
 	return &parser.GenerationResult{
 		Target:        g.target.Target,
 		Success:       false,
 		FailureReason: failureReason,
 		Duration:      time.Since(g.startTime).Round(time.Millisecond),
+	}
+}
+
+// UI callback methods
+
+// markRunning marks the target as running
+func (g *TargetCoder) markRunning() {
+	g.uiProgram.MarkAsRunning(g.index)
+}
+
+// markComplete marks the target as complete
+func (g *TargetCoder) markComplete() {
+	g.uiProgram.Complete(g.index)
+}
+
+// markFailed marks the target as failed
+func (g *TargetCoder) markFailed() {
+	g.uiProgram.Fail(g.index)
+}
+
+// sendPhaseEvent sends a phase event to the UI
+func (g *TargetCoder) sendPhaseEvent(phaseName, step string) {
+	g.eventCh <- phase.TargetEvent{
+		TargetIndex: g.index,
+		Phase:       phaseName,
+		Step:        step,
+		Time:        time.Now(),
 	}
 }
 
@@ -306,34 +327,8 @@ func (c *ParallelCoder) processTarget(ctx context.Context, tc TargetContext, pro
 	// Register target with UI
 	uiProgram.AddTarget(tc.Target.GetDisplayName(), index, total)
 
-	// Create event callback for this target
-	eventCallback := func(phaseName, step string) {
-		eventCh <- phase.TargetEvent{
-			TargetIndex: index,
-			Phase:       phaseName,
-			Step:        step,
-			Time:        time.Now(),
-		}
-	}
-
-	// Create target callbacks
-	targetCallbacks := TargetCallbacks{
-		SendLog: func(record slog.Record) {
-			uiProgram.SendLog(record)
-		},
-		MarkRunning: func(targetNum int) {
-			uiProgram.MarkAsRunning(targetNum)
-		},
-		Complete: func(targetNum int) {
-			uiProgram.Complete(targetNum)
-		},
-		Fail: func(targetNum int) {
-			uiProgram.Fail(targetNum)
-		},
-	}
-
 	// Create and run the target coder
-	coder := NewTargetCoder(c, ctx, tc, projectRoot, index, total, targetCallbacks, eventCallback)
+	coder := NewTargetCoder(c, ctx, tc, projectRoot, index, total, uiProgram, eventCh)
 	return coder.Generate()
 }
 
