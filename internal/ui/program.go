@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -79,46 +78,17 @@ func (p *Program) Start() error {
 func (p *Program) AddTarget(name string, index, total int) {
 	// Add target to model
 	p.model.addTarget(name, index, total)
-
-	// Print initial progress message for plain output
-	if p.shouldShowPlainOutput() {
-		fmt.Fprintf(os.Stderr, "[%d/%d] Processing: %s\n", index, total, name)
-	}
+	// Plain mode output is handled by PlainLogger
 }
 
 // SendLog sends a log message to the TUI
 func (p *Program) SendLog(targetIndex int, level slog.Level, message string) {
+	// In TUI mode only - plain mode uses PlainLogger directly
 	p.teaProgram.Send(logMsg{
 		TargetIndex: targetIndex,
 		Level:       level,
 		Message:     message,
 	})
-}
-
-// shouldShowPlainOutput returns true if plain text output should be shown
-func (p *Program) shouldShowPlainOutput() bool {
-	return p.plain || !p.isTerminal
-}
-
-// printProgress prints a progress message for plain output mode
-func (p *Program) printProgress(targetIndex int, format string, args ...interface{}) {
-	if !p.shouldShowPlainOutput() {
-		return
-	}
-
-	p.model.mu.RLock()
-	defer p.model.mu.RUnlock()
-
-	if targetIndex > 0 && targetIndex <= len(p.model.targets) {
-		target := p.model.targets[targetIndex-1]
-		prefix := fmt.Sprintf("[%d/%d]", targetIndex, len(p.model.targets))
-		if format == "" {
-			fmt.Fprintf(os.Stderr, "%s %s\n", prefix, target.Name)
-		} else {
-			msg := fmt.Sprintf(format, args...)
-			fmt.Fprintf(os.Stderr, "%s %s: %s\n", prefix, msg, target.Name)
-		}
-	}
 }
 
 // MarkAsRunning marks a target as running
@@ -127,8 +97,7 @@ func (p *Program) MarkAsRunning(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "running",
 	})
-
-	p.printProgress(targetIndex, "Processing")
+	// Plain mode output is handled by PlainLogger
 }
 
 // Complete marks a target as completed
@@ -137,8 +106,7 @@ func (p *Program) Complete(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "completed",
 	})
-
-	p.printProgress(targetIndex, "Completed")
+	// Plain mode output is handled by PlainLogger
 }
 
 // Fail marks a target as failed
@@ -147,8 +115,7 @@ func (p *Program) Fail(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "failed",
 	})
-
-	p.printProgress(targetIndex, "Failed")
+	// Plain mode output is handled by PlainLogger
 }
 
 // UpdatePhase updates the phase information for a target
@@ -158,16 +125,7 @@ func (p *Program) UpdatePhase(targetIndex int, phase string, detail string) {
 		Phase:       phase,
 		Detail:      detail,
 	})
-
-	// Print phase update for plain output
-	if p.shouldShowPlainOutput() {
-		p.model.mu.RLock()
-		if targetIndex > 0 && targetIndex <= len(p.model.targets) {
-			target := p.model.targets[targetIndex-1]
-			fmt.Fprintf(os.Stderr, "[%d/%d] %s - %s: %s\n", targetIndex, len(p.model.targets), target.Name, phase, detail)
-		}
-		p.model.mu.RUnlock()
-	}
+	// Plain mode output is handled by PlainLogger (phase updates are shown as regular logs)
 }
 
 // Quit stops the TUI program
