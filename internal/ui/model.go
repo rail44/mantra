@@ -37,11 +37,11 @@ func (t *TargetView) GetAllLogs() []LogEntry {
 
 // Model is the Bubble Tea model for the TUI
 type Model struct {
-	targets      []*TargetView
-	width        int
-	height       int
-	mu           sync.RWMutex
-	logLevel     slog.Level // Current log level for filtering
+	targets  []*TargetView
+	width    int
+	height   int
+	mu       sync.RWMutex
+	logLevel slog.Level // Current log level for filtering
 }
 
 // newModel creates a new TUI model
@@ -189,7 +189,7 @@ func (m *Model) appendTargetLines(sb *strings.Builder, targets []string) {
 				// Subsequent lines already have their own indentation
 				displayLine = "  " + l
 			}
-			
+
 			// Truncate lines if they exceed terminal width
 			if m.width > 0 && len(displayLine) > m.width {
 				displayLine = displayLine[:m.width-3] + "..."
@@ -306,7 +306,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			targetLine = fmt.Sprintf("%s %s", spinner, target.Name)
 
 			target.mu.RLock()
-			
+
 			// Add phase information if available
 			if target.Phase != "" && target.Phase != "Initializing" {
 				targetLine += fmt.Sprintf(" [%s", target.Phase)
@@ -315,7 +315,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 				}
 				targetLine += "]"
 			}
-			
+
 			// Always add log area (show latest log or placeholder)
 			logFound := false
 			if len(target.Logs) > 0 {
@@ -340,7 +340,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			if !logFound {
 				targetLine += "\n    → (waiting...)"
 			}
-			
+
 			target.mu.RUnlock()
 
 			activeTargets = append(activeTargets, targetLine)
@@ -349,7 +349,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			icon := m.getCompletionIcon(target.Status)
 			duration := target.EndTime.Sub(target.StartTime).Round(time.Millisecond)
 			targetLine = fmt.Sprintf("%s %s (%s)", icon, target.Name, duration)
-			
+
 			// Add final result message as a separate indented line (same as active targets)
 			target.mu.RLock()
 			logFound := false
@@ -380,7 +380,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 				}
 			}
 			target.mu.RUnlock()
-			
+
 			completedTargets = append(completedTargets, targetLine)
 		}
 	}
@@ -435,11 +435,6 @@ func (m *Model) addLog(msg logMsg) {
 		Message:   msg.Message,
 		Timestamp: time.Now(),
 	})
-
-	// Auto-update status on first log
-	if target.Status == "pending" && msg.Level == slog.LevelInfo {
-		target.Status = "running"
-	}
 }
 
 func (m *Model) updateStatus(msg statusMsg) {

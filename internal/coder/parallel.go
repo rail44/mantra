@@ -64,6 +64,16 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 		LogLevel: log.GetCurrentLevel(),
 	})
 
+	// Create event channel for phase updates
+	eventCh := make(chan phase.TargetEvent, 100)
+
+	// Start UI event processor
+	go func() {
+		for event := range eventCh {
+			uiProgram.UpdatePhase(event.TargetIndex, event.Phase, event.Step)
+		}
+	}()
+
 	// Thread-safe collections for collecting results
 	var mu sync.Mutex
 	var allResults []*parser.GenerationResult
@@ -85,7 +95,17 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 			targetCtx := tc
 
 			g.Go(func() error {
-				result := c.generateSingleTarget(ctx, targetCtx, projectRoot, index, total, uiProgram)
+				// Create event callback for this target
+				eventCallback := func(phaseName, step string) {
+					eventCh <- phase.TargetEvent{
+						TargetIndex: index,
+						Phase:       phaseName,
+						Step:        step,
+						Time:        time.Now(),
+					}
+				}
+
+				result := c.generateSingleTargetWithCallback(ctx, targetCtx, projectRoot, index, total, uiProgram, eventCallback)
 
 				mu.Lock()
 				allResults = append(allResults, result)
@@ -97,6 +117,9 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 		// Wait for all goroutines to complete
 		g.Wait()
+
+		// Close event channel
+		close(eventCh)
 
 		// Signal completion
 		close(done)
@@ -146,12 +169,15 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	return allResults, nil
 }
 
-// generateSingleTarget generates implementation for a single target
-func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program) *parser.GenerationResult {
+// generateSingleTargetWithCallback generates implementation for a single target with event callback
+func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, uiProgram *ui.Program, eventCallback func(string, string)) *parser.GenerationResult {
 	targetStart := time.Now()
 
 	// Create a target-specific logger with display name
 	logger := uiProgram.CreateTargetLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
+
+	// Explicitly mark target as running now that we're starting execution
+	uiProgram.MarkAsRunning(targetNum)
 
 	// Create a new llm.Client for this target with shared HTTP client
 	// This ensures each target has independent state (temperature, systemPrompt)
@@ -166,13 +192,19 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 
 	// Phase 1: Context Gathering
 	// Pass destination directory for PackageLoader to use prepared stub files
-	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, c.config.Dest, targetNum, uiProgram)
+	contextStepCallback := func(step string) {
+		eventCallback(phase.PhaseContextGathering, step)
+	}
+	contextResult, contextError := runner.ExecuteContextGathering(ctx, tc.Target, tc.FileContent, c.config.Dest, contextStepCallback)
 	if contextError != nil {
 		return c.createPhaseFailure(tc.Target, contextError, targetStart, targetNum, uiProgram)
 	}
 
 	// Phase 2: Implementation
-	implementation, implError := runner.ExecuteImplementation(ctx, tc.Target, tc.FileContent, tc.FileInfo, projectRoot, contextResult, targetNum, uiProgram)
+	implStepCallback := func(step string) {
+		eventCallback(phase.PhaseImplementation, step)
+	}
+	implementation, implError := runner.ExecuteImplementation(ctx, tc.Target, tc.FileContent, tc.FileInfo, projectRoot, contextResult, implStepCallback)
 	if implError != nil {
 		return c.createPhaseFailure(tc.Target, implError, targetStart, targetNum, uiProgram)
 	}

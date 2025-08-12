@@ -89,7 +89,6 @@ func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger
 	return newTargetLogger(p, name, index)
 }
 
-
 // sendLog sends a log message to the TUI
 func (p *Program) sendLog(targetIndex int, level slog.Level, message string) {
 	p.teaProgram.Send(logMsg{
@@ -123,6 +122,16 @@ func (p *Program) printProgress(targetIndex int, format string, args ...interfac
 			fmt.Fprintf(os.Stderr, "%s %s: %s\n", prefix, msg, target.Name)
 		}
 	}
+}
+
+// MarkAsRunning marks a target as running
+func (p *Program) MarkAsRunning(targetIndex int) {
+	p.teaProgram.Send(statusMsg{
+		TargetIndex: targetIndex,
+		Status:      "running",
+	})
+
+	p.printProgress(targetIndex, "Processing")
 }
 
 // Complete marks a target as completed

@@ -5,14 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/rail44/mantra/internal/formatter"
 	"github.com/rail44/mantra/internal/llm"
 	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/tools"
-	"github.com/rail44/mantra/internal/ui"
 )
+
+// TargetEvent represents a target execution event with phase information
+type TargetEvent struct {
+	TargetIndex int
+	Phase       string
+	Step        string
+	Time        time.Time
+}
+
+// StepCallback is called when a phase step changes
+type StepCallback func(step string)
 
 // Runner handles phase execution
 type Runner struct {
@@ -29,10 +40,10 @@ func NewRunner(client *llm.Client, logger log.Logger) *Runner {
 }
 
 // ExecuteContextGathering executes the context gathering phase
-func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, targetNum int, uiProgram *ui.Program) (map[string]interface{}, *parser.FailureReason) {
+func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, setStep StepCallback) (map[string]interface{}, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
-	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Initializing")
+	setStep(StateContextInitializing)
 
 	// Setup phase
 	// Use destination directory if provided, otherwise use source directory
@@ -40,12 +51,11 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	if packagePath == "" {
 		packagePath = filepath.Dir(target.FilePath)
 	}
-	contextPhase := NewContextGatheringPhase(0.6, packagePath, r.logger)
+	contextPhase := NewContextGatheringPhase(0.6, packagePath, r.logger, setStep)
 	contextPhase.Reset() // Ensure clean state
-	
-	// Create tool context with UI program for phase updates
+
+	// Create tool context
 	toolContext := tools.NewContext(nil, target, packagePath)
-	toolContext.SetUI(uiProgram, targetNum)
 	r.configureClientForPhase(contextPhase, toolContext)
 
 	// Build prompt
@@ -61,7 +71,7 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	}
 
 	// Execute
-	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Analyzing codebase")
+	setStep(StateContextAnalyzing)
 	_, err = r.client.Generate(ctx, initialPrompt)
 	if err != nil {
 		r.logger.Error("Context gathering failed", "error", err.Error())
@@ -77,18 +87,17 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 }
 
 // ExecuteImplementation executes the implementation phase
-func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]interface{}, targetNum int, uiProgram *ui.Program) (string, *parser.FailureReason) {
+func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]interface{}, setStep StepCallback) (string, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
-	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
+	setStep(StateImplPreparing)
 
 	// Setup phase
-	implPhase := NewImplementationPhase(0.2, projectRoot, r.logger)
+	implPhase := NewImplementationPhase(0.2, projectRoot, r.logger, setStep)
 	implPhase.Reset() // Ensure clean state
 
-	// Create tool context for static analysis with UI program
+	// Create tool context for static analysis
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)
-	toolContext.SetUI(uiProgram, targetNum)
 	r.configureClientForPhase(implPhase, toolContext)
 
 	// Build prompt with context
@@ -105,7 +114,7 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 	}
 
 	// Execute
-	uiProgram.UpdatePhase(targetNum, "Implementation", "Generating code")
+	setStep(StateImplGenerating)
 	_, err = r.client.Generate(ctx, implPrompt)
 	if err != nil {
 		r.logger.Error("Implementation failed", "error", err.Error())
