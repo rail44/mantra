@@ -14,11 +14,8 @@ type SimpleCache struct {
 	items map[string]cacheItem
 }
 
-// hoge
-
 // mantra: キャッシュから値を取得する。存在しない場合はnilを返す。有効期限が切れている場合もnilを返す。
 func (c *SimpleCache) Get(key string) any {
-	// hoge
 	panic("not implemented")
 }
 

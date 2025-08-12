@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"log/slog"
 )
 
 // Generate sends a prompt with tool definitions and handles tool calls
 func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool, executor ToolExecutor) (string, error) {
-	overallStart := time.Now()
 	var toolExecutionTime time.Duration
 	var apiCallTime time.Duration
 	var toolCallCount int
@@ -109,13 +106,11 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 
 			// No tool calls and no result tool, or result tool already called - return the content
 			if responseMsg.Content != "" {
-				c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 				return responseMsg.Content, nil
 			}
 
 			// No content and no tool calls - this is unusual
 			logger.Warn("No content and no tool calls in response")
-			c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 			return "", fmt.Errorf("model returned empty response without tool calls")
 		}
 
@@ -134,7 +129,6 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 				// Find and return the result from the terminal tool
 				for _, result := range toolResults {
 					if result.ToolCallID == toolCall.ID {
-						c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 						return result.Content, nil
 					}
 				}
@@ -143,16 +137,5 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	}
 
 	logger.Warn("Reached maximum rounds of tool calls", "max_rounds", maxRounds)
-	c.logTimingStats(logger, overallStart, apiCallTime, toolExecutionTime, toolCallCount)
 	return "", fmt.Errorf("exceeded maximum rounds (%d) of tool calls", maxRounds)
-}
-
-// logTimingStats logs timing statistics for the generation
-func (c *OpenAIClient) logTimingStats(logger *slog.Logger, overallStart time.Time, apiCallTime, toolExecutionTime time.Duration, toolCallCount int) {
-	totalTime := time.Since(overallStart)
-	logger.Info(fmt.Sprintf("[TIMING] Total: %v, API: %v, Tools: %v (%d calls)",
-		totalTime.Round(time.Millisecond),
-		apiCallTime.Round(time.Millisecond),
-		toolExecutionTime.Round(time.Millisecond),
-		toolCallCount))
 }
