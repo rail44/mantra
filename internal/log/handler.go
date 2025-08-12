@@ -110,16 +110,8 @@ func (h *CallbackHandler) Handle(ctx context.Context, record slog.Record) error 
 		return nil
 	}
 
-	// Collect attributes into args slice for backward compatibility
-	args := make([]any, 0, record.NumAttrs()*2)
-	record.Attrs(func(a slog.Attr) bool {
-		if a.Key != slog.TimeKey { // Skip time attribute
-			args = append(args, a.Key, a.Value.Any())
-		}
-		return true
-	})
-
-	h.callback(record.Level, record.Message, args)
+	// Simply forward the record to the callback
+	h.callback(record)
 	return nil
 }
 
@@ -133,13 +125,6 @@ func (h *CallbackHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 func (h *CallbackHandler) WithGroup(name string) slog.Handler {
 	// For simplicity, we don't support WithGroup
 	return h
-}
-
-// NewCallbackLoggerFromHandler creates a Logger that uses a CallbackHandler
-func NewCallbackLoggerFromHandler(callback CallbackFunc, minLevel slog.Level) Logger {
-	handler := NewCallbackHandler(callback, minLevel)
-	slogger := slog.New(handler)
-	return &slogLogger{logger: slogger}
 }
 
 // PlainLogger is a logger that outputs formatted logs for plain mode

@@ -60,8 +60,7 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	// Create TUI program for parallel execution
 	// Use plain console output if --plain flag is set
 	uiProgram := ui.NewProgramWithOptions(ui.ProgramOptions{
-		Plain:    c.config.Plain,
-		LogLevel: log.GetCurrentLevel(),
+		Plain: c.config.Plain,
 	})
 
 	// Create event channel for phase updates
@@ -108,39 +107,21 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 					}
 				}
 
-				// Create target callbacks based on UI mode
-				var targetCallbacks TargetCallbacks
-				if uiProgram.IsTUIEnabled() {
-					// TUI mode: use all callbacks
-					targetCallbacks = TargetCallbacks{
-						SendLog: func(targetNum int, level slog.Level, message string) {
-							uiProgram.SendLog(targetNum, level, message)
-						},
-						MarkRunning: func(targetNum int) {
-							uiProgram.MarkAsRunning(targetNum)
-						},
-						Complete: func(targetNum int) {
-							uiProgram.Complete(targetNum)
-						},
-						Fail: func(targetNum int) {
-							uiProgram.Fail(targetNum)
-						},
-					}
-				} else {
-					// Plain mode: SendLog is nil (PlainLogger handles output directly)
-					// Other callbacks are used for state tracking
-					targetCallbacks = TargetCallbacks{
-						SendLog: nil, // PlainLogger handles output directly
-						MarkRunning: func(targetNum int) {
-							uiProgram.MarkAsRunning(targetNum)
-						},
-						Complete: func(targetNum int) {
-							uiProgram.Complete(targetNum)
-						},
-						Fail: func(targetNum int) {
-							uiProgram.Fail(targetNum)
-						},
-					}
+				// Create target callbacks - always use the same callbacks
+				// UI program will handle the difference between TUI and plain mode
+				targetCallbacks := TargetCallbacks{
+					SendLog: func(targetNum int, record slog.Record) {
+						uiProgram.SendLog(targetNum, record)
+					},
+					MarkRunning: func(targetNum int) {
+						uiProgram.MarkAsRunning(targetNum)
+					},
+					Complete: func(targetNum int) {
+						uiProgram.Complete(targetNum)
+					},
+					Fail: func(targetNum int) {
+						uiProgram.Fail(targetNum)
+					},
 				}
 
 				result := c.generateSingleTargetWithCallback(ctx, targetCtx, projectRoot, index, total, targetCallbacks, eventCallback)
@@ -209,7 +190,7 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 // TargetCallbacks contains callbacks for target lifecycle events
 type TargetCallbacks struct {
-	SendLog     func(targetNum int, level slog.Level, message string)
+	SendLog     func(targetNum int, record slog.Record)
 	MarkRunning func(targetNum int)
 	Complete    func(targetNum int)
 	Fail        func(targetNum int)
@@ -219,25 +200,13 @@ type TargetCallbacks struct {
 func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, callbacks TargetCallbacks, eventCallback func(string, string)) *parser.GenerationResult {
 	targetStart := time.Now()
 
-	// Create appropriate logger based on UI mode
-	var logger log.Logger
-	if callbacks.SendLog != nil {
-		// TUI mode: use callback logger to send logs to UI
-		logger = log.NewCallbackLoggerFromHandler(func(level slog.Level, msg string, args []any) {
-			// Format message with args
-			formattedMsg := msg
-			if len(args) > 0 {
-				// Simple formatting for structured attributes
-				for i := 0; i < len(args)-1; i += 2 {
-					formattedMsg += fmt.Sprintf(" %v=%v", args[i], args[i+1])
-				}
-			}
-			callbacks.SendLog(targetNum, level, formattedMsg)
-		}, log.GetCurrentLevel())
-	} else {
-		// Plain mode: use PlainLogger for direct output
-		logger = log.NewPlainLogger(targetNum, totalTargets, tc.Target.GetDisplayName(), os.Stderr, log.GetCurrentLevel())
-	}
+	// Always use callback logger to send logs to UI
+	// UI program will handle the difference between TUI and plain mode
+	logger := log.NewCallbackLogger(func(record slog.Record) {
+		if callbacks.SendLog != nil {
+			callbacks.SendLog(targetNum, record)
+		}
+	}, log.GetCurrentLevel())
 
 	// Log generation start
 	logger.Info("Starting generation")
@@ -358,10 +327,10 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 }
 
 // reEmitLogEntry re-emits a log entry at the appropriate level
-func (c *ParallelCoder) reEmitLogEntry(logEntry ui.LogEntry, targetName string) {
-	message := fmt.Sprintf("[%s] %s", targetName, logEntry.Message)
+func (c *ParallelCoder) reEmitLogEntry(record slog.Record, targetName string) {
+	message := fmt.Sprintf("[%s] %s", targetName, record.Message)
 
-	switch logEntry.Level {
+	switch record.Level {
 	case slog.LevelDebug - 4: // TRACE
 		c.logger.Trace(message)
 	case slog.LevelDebug:

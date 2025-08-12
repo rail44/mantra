@@ -6,31 +6,26 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
+
+	"github.com/rail44/mantra/internal/log"
 )
 
 // ProgramOptions contains options for creating a Program
 type ProgramOptions struct {
-	Plain    bool       // Use plain text output instead of TUI
-	LogLevel slog.Level // Current log level
+	Plain bool // Use plain text output instead of TUI
 }
 
 // Program manages the TUI program and provides logger creation
 type Program struct {
-	model      *Model
-	teaProgram *tea.Program
-	isTerminal bool       // Whether stdout is a terminal
-	plain      bool       // Whether to use plain text output
-	logLevel   slog.Level // Current log level for filtering
-}
-
-// IsTerminal returns whether the program is running in a terminal
-func (p *Program) IsTerminal() bool {
-	return p.isTerminal
+	model        *Model
+	teaProgram   *tea.Program
+	tuiEnabled   bool                     // Whether TUI rendering is enabled
+	plainLoggers map[int]*log.PlainLogger // Plain loggers for each target (plain mode only)
 }
 
 // IsTUIEnabled returns whether the TUI is enabled
 func (p *Program) IsTUIEnabled() bool {
-	return p.isTerminal && !p.plain
+	return p.tuiEnabled
 }
 
 // NewProgram creates a new TUI program with default options
@@ -45,26 +40,32 @@ func NewProgramWithOptions(opts ProgramOptions) *Program {
 	// Check if stdout is a terminal
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
 
-	// Set log level in the model
-	model.setLogLevel(opts.LogLevel)
+	// Determine if TUI should be enabled
+	tuiEnabled := isTerminal && !opts.Plain
 
 	var teaProgram *tea.Program
-	if opts.Plain || !isTerminal {
-		// Plain mode or non-terminal mode - disable TUI rendering
-		teaProgram = tea.NewProgram(model, tea.WithInput(nil), tea.WithoutRenderer())
-	} else {
+	if tuiEnabled {
 		// Normal terminal mode - standard TUI setup
 		// We don't use alt screen to keep previous logs visible
 		teaProgram = tea.NewProgram(model)
+	} else {
+		// Plain mode or non-terminal mode - disable TUI rendering
+		// Still use tea.Program for event handling and model updates
+		teaProgram = tea.NewProgram(model, tea.WithInput(nil), tea.WithoutRenderer())
 	}
 
-	return &Program{
+	program := &Program{
 		model:      model,
 		teaProgram: teaProgram,
-		isTerminal: isTerminal,
-		plain:      opts.Plain,
-		logLevel:   opts.LogLevel,
+		tuiEnabled: tuiEnabled,
 	}
+
+	// Initialize plain loggers map for plain mode
+	if !tuiEnabled {
+		program.plainLoggers = make(map[int]*log.PlainLogger)
+	}
+
+	return program
 }
 
 // Start starts the TUI program (blocks until Quit is called)
@@ -78,17 +79,40 @@ func (p *Program) Start() error {
 func (p *Program) AddTarget(name string, index, total int) {
 	// Add target to model
 	p.model.addTarget(name, index, total)
-	// Plain mode output is handled by PlainLogger
+
+	// Create PlainLogger for this target in plain mode
+	if !p.tuiEnabled {
+		p.plainLoggers[index] = log.NewPlainLogger(index, total, name, os.Stderr, log.GetCurrentLevel()).(*log.PlainLogger)
+	}
 }
 
-// SendLog sends a log message to the TUI
-func (p *Program) SendLog(targetIndex int, level slog.Level, message string) {
-	// In TUI mode only - plain mode uses PlainLogger directly
-	p.teaProgram.Send(logMsg{
-		TargetIndex: targetIndex,
-		Level:       level,
-		Message:     message,
-	})
+// SendLog sends a log record to the TUI or outputs via PlainLogger
+func (p *Program) SendLog(targetIndex int, record slog.Record) {
+	if p.tuiEnabled {
+		// TUI mode: send to TUI
+		p.teaProgram.Send(logMsg{
+			TargetIndex: targetIndex,
+			Record:      record,
+		})
+	} else {
+		// Plain mode: output via PlainLogger
+		if logger, ok := p.plainLoggers[targetIndex]; ok {
+			// Use the PlainLogger's formatAndWrite method internally
+			// Since we can't call it directly, we need to route through the appropriate log level method
+			switch {
+			case record.Level >= slog.LevelError:
+				logger.Error(record.Message)
+			case record.Level >= slog.LevelWarn:
+				logger.Warn(record.Message)
+			case record.Level >= slog.LevelInfo:
+				logger.Info(record.Message)
+			case record.Level >= slog.LevelDebug:
+				logger.Debug(record.Message)
+			default:
+				logger.Trace(record.Message)
+			}
+		}
+	}
 }
 
 // MarkAsRunning marks a target as running
@@ -130,7 +154,7 @@ func (p *Program) UpdatePhase(targetIndex int, phase string, detail string) {
 
 // Quit stops the TUI program
 func (p *Program) Quit() {
-	if p.isTerminal {
+	if p.tuiEnabled {
 		p.teaProgram.Quit()
 	}
 }

@@ -10,13 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// LogEntry represents a single log message
-type LogEntry struct {
-	Level     slog.Level
-	Message   string
-	Timestamp time.Time
-}
-
 // TargetView represents the view state for a single target
 type TargetView struct {
 	Name        string
@@ -25,52 +18,36 @@ type TargetView struct {
 	Status      string
 	Phase       string // Current phase (e.g., "Context Gathering", "Implementation")
 	PhaseDetail string // Phase-specific detail (e.g., "Analyzing codebase", "Generating code")
-	Logs        []LogEntry
+	Logs        []slog.Record
 	StartTime   time.Time
 	EndTime     time.Time
 	mu          sync.RWMutex
 }
 
 // GetAllLogs returns a copy of all logs for the target
-func (t *TargetView) GetAllLogs() []LogEntry {
+func (t *TargetView) GetAllLogs() []slog.Record {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	// Create a copy to avoid data races
-	logs := make([]LogEntry, len(t.Logs))
+	logs := make([]slog.Record, len(t.Logs))
 	copy(logs, t.Logs)
 	return logs
 }
 
 // Model is the Bubble Tea model for the TUI
 type Model struct {
-	targets  []*TargetView
-	width    int
-	height   int
-	mu       sync.RWMutex
-	logLevel slog.Level // Current log level for filtering
+	targets []*TargetView
+	width   int
+	height  int
+	mu      sync.RWMutex
 }
 
 // newModel creates a new TUI model
 func newModel() *Model {
 	return &Model{
-		targets:  make([]*TargetView, 0),
-		logLevel: slog.LevelInfo, // Default to INFO
+		targets: make([]*TargetView, 0),
 	}
-}
-
-// setLogLevel sets the log level for filtering
-func (m *Model) setLogLevel(level slog.Level) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.logLevel = level
-}
-
-// shouldShowLog determines if a log should be shown based on the current log level
-func (m *Model) shouldShowLog(level slog.Level) bool {
-	// Use slog's built-in level comparison
-	// Show the log if its level is >= current level
-	return level >= m.logLevel
 }
 
 // addTarget adds a new target to track
@@ -84,7 +61,7 @@ func (m *Model) addTarget(name string, index, total int) {
 		Total:     total,
 		Status:    "pending",
 		Phase:     "Initializing",
-		Logs:      make([]LogEntry, 0),
+		Logs:      make([]slog.Record, 0),
 		StartTime: time.Now(),
 	}
 	m.targets = append(m.targets, target)
@@ -326,22 +303,15 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			// Always add log area (show latest log or placeholder)
 			logFound := false
 			if len(target.Logs) > 0 {
-				// Find the latest log entry that should be shown based on log level
-				for i := len(target.Logs) - 1; i >= 0; i-- {
-					log := target.Logs[i]
-					// Skip logs that shouldn't be shown based on log level
-					if !m.shouldShowLog(log.Level) {
-						continue
-					}
-					// Truncate long messages for cleaner display
-					msg := log.Message
-					if len(msg) > 60 {
-						msg = msg[:57] + "..."
-					}
-					targetLine += fmt.Sprintf("\n    • %s", msg)
-					logFound = true
-					break
+				// Show the latest log entry (already filtered by CallbackLogger)
+				log := target.Logs[len(target.Logs)-1]
+				// Truncate long messages for cleaner display
+				msg := log.Message
+				if len(msg) > 60 {
+					msg = msg[:57] + "..."
 				}
+				targetLine += fmt.Sprintf("\n    • %s", msg)
+				logFound = true
 			}
 			// If no log to show, add empty line to maintain consistent spacing
 			if !logFound {
@@ -361,22 +331,15 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			target.mu.RLock()
 			logFound := false
 			if len(target.Logs) > 0 {
-				// Find the latest log entry that should be shown based on log level
-				for i := len(target.Logs) - 1; i >= 0; i-- {
-					log := target.Logs[i]
-					// Skip logs that shouldn't be shown based on log level
-					if !m.shouldShowLog(log.Level) {
-						continue
-					}
-					// Truncate long messages for cleaner display
-					msg := log.Message
-					if len(msg) > 60 {
-						msg = msg[:57] + "..."
-					}
-					targetLine += fmt.Sprintf("\n    • %s", msg)
-					logFound = true
-					break
+				// Show the latest log entry (already filtered by CallbackLogger)
+				log := target.Logs[len(target.Logs)-1]
+				// Truncate long messages for cleaner display
+				msg := log.Message
+				if len(msg) > 60 {
+					msg = msg[:57] + "..."
 				}
+				targetLine += fmt.Sprintf("\n    • %s", msg)
+				logFound = true
 			}
 			// For completed targets, show a result message if no log found
 			if !logFound {
@@ -436,12 +399,8 @@ func (m *Model) addLog(msg logMsg) {
 	target.mu.Lock()
 	defer target.mu.Unlock()
 
-	// Always store the log for later display
-	target.Logs = append(target.Logs, LogEntry{
-		Level:     msg.Level,
-		Message:   msg.Message,
-		Timestamp: time.Now(),
-	})
+	// Always store the log record for later display
+	target.Logs = append(target.Logs, msg.Record)
 }
 
 func (m *Model) updateStatus(msg statusMsg) {
@@ -467,8 +426,7 @@ type tickMsg time.Time
 
 type logMsg struct {
 	TargetIndex int
-	Level       slog.Level
-	Message     string
+	Record      slog.Record
 }
 
 type statusMsg struct {
