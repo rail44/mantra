@@ -37,11 +37,12 @@ func (t *TargetView) GetAllLogs() []LogEntry {
 
 // Model is the Bubble Tea model for the TUI
 type Model struct {
-	targets  []*TargetView
-	width    int
-	height   int
-	mu       sync.RWMutex
-	logLevel slog.Level // Current log level for filtering
+	targets      []*TargetView
+	width        int
+	height       int
+	mu           sync.RWMutex
+	logLevel     slog.Level // Current log level for filtering
+	lastLineCount int        // Track number of lines in last render
 }
 
 // newModel creates a new TUI model
@@ -107,6 +108,8 @@ func (m *Model) Init() tea.Cmd {
 
 // Update handles messages and updates the model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Only handle quit commands
@@ -120,8 +123,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tickMsg:
-		// Refresh display
-		return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		// Schedule next tick
+		cmd = tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 			return tickMsg(t)
 		})
 
@@ -138,7 +141,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updatePhase(msg.TargetIndex, msg.Phase, msg.Detail)
 	}
 
-	return m, nil
+	return m, cmd
 }
 
 // View renders the UI
