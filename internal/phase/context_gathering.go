@@ -60,18 +60,23 @@ func (p *ContextGatheringPhase) storeResult(result interface{}) error {
 	return nil
 }
 
-// GetTemperature returns the temperature for context gathering (higher for exploration)
-func (p *ContextGatheringPhase) GetTemperature() float32 {
+// Name returns the name of this phase
+func (p *ContextGatheringPhase) Name() string {
+	return "Context Gathering"
+}
+
+// Temperature returns the temperature for context gathering (higher for exploration)
+func (p *ContextGatheringPhase) Temperature() float32 {
 	return p.temperature
 }
 
-// GetTools returns the context gathering tools
-func (p *ContextGatheringPhase) GetTools() []tools.Tool {
+// Tools returns the context gathering tools
+func (p *ContextGatheringPhase) Tools() []tools.Tool {
 	return p.tools
 }
 
-// GetSystemPrompt returns the system prompt for context gathering
-func (p *ContextGatheringPhase) GetSystemPrompt() string {
+// SystemPrompt returns the system prompt for context gathering
+func (p *ContextGatheringPhase) SystemPrompt() string {
 	return `You are a Go code analyzer gathering code context to implement a function.
 
 ## Input Structure
@@ -127,15 +132,15 @@ All fields should be include only new context gathered
 - Provide clear error messages to help diagnose issues`
 }
 
-// GetPromptBuilder returns a prompt builder configured for context gathering
-func (p *ContextGatheringPhase) GetPromptBuilder() *prompt.Builder {
+// PromptBuilder returns a prompt builder configured for context gathering
+func (p *ContextGatheringPhase) PromptBuilder() *prompt.Builder {
 	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true)
 	return builder
 }
 
-// GetResult returns the phase result and whether it's complete
-func (p *ContextGatheringPhase) GetResult() (interface{}, bool) {
+// Result returns the phase result and whether it's complete
+func (p *ContextGatheringPhase) Result() (interface{}, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.result, p.completed
@@ -149,16 +154,16 @@ func (p *ContextGatheringPhase) Reset() {
 	p.completed = false
 }
 
-// GetResultSchema returns the schema for this phase's result tool
-func (p *ContextGatheringPhase) GetResultSchema() schemas.ResultSchema {
+// ResultSchema returns the schema for this phase's result tool
+func (p *ContextGatheringPhase) ResultSchema() schemas.ResultSchema {
 	return p.schema
 }
 
 // contextGatheringResultSchema defines the schema for context gathering phase results
 type contextGatheringResultSchema struct{}
 
-// GetSchema returns the JSON schema for context gathering results
-func (s *contextGatheringResultSchema) GetSchema() json.RawMessage {
+// Schema returns the JSON schema for context gathering results
+func (s *contextGatheringResultSchema) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {

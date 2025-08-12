@@ -59,7 +59,7 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	r.configureClientForPhase(contextPhase, toolContext)
 
 	// Build prompt
-	contextPromptBuilder := contextPhase.GetPromptBuilder()
+	contextPromptBuilder := contextPhase.PromptBuilder()
 	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
 	if err != nil {
 		r.logger.Error("Failed to build prompt", "error", err.Error())
@@ -102,7 +102,7 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 
 	// Build prompt with context
 	contextResultMarkdown := formatter.FormatContextAsMarkdown(contextResult)
-	implPromptBuilder := implPhase.GetPromptBuilderWithContext(contextResultMarkdown)
+	implPromptBuilder := implPhase.PromptBuilderWithContext(contextResultMarkdown)
 	implPrompt, err := implPromptBuilder.BuildForTarget(target, fileContent)
 	if err != nil {
 		r.logger.Error("Failed to build implementation prompt", "error", err.Error())
@@ -152,7 +152,7 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 
 // processResult processes the result from a phase
 func (r *Runner) processResult(p Phase, phaseName string) (map[string]interface{}, *parser.FailureReason) {
-	phaseResult, completed := p.GetResult()
+	phaseResult, completed := p.Result()
 	if !completed {
 		r.logger.Warn(fmt.Sprintf("%s phase did not complete with result tool", phaseName))
 		return nil, &parser.FailureReason{
@@ -214,11 +214,11 @@ func (r *Runner) processResult(p Phase, phaseName string) (map[string]interface{
 
 // configureClientForPhase configures the AI client with phase-specific settings
 func (r *Runner) configureClientForPhase(p Phase, toolContext *tools.Context) {
-	r.client.SetTemperature(p.GetTemperature())
-	r.client.SetSystemPrompt(p.GetSystemPrompt())
+	r.client.SetTemperature(p.Temperature())
+	r.client.SetSystemPrompt(p.SystemPrompt())
 
 	// Get tools once and convert/create executor
-	phaseTools := p.GetTools()
+	phaseTools := p.Tools()
 	aiTools := llm.ConvertToAITools(phaseTools)
 	executor := tools.NewExecutor(phaseTools, r.logger)
 

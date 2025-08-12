@@ -36,7 +36,7 @@ func (t *ResultTool) Description() string {
 
 // ParametersSchema returns the JSON Schema for parameters
 func (t *ResultTool) ParametersSchema() json.RawMessage {
-	return t.schema.GetSchema()
+	return t.schema.Schema()
 }
 
 // Execute runs the result tool

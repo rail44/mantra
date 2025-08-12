@@ -6,8 +6,8 @@ import (
 
 // ResultSchema defines the interface for phase result schemas
 type ResultSchema interface {
-	// GetSchema returns the JSON schema for validation
-	GetSchema() json.RawMessage
+	// Schema returns the JSON schema for validation
+	Schema() json.RawMessage
 
 	// Validate checks if the data conforms to the schema
 	Validate(data interface{}) error

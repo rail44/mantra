@@ -62,18 +62,23 @@ func (p *ImplementationPhase) storeResult(result interface{}) error {
 	return nil
 }
 
-// GetTemperature returns the temperature for implementation (lower for accuracy)
-func (p *ImplementationPhase) GetTemperature() float32 {
+// Name returns the name of this phase
+func (p *ImplementationPhase) Name() string {
+	return "Implementation"
+}
+
+// Temperature returns the temperature for implementation (lower for accuracy)
+func (p *ImplementationPhase) Temperature() float32 {
 	return p.temperature
 }
 
-// GetTools returns the implementation/validation tools
-func (p *ImplementationPhase) GetTools() []tools.Tool {
+// Tools returns the implementation/validation tools
+func (p *ImplementationPhase) Tools() []tools.Tool {
 	return p.tools
 }
 
-// GetSystemPrompt returns the system prompt for implementation
-func (p *ImplementationPhase) GetSystemPrompt() string {
+// SystemPrompt returns the system prompt for implementation
+func (p *ImplementationPhase) SystemPrompt() string {
 	return `You are an expert Go developer. Your task: generate ONLY the code that replaces <IMPLEMENT_HERE>.
 
 ## Input Structure
@@ -126,15 +131,15 @@ Call result() with JSON containing:
 - Provide clear error messages to help diagnose issues`
 }
 
-// GetPromptBuilder returns a prompt builder configured for implementation
-func (p *ImplementationPhase) GetPromptBuilder() *prompt.Builder {
+// PromptBuilder returns a prompt builder configured for implementation
+func (p *ImplementationPhase) PromptBuilder() *prompt.Builder {
 	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true) // Still uses tools (check_syntax)
 	return builder
 }
 
-// GetPromptBuilderWithContext returns a prompt builder with additional context from previous phase
-func (p *ImplementationPhase) GetPromptBuilderWithContext(contextResult string) *prompt.Builder {
+// PromptBuilderWithContext returns a prompt builder with additional context from previous phase
+func (p *ImplementationPhase) PromptBuilderWithContext(contextResult string) *prompt.Builder {
 	builder := prompt.NewBuilder(p.logger)
 	builder.SetUseTools(true)
 
@@ -143,8 +148,8 @@ func (p *ImplementationPhase) GetPromptBuilderWithContext(contextResult string) 
 	return builder.WithAdditionalContext(formattedContext)
 }
 
-// GetResult returns the phase result and whether it's complete
-func (p *ImplementationPhase) GetResult() (interface{}, bool) {
+// Result returns the phase result and whether it's complete
+func (p *ImplementationPhase) Result() (interface{}, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.result, p.completed
@@ -158,16 +163,16 @@ func (p *ImplementationPhase) Reset() {
 	p.completed = false
 }
 
-// GetResultSchema returns the schema for this phase's result tool
-func (p *ImplementationPhase) GetResultSchema() schemas.ResultSchema {
+// ResultSchema returns the schema for this phase's result tool
+func (p *ImplementationPhase) ResultSchema() schemas.ResultSchema {
 	return p.schema
 }
 
 // implementationResultSchema defines the schema for implementation phase results
 type implementationResultSchema struct{}
 
-// GetSchema returns the JSON schema for implementation results
-func (s *implementationResultSchema) GetSchema() json.RawMessage {
+// Schema returns the JSON schema for implementation results
+func (s *implementationResultSchema) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {

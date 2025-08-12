@@ -8,24 +8,27 @@ import (
 
 // Phase represents a generation phase with its own configuration
 type Phase interface {
-	// GetTemperature returns the temperature for this phase
-	GetTemperature() float32
+	// Name returns the name of this phase
+	Name() string
 
-	// GetTools returns the tools available in this phase
-	GetTools() []tools.Tool
+	// Temperature returns the temperature for this phase
+	Temperature() float32
 
-	// GetSystemPrompt returns the system prompt for this phase
-	GetSystemPrompt() string
+	// Tools returns the tools available in this phase
+	Tools() []tools.Tool
 
-	// GetPromptBuilder returns a configured prompt builder for this phase
-	GetPromptBuilder() *prompt.Builder
+	// SystemPrompt returns the system prompt for this phase
+	SystemPrompt() string
 
-	// GetResult returns the phase result and whether it's complete
-	GetResult() (interface{}, bool)
+	// PromptBuilder returns a configured prompt builder for this phase
+	PromptBuilder() *prompt.Builder
+
+	// Result returns the phase result and whether it's complete
+	Result() (interface{}, bool)
 
 	// Reset clears the phase state for reuse
 	Reset()
 
-	// GetResultSchema returns the schema for this phase's result tool
-	GetResultSchema() schemas.ResultSchema
+	// ResultSchema returns the schema for this phase's result tool
+	ResultSchema() schemas.ResultSchema
 }
