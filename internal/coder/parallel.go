@@ -25,7 +25,7 @@ import (
 type ParallelCoder struct {
 	clientConfig *llm.ClientConfig
 	config       *config.Config
-	logger       log.Logger
+	logger       *slog.Logger
 	httpClient   *http.Client // Shared HTTP client for connection pooling
 }
 
@@ -110,8 +110,8 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 				// Create target callbacks - always use the same callbacks
 				// UI program will handle the difference between TUI and plain mode
 				targetCallbacks := TargetCallbacks{
-					SendLog: func(targetNum int, record slog.Record) {
-						uiProgram.SendLog(targetNum, record)
+					SendLog: func(record slog.Record) {
+						uiProgram.SendLog(record)
 					},
 					MarkRunning: func(targetNum int) {
 						uiProgram.MarkAsRunning(targetNum)
@@ -190,7 +190,7 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 // TargetCallbacks contains callbacks for target lifecycle events
 type TargetCallbacks struct {
-	SendLog     func(targetNum int, record slog.Record)
+	SendLog     func(record slog.Record)
 	MarkRunning func(targetNum int)
 	Complete    func(targetNum int)
 	Fail        func(targetNum int)
@@ -200,13 +200,19 @@ type TargetCallbacks struct {
 func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, callbacks TargetCallbacks, eventCallback func(string, string)) *parser.GenerationResult {
 	targetStart := time.Now()
 
-	// Always use callback logger to send logs to UI
+	// Always use callback logger to send logs to UI with target attributes
 	// UI program will handle the difference between TUI and plain mode
-	logger := log.NewCallbackLogger(func(record slog.Record) {
-		if callbacks.SendLog != nil {
-			callbacks.SendLog(targetNum, record)
-		}
-	}, log.GetCurrentLevel())
+	logger := log.NewCallbackLoggerWithAttrs(
+		func(record slog.Record) {
+			if callbacks.SendLog != nil {
+				callbacks.SendLog(record)
+			}
+		},
+		log.GetCurrentLevel(),
+		slog.Int("targetIndex", targetNum),
+		slog.Int("totalTargets", totalTargets),
+		slog.String("targetName", tc.Target.GetDisplayName()),
+	)
 
 	// Log generation start
 	logger.Info("Starting generation")
@@ -332,7 +338,7 @@ func (c *ParallelCoder) reEmitLogEntry(record slog.Record, targetName string) {
 
 	switch record.Level {
 	case slog.LevelDebug - 4: // TRACE
-		c.logger.Trace(message)
+		c.logger.Debug(message)
 	case slog.LevelDebug:
 		c.logger.Debug(message)
 	case slog.LevelInfo:

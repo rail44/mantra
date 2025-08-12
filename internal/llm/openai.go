@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/rail44/mantra/internal/log"
 )
 
 // OpenAIClient implements Provider for OpenAI API and compatible services
@@ -22,7 +21,7 @@ type OpenAIClient struct {
 	systemPrompt       string  // Current system prompt
 	httpClient         *http.Client
 	providerSpec       *ProviderSpec // OpenRouter-specific provider routing
-	logger             log.Logger
+	logger             *slog.Logger
 }
 
 // OpenAIRequest represents a chat completion request
@@ -78,11 +77,11 @@ type OpenAIClientOptions struct {
 	SystemPrompt string
 	HTTPClient   *http.Client
 	ProviderSpec []string // For OpenRouter provider routing
-	Logger       log.Logger
+	Logger       *slog.Logger
 }
 
 // NewOpenAIClient creates a new OpenAI API client
-func NewOpenAIClient(apiKey, baseURL, model string, logger log.Logger) (*OpenAIClient, error) {
+func NewOpenAIClient(apiKey, baseURL, model string, logger *slog.Logger) (*OpenAIClient, error) {
 	return NewOpenAIClientWithOptions(&OpenAIClientOptions{
 		APIKey:      apiKey,
 		BaseURL:     baseURL,
@@ -99,7 +98,7 @@ func NewOpenAIClientWithOptions(opts *OpenAIClientOptions) (*OpenAIClient, error
 	}
 
 	if opts.Logger == nil {
-		opts.Logger = log.Default()
+		opts.Logger = slog.Default()
 	}
 
 	httpClient := opts.HTTPClient

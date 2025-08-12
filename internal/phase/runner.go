@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"log/slog"
+
 	"github.com/rail44/mantra/internal/formatter"
 	"github.com/rail44/mantra/internal/llm"
-	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 	"github.com/rail44/mantra/internal/tools"
 )
@@ -28,11 +29,11 @@ type StepCallback func(step string)
 // Runner handles phase execution
 type Runner struct {
 	client *llm.Client
-	logger log.Logger
+	logger *slog.Logger
 }
 
 // NewRunner creates a new phase runner
-func NewRunner(client *llm.Client, logger log.Logger) *Runner {
+func NewRunner(client *llm.Client, logger *slog.Logger) *Runner {
 	return &Runner{
 		client: client,
 		logger: logger,
@@ -200,7 +201,7 @@ func (r *Runner) processResult(p Phase, phaseName string) (map[string]interface{
 		// Success - log and return
 		if resultJSON, err := json.Marshal(resultMap); err == nil {
 			r.logger.Debug(fmt.Sprintf("%s result", phaseName), "length", len(resultJSON))
-			r.logger.Trace(fmt.Sprintf("%s output", phaseName), "content", string(resultJSON))
+			r.logger.Debug(fmt.Sprintf("%s output", phaseName), "content", string(resultJSON))
 		}
 		return resultMap, nil
 	}

@@ -18,10 +18,9 @@ type ProgramOptions struct {
 
 // Program manages the TUI program and provides logger creation
 type Program struct {
-	model        *Model
-	teaProgram   *tea.Program
-	tuiEnabled   bool                  // Whether TUI rendering is enabled
-	plainLoggers map[int]*slog.Logger // Plain loggers for each target (plain mode only)
+	model      *Model
+	teaProgram *tea.Program
+	tuiEnabled bool // Whether TUI rendering is enabled
 }
 
 // IsTUIEnabled returns whether the TUI is enabled
@@ -61,9 +60,10 @@ func NewProgramWithOptions(opts ProgramOptions) *Program {
 		tuiEnabled: tuiEnabled,
 	}
 
-	// Initialize plain loggers map for plain mode
+	// Initialize plain handler for plain mode
 	if !tuiEnabled {
-		program.plainLoggers = make(map[int]*slog.Logger)
+		// We'll create a handler that formats based on target attributes in the record
+		// This will be set up when we receive the first log
 	}
 
 	return program
@@ -81,32 +81,47 @@ func (p *Program) AddTarget(name string, index, total int) {
 	// Add target to model
 	p.model.addTarget(name, index, total)
 
-	// Create slog.Logger with PlainTargetHandler for this target in plain mode
-	if !p.tuiEnabled {
-		handler := log.NewPlainTargetHandler(index, total, name, os.Stderr, log.GetCurrentLevel())
-		p.plainLoggers[index] = slog.New(handler)
-	}
+	// In plain mode, we don't need to create a logger per target anymore
+	// The target information will be in the log record attributes
 }
 
-// SendLog sends a log record to the TUI or outputs via PlainLogger
-func (p *Program) SendLog(targetIndex int, record slog.Record) {
+// SendLog sends a log record to the TUI or outputs via plain handler
+func (p *Program) SendLog(record slog.Record) {
 	if p.tuiEnabled {
 		// TUI mode: send to TUI
+		// Extract targetIndex from record attributes
+		var targetIndex int
+		record.Attrs(func(a slog.Attr) bool {
+			if a.Key == "targetIndex" {
+				targetIndex = int(a.Value.Int64())
+				return false
+			}
+			return true
+		})
 		p.teaProgram.Send(logMsg{
 			TargetIndex: targetIndex,
 			Record:      record,
 		})
 	} else {
-		// Plain mode: output via slog.Logger
-		if logger, ok := p.plainLoggers[targetIndex]; ok {
-			// Use LogAttrs to preserve all record attributes
-			var attrs []slog.Attr
-			record.Attrs(func(a slog.Attr) bool {
-				attrs = append(attrs, a)
-				return true
-			})
-			logger.LogAttrs(context.Background(), record.Level, record.Message, attrs...)
-		}
+		// Plain mode: format and output directly
+		// Extract target information from record attributes
+		var targetIndex, totalTargets int
+		var targetName string
+		record.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "targetIndex":
+				targetIndex = int(a.Value.Int64())
+			case "totalTargets":
+				totalTargets = int(a.Value.Int64())
+			case "targetName":
+				targetName = a.Value.String()
+			}
+			return true
+		})
+
+		// Create a handler with target information and handle the record directly
+		handler := log.NewHandlerWithTarget(targetIndex, totalTargets, targetName, os.Stderr, log.GetCurrentLevel())
+		handler.Handle(context.Background(), record)
 	}
 }
 
@@ -116,7 +131,7 @@ func (p *Program) MarkAsRunning(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "running",
 	})
-	// Plain mode output is handled by PlainLogger
+	// Plain mode output is handled by Handler
 }
 
 // Complete marks a target as completed
@@ -125,7 +140,7 @@ func (p *Program) Complete(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "completed",
 	})
-	// Plain mode output is handled by PlainLogger
+	// Plain mode output is handled by Handler
 }
 
 // Fail marks a target as failed
@@ -134,7 +149,7 @@ func (p *Program) Fail(targetIndex int) {
 		TargetIndex: targetIndex,
 		Status:      "failed",
 	})
-	// Plain mode output is handled by PlainLogger
+	// Plain mode output is handled by Handler
 }
 
 // UpdatePhase updates the phase information for a target
@@ -144,7 +159,7 @@ func (p *Program) UpdatePhase(targetIndex int, phase string, detail string) {
 		Phase:       phase,
 		Detail:      detail,
 	})
-	// Plain mode output is handled by PlainLogger (phase updates are shown as regular logs)
+	// Plain mode output is handled by Handler (phase updates are shown as regular logs)
 }
 
 // Quit stops the TUI program

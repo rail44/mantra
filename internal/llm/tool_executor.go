@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
-
-	"github.com/rail44/mantra/internal/log"
 )
 
 // toolResult represents the result of a single tool execution
@@ -24,7 +23,7 @@ type toolResult struct {
 }
 
 // executeToolsParallel executes multiple tool calls in parallel using channels for efficient result collection
-func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []ToolCall, executor ToolExecutor, toolExecutionTime *time.Duration, toolCallCount *int, logger log.Logger) ([]OpenAIMessage, bool) {
+func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []ToolCall, executor ToolExecutor, toolExecutionTime *time.Duration, toolCallCount *int, logger *slog.Logger) ([]OpenAIMessage, bool) {
 	results := make(chan toolResult, len(toolCalls))
 	resultToolCalled := false
 	mu := &sync.Mutex{}
@@ -71,9 +70,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 
 			// Debug: Log tool call
 			logger.Debug(fmt.Sprintf("[TOOL] Calling %s", tc.Function.Name))
-			if log.IsTraceEnabled() {
-				logger.Trace(fmt.Sprintf("[TOOL_ARGS] %s: %s", tc.Function.Name, tc.Function.Arguments))
-			}
+			logger.Debug(fmt.Sprintf("[TOOL_ARGS] %s: %s", tc.Function.Name, tc.Function.Arguments))
 
 			// Execute tool with timing
 			toolStart := time.Now()
@@ -114,13 +111,13 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 
 				// Log successful tool execution
 				logger.Info(fmt.Sprintf("[TOOL] %s completed in %v", tc.Function.Name, elapsed))
-				if log.IsTraceEnabled() && len(resultContent) > 0 {
-					// Truncate very long results in trace log
+				if len(resultContent) > 0 {
+					// Truncate very long results in debug log
 					preview := resultContent
 					if len(preview) > 500 {
 						preview = preview[:500] + "..."
 					}
-					logger.Trace(fmt.Sprintf("[TOOL_RESULT] %s: %s", tc.Function.Name, preview))
+					logger.Debug(fmt.Sprintf("[TOOL_RESULT] %s: %s", tc.Function.Name, preview))
 				}
 			}
 

@@ -3,6 +3,7 @@ package phase
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/rail44/mantra/internal/log"
@@ -16,7 +17,7 @@ import (
 type ContextGatheringPhase struct {
 	temperature float32
 	tools       []tools.Tool
-	logger      log.Logger
+	logger      *slog.Logger
 	result      interface{}
 	completed   bool
 	mu          sync.Mutex
@@ -25,7 +26,7 @@ type ContextGatheringPhase struct {
 }
 
 // NewContextGatheringPhase creates a new context gathering phase
-func NewContextGatheringPhase(temperature float32, packagePath string, logger log.Logger, setStep StepCallback) *ContextGatheringPhase {
+func NewContextGatheringPhase(temperature float32, packagePath string, logger *slog.Logger, setStep StepCallback) *ContextGatheringPhase {
 	if logger == nil {
 		logger = log.Default()
 	}

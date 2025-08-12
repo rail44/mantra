@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/rail44/mantra/internal/context"
-	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 )
 
@@ -14,13 +13,14 @@ import (
 type Builder struct {
 	useTools          bool
 	additionalContext string
-	logger            log.Logger
+	logger            *slog.Logger
 }
 
 // NewBuilder creates a new prompt builder
-func NewBuilder(logger log.Logger) *Builder {
+func NewBuilder(logger *slog.Logger) *Builder {
 	if logger == nil {
-		logger = log.Default()
+		// Create a default logger if none provided
+		logger = slog.Default()
 	}
 	return &Builder{
 		logger: logger,
@@ -120,11 +120,11 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 	for _, methods := range ctx.Methods {
 		totalMethods += len(methods)
 	}
-	b.logger.Trace(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d methods, %d imports",
+	b.logger.Debug(fmt.Sprintf("[PROMPT] %s: %d chars, %d types, %d methods, %d imports",
 		target.Name, len(fullPrompt), len(ctx.Types), totalMethods, len(ctx.Imports)))
 
 	// Log the full prompt content for debugging
-	b.logger.Trace(fmt.Sprintf("[PROMPT_CONTENT] %s:\n%s", target.Name, fullPrompt))
+	b.logger.Debug(fmt.Sprintf("[PROMPT_CONTENT] %s:\n%s", target.Name, fullPrompt))
 
 	// Log imports separately for debugging
 	if len(ctx.Imports) > 0 {
@@ -138,7 +138,7 @@ func (b *Builder) buildPromptWithContext(ctx *context.RelevantContext, target *p
 				importPaths = append(importPaths, imp.Path)
 			}
 		}
-		b.logger.Trace(fmt.Sprintf("         imports: %v", importPaths))
+		b.logger.Debug(fmt.Sprintf("         imports: %v", importPaths))
 	}
 
 	return fullPrompt

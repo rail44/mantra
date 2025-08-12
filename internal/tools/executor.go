@@ -6,22 +6,20 @@ import (
 	"time"
 
 	"log/slog"
-
-	"github.com/rail44/mantra/internal/log"
 )
 
 // Executor handles tool execution with context and logging
 type Executor struct {
 	tools   map[string]Tool
 	timeout time.Duration
-	logger  log.Logger
+	logger  *slog.Logger
 	context *Context // Shared context for tools
 }
 
 // NewExecutor creates a new tool executor
-func NewExecutor(tools []Tool, logger log.Logger) *Executor {
+func NewExecutor(tools []Tool, logger *slog.Logger) *Executor {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 
 	toolMap := make(map[string]Tool)
@@ -104,7 +102,7 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		return nil, err
 	}
 
-	e.logger.Trace(fmt.Sprintf("Tool '%s' completed (%s)", toolName, duration.Round(time.Millisecond)))
+	e.logger.Debug(fmt.Sprintf("Tool '%s' completed (%s)", toolName, duration.Round(time.Millisecond)))
 
 	return result, nil
 }

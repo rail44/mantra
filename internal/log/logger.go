@@ -1,7 +1,6 @@
 package log
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,7 +16,6 @@ const (
 	LevelWarn  LogLevel = "warn"
 	LevelInfo  LogLevel = "info"
 	LevelDebug LogLevel = "debug"
-	LevelTrace LogLevel = "trace"
 )
 
 var (
@@ -44,8 +42,6 @@ func SetLevel(level LogLevel) error {
 		currentLevel = slog.LevelInfo
 	case LevelDebug:
 		currentLevel = slog.LevelDebug
-	case LevelTrace:
-		currentLevel = slog.LevelDebug - 4 // More verbose than debug
 	default:
 		return fmt.Errorf("invalid log level: %s", level)
 	}
@@ -58,7 +54,7 @@ func SetLevel(level LogLevel) error {
 func ParseLevel(s string) (LogLevel, error) {
 	level := LogLevel(strings.ToLower(s))
 	switch level {
-	case LevelError, LevelWarn, LevelInfo, LevelDebug, LevelTrace:
+	case LevelError, LevelWarn, LevelInfo, LevelDebug:
 		return level, nil
 	default:
 		return "", fmt.Errorf("invalid log level: %s", s)
@@ -66,8 +62,8 @@ func ParseLevel(s string) (LogLevel, error) {
 }
 
 func setupLogger(output io.Writer) {
-	// Create a writer handler for cleaner output
-	handler := NewWriterHandler(output, currentLevel)
+	// Create a handler for cleaner output (without target info)
+	handler := NewHandler(output, currentLevel)
 	logger = slog.New(handler)
 }
 
@@ -91,19 +87,9 @@ func Debug(msg string, args ...any) {
 	logger.Debug(msg, args...)
 }
 
-// Trace logs a trace message (most verbose)
-func Trace(msg string, args ...any) {
-	logger.Log(context.Background(), slog.LevelDebug-4, msg, args...)
-}
-
 // IsDebugEnabled returns true if debug logging is enabled
 func IsDebugEnabled() bool {
 	return currentLevel <= slog.LevelDebug
-}
-
-// IsTraceEnabled returns true if trace logging is enabled
-func IsTraceEnabled() bool {
-	return currentLevel <= slog.LevelDebug-4
 }
 
 // GetCurrentLevel returns the current log level

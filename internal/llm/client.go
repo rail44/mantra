@@ -3,10 +3,9 @@ package llm
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
-
-	"github.com/rail44/mantra/internal/log"
 )
 
 // ClientConfig represents the configuration for connecting to an AI provider
@@ -23,17 +22,17 @@ type Client struct {
 	clientConfig *ClientConfig
 	tools        []Tool
 	toolExecutor ToolExecutor
-	logger       log.Logger
+	logger       *slog.Logger
 }
 
-func NewClient(clientConfig *ClientConfig, httpClient *http.Client, logger log.Logger) (*Client, error) {
+func NewClient(clientConfig *ClientConfig, httpClient *http.Client, logger *slog.Logger) (*Client, error) {
 	if clientConfig == nil {
 		return nil, fmt.Errorf("clientConfig is required")
 	}
 
 	// Use default logger if not provided
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 
 	url := clientConfig.URL

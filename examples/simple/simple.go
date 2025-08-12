@@ -29,12 +29,12 @@ func (c *SimpleCache) Delete(key string) {
 	panic("not implemented")
 }
 
-// mantra: キャッシュを全てクリアする
+// mantra: キャッシュを全てクリアする。
 func (c *SimpleCache) Clear() {
 	panic("not implemented")
 }
 
-// mantra: キャッシュのサイズを返す
+// mantra: キャッシュのサイズを返す。
 func (c *SimpleCache) Size() int {
 	panic("not implemented")
 }

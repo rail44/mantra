@@ -3,6 +3,7 @@ package phase
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/rail44/mantra/internal/log"
@@ -17,7 +18,7 @@ type ImplementationPhase struct {
 	temperature float32
 	tools       []tools.Tool
 	projectRoot string
-	logger      log.Logger
+	logger      *slog.Logger
 	result      interface{}
 	completed   bool
 	mu          sync.Mutex
@@ -26,7 +27,7 @@ type ImplementationPhase struct {
 }
 
 // NewImplementationPhase creates a new implementation phase
-func NewImplementationPhase(temperature float32, projectRoot string, logger log.Logger, setStep StepCallback) *ImplementationPhase {
+func NewImplementationPhase(temperature float32, projectRoot string, logger *slog.Logger, setStep StepCallback) *ImplementationPhase {
 	if logger == nil {
 		logger = log.Default()
 	}

@@ -21,7 +21,7 @@ import (
 
 // GenerateApp handles the generate command logic
 type GenerateApp struct {
-	logger log.Logger
+	logger *slog.Logger
 }
 
 // NewGenerateApp creates a new generate app

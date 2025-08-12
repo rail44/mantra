@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rail44/mantra/internal/log"
+	"log/slog"
 )
 
 // Generate sends a prompt with tool definitions and handles tool calls
@@ -21,10 +21,8 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 	// Log system prompt at debug level
 	if c.systemPrompt != "" {
 		logger.Debug("System prompt set", "length", len(c.systemPrompt))
-		// Log full system prompt at trace level
-		if log.IsTraceEnabled() {
-			logger.Trace(fmt.Sprintf("[SYSTEM_PROMPT]\n%s", c.systemPrompt))
-		}
+		// Log full system prompt at debug level
+		logger.Debug(fmt.Sprintf("[SYSTEM_PROMPT]\n%s", c.systemPrompt))
 	}
 
 	// Build initial messages with system prompt
@@ -168,7 +166,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string, tools []Tool
 }
 
 // logTimingStats logs timing statistics for the generation
-func (c *OpenAIClient) logTimingStats(logger log.Logger, overallStart time.Time, apiCallTime, toolExecutionTime time.Duration, toolCallCount int) {
+func (c *OpenAIClient) logTimingStats(logger *slog.Logger, overallStart time.Time, apiCallTime, toolExecutionTime time.Duration, toolCallCount int) {
 	totalTime := time.Since(overallStart)
 	logger.Info(fmt.Sprintf("[TIMING] Total: %v, API: %v, Tools: %v (%d calls)",
 		totalTime.Round(time.Millisecond),
