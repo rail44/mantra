@@ -39,7 +39,7 @@ their implementations based on the natural language instructions provided.`,
 		// Load configuration
 		cfg, err := config.Load(pkgDir)
 		if err != nil {
-			log.Error("failed to load configuration", slog.String("error", err.Error()))
+			slog.Error("failed to load configuration", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 
@@ -49,7 +49,7 @@ their implementations based on the natural language instructions provided.`,
 		// Ensure absolute path
 		absPkgDir, err := filepath.Abs(pkgDir)
 		if err != nil {
-			log.Error("failed to get absolute path", slog.String("error", err.Error()))
+			slog.Error("failed to get absolute path", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 
@@ -59,7 +59,7 @@ their implementations based on the natural language instructions provided.`,
 		// Run generation
 		generateApp := app.NewGenerateApp()
 		if err := generateApp.Run(context.Background(), absPkgDir, cfg); err != nil {
-			log.Error("generation failed", slog.String("error", err.Error()))
+			slog.Error("generation failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 	},
@@ -83,11 +83,8 @@ func setupLogging(cfg *config.Config) {
 
 	parsedLevel, err := log.ParseLevel(level)
 	if err != nil {
-		log.Error("invalid log level", slog.String("level", level))
+		slog.Error("invalid log level", slog.String("level", level), slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	if err := log.SetLevel(parsedLevel); err != nil {
-		log.Error("failed to set log level", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
+	log.Level.Set(parsedLevel)
 }

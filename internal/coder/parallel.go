@@ -34,7 +34,7 @@ func NewParallelCoder(clientConfig *llm.ClientConfig, cfg *config.Config) *Paral
 	return &ParallelCoder{
 		clientConfig: clientConfig,
 		config:       cfg,
-		logger:       log.Default(),
+		logger:       slog.Default(),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
@@ -202,17 +202,19 @@ func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc
 
 	// Always use callback logger to send logs to UI with target attributes
 	// UI program will handle the difference between TUI and plain mode
-	logger := log.NewCallbackLoggerWithAttrs(
+	// Create a callback handler with target attributes
+	callbackHandler := log.NewCallbackHandler(
 		func(record slog.Record) {
 			if callbacks.SendLog != nil {
 				callbacks.SendLog(record)
 			}
 		},
-		log.GetCurrentLevel(),
+	).WithAttrs([]slog.Attr{
 		slog.Int("targetIndex", targetNum),
 		slog.Int("totalTargets", totalTargets),
 		slog.String("targetName", tc.Target.GetDisplayName()),
-	)
+	})
+	logger := slog.New(callbackHandler)
 
 	// Log generation start
 	logger.Info("Starting generation")

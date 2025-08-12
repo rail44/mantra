@@ -15,7 +15,6 @@ import (
 	"github.com/rail44/mantra/internal/config"
 	"github.com/rail44/mantra/internal/detector"
 	"github.com/rail44/mantra/internal/llm"
-	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/parser"
 )
 
@@ -27,7 +26,7 @@ type GenerateApp struct {
 // NewGenerateApp creates a new generate app
 func NewGenerateApp() *GenerateApp {
 	return &GenerateApp{
-		logger: log.Default(),
+		logger: slog.Default(),
 	}
 }
 

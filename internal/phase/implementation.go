@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/rail44/mantra/internal/log"
 	"github.com/rail44/mantra/internal/prompt"
 	"github.com/rail44/mantra/internal/tools"
 	"github.com/rail44/mantra/internal/tools/impl"
@@ -29,7 +28,7 @@ type ImplementationPhase struct {
 // NewImplementationPhase creates a new implementation phase
 func NewImplementationPhase(temperature float32, projectRoot string, logger *slog.Logger, setStep StepCallback) *ImplementationPhase {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 
 	phase := &ImplementationPhase{

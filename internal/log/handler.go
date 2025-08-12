@@ -8,37 +8,31 @@ import (
 	"sync"
 )
 
-// BaseHandler provides common formatting logic for all handlers
-type BaseHandler struct {
-	level slog.Level
-	mu    sync.Mutex
-}
-
-// Enabled reports whether the handler handles records at the given level
-func (h *BaseHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
-}
+// CallbackFunc is a function that receives log records
+type CallbackFunc func(record slog.Record)
 
 // CallbackHandler is a slog.Handler that forwards log records to a callback function
 type CallbackHandler struct {
-	BaseHandler
+	level    slog.Leveler // Use Leveler interface for dynamic level
 	callback CallbackFunc
 	attrs    []slog.Attr
 }
 
 // NewCallbackHandler creates a new slog handler that forwards logs to a callback
-func NewCallbackHandler(callback CallbackFunc, level slog.Level) *CallbackHandler {
+func NewCallbackHandler(callback CallbackFunc) *CallbackHandler {
 	return &CallbackHandler{
-		BaseHandler: BaseHandler{level: level},
-		callback:    callback,
+		level:    Level,
+		callback: callback,
 	}
+}
+
+// Enabled reports whether the handler handles records at the given level
+func (h *CallbackHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level.Level()
 }
 
 // Handle handles the Record by forwarding to the callback
 func (h *CallbackHandler) Handle(ctx context.Context, record slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	if h.callback == nil {
 		return nil
 	}
@@ -56,9 +50,9 @@ func (h *CallbackHandler) Handle(ctx context.Context, record slog.Record) error 
 // WithAttrs returns a new Handler whose attributes consist of both the receiver's attributes and the arguments
 func (h *CallbackHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &CallbackHandler{
-		BaseHandler: h.BaseHandler,
-		callback:    h.callback,
-		attrs:       append(h.attrs, attrs...),
+		level:    h.level,
+		callback: h.callback,
+		attrs:    append(h.attrs, attrs...),
 	}
 }
 
@@ -70,7 +64,7 @@ func (h *CallbackHandler) WithGroup(name string) slog.Handler {
 
 // Handler is a slog.Handler for formatted output with optional target information
 type Handler struct {
-	level        slog.Level
+	level        slog.Leveler // Use Leveler interface for dynamic level
 	mu           sync.Mutex
 	targetNum    int
 	totalTargets int
@@ -79,17 +73,17 @@ type Handler struct {
 }
 
 // NewHandler creates a new handler for formatted output
-func NewHandler(output io.Writer, level slog.Level) *Handler {
+func NewHandler(output io.Writer) *Handler {
 	return &Handler{
-		level:  level,
+		level:  Level,
 		output: output,
 	}
 }
 
 // NewHandlerWithTarget creates a new handler with target information
-func NewHandlerWithTarget(targetNum, totalTargets int, targetName string, output io.Writer, level slog.Level) *Handler {
+func NewHandlerWithTarget(targetNum, totalTargets int, targetName string, output io.Writer) *Handler {
 	return &Handler{
-		level:        level,
+		level:        Level,
 		targetNum:    targetNum,
 		totalTargets: totalTargets,
 		targetName:   targetName,
@@ -99,7 +93,7 @@ func NewHandlerWithTarget(targetNum, totalTargets int, targetName string, output
 
 // Enabled returns whether the handler handles records at the given level
 func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
-	return level >= h.level
+	return level >= h.level.Level()
 }
 
 // Handle processes the Record and outputs formatted log

@@ -120,7 +120,7 @@ func (p *Program) SendLog(record slog.Record) {
 		})
 
 		// Create a handler with target information and handle the record directly
-		handler := log.NewHandlerWithTarget(targetIndex, totalTargets, targetName, os.Stderr, log.GetCurrentLevel())
+		handler := log.NewHandlerWithTarget(targetIndex, totalTargets, targetName, os.Stderr)
 		handler.Handle(context.Background(), record)
 	}
 }
