@@ -1,5 +1,5 @@
 # Model configuration
-model = "inception/mercury-coder"
+model = "mistralai/devstral-small"
 
 # OpenRouter API endpoint
 url = "https://openrouter.ai/api/v1"
@@ -11,5 +11,5 @@ dest = "../simple_mantra"
 api_key = "${OPENROUTER_API_KEY}"
 
 # OpenRouter-specific configuration
-# [openrouter]
-# providers = ["fireworks"]
+[openrouter]
+providers = ["mistral"]

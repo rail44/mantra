@@ -2,6 +2,7 @@ package tools
 
 import (
 	"github.com/rail44/mantra/internal/parser"
+	"github.com/rail44/mantra/internal/ui"
 )
 
 // Context holds shared information that tools may need during execution
@@ -19,6 +20,12 @@ type Context struct {
 
 	// Additional context that might be needed by tools
 	Metadata map[string]interface{}
+
+	// UI program for updating phase details during tool execution
+	UIProgram *ui.Program
+
+	// Target number for UI updates
+	TargetNum int
 }
 
 // NewContext creates a new tool context
@@ -28,7 +35,15 @@ func NewContext(fileInfo *parser.FileInfo, target *parser.Target, projectRoot st
 		Target:      target,
 		ProjectRoot: projectRoot,
 		Metadata:    make(map[string]interface{}),
+		UIProgram:   nil, // Will be set via SetUI if needed
+		TargetNum:   0,
 	}
+}
+
+// SetUI sets the UI program and target number for phase updates
+func (c *Context) SetUI(program *ui.Program, targetNum int) {
+	c.UIProgram = program
+	c.TargetNum = targetNum
 }
 
 // Clone creates a copy of the context
@@ -48,5 +63,7 @@ func (c *Context) Clone() *Context {
 		Target:      c.Target,
 		ProjectRoot: c.ProjectRoot,
 		Metadata:    metadata,
+		UIProgram:   c.UIProgram,
+		TargetNum:   c.TargetNum,
 	}
 }

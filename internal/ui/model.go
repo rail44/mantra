@@ -316,7 +316,8 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 				targetLine += "]"
 			}
 			
-			// Always add latest log as a separate indented line
+			// Always add log area (show latest log or placeholder)
+			logFound := false
 			if len(target.Logs) > 0 {
 				// Find the latest log entry that should be shown based on log level
 				for i := len(target.Logs) - 1; i >= 0; i-- {
@@ -331,8 +332,13 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 						msg = msg[:57] + "..."
 					}
 					targetLine += fmt.Sprintf("\n    → %s", msg)
+					logFound = true
 					break
 				}
+			}
+			// If no log to show, add empty line to maintain consistent spacing
+			if !logFound {
+				targetLine += "\n    → (waiting...)"
 			}
 			
 			target.mu.RUnlock()
@@ -346,6 +352,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			
 			// Add final result message as a separate indented line (same as active targets)
 			target.mu.RLock()
+			logFound := false
 			if len(target.Logs) > 0 {
 				// Find the latest log entry that should be shown based on log level
 				for i := len(target.Logs) - 1; i >= 0; i-- {
@@ -360,7 +367,16 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 						msg = msg[:57] + "..."
 					}
 					targetLine += fmt.Sprintf("\n    → %s", msg)
+					logFound = true
 					break
+				}
+			}
+			// For completed targets, show a result message if no log found
+			if !logFound {
+				if target.Status == "completed" {
+					targetLine += "\n    → Completed successfully"
+				} else if target.Status == "failed" {
+					targetLine += "\n    → Failed"
 				}
 			}
 			target.mu.RUnlock()

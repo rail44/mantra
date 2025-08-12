@@ -32,11 +32,9 @@ func NewRunner(client *llm.Client, logger log.Logger) *Runner {
 func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, targetNum int, uiProgram *ui.Program) (map[string]interface{}, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
-	r.logger.Info("Starting generation")
-	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Starting")
+	uiProgram.UpdatePhase(targetNum, "Context Gathering", "Initializing")
 
 	// Setup phase
-	r.logger.Info("Analyzing codebase context...")
 	// Use destination directory if provided, otherwise use source directory
 	packagePath := destDir
 	if packagePath == "" {
@@ -44,7 +42,11 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	}
 	contextPhase := NewContextGatheringPhase(0.6, packagePath, r.logger)
 	contextPhase.Reset() // Ensure clean state
-	r.configureClientForPhase(contextPhase, nil)
+	
+	// Create tool context with UI program for phase updates
+	toolContext := tools.NewContext(nil, target, packagePath)
+	toolContext.SetUI(uiProgram, targetNum)
+	r.configureClientForPhase(contextPhase, toolContext)
 
 	// Build prompt
 	contextPromptBuilder := contextPhase.GetPromptBuilder()
@@ -78,15 +80,15 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]interface{}, targetNum int, uiProgram *ui.Program) (string, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
-	r.logger.Info("Generating implementation...")
 	uiProgram.UpdatePhase(targetNum, "Implementation", "Preparing")
 
 	// Setup phase
 	implPhase := NewImplementationPhase(0.2, projectRoot, r.logger)
 	implPhase.Reset() // Ensure clean state
 
-	// Create tool context for static analysis
+	// Create tool context for static analysis with UI program
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)
+	toolContext.SetUI(uiProgram, targetNum)
 	r.configureClientForPhase(implPhase, toolContext)
 
 	// Build prompt with context

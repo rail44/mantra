@@ -64,24 +64,40 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 	execCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 
-	// Log the tool execution in a user-friendly way
+	// Log the tool execution and update UI phase details
+	var phaseDetail string
 	switch toolName {
 	case "search":
 		if pattern, ok := params["pattern"].(string); ok {
-			e.logger.Debug(fmt.Sprintf("Searching for: %s", pattern))
+			phaseDetail = fmt.Sprintf("Searching: %s", pattern)
+			e.logger.Debug(phaseDetail)
 		}
 	case "inspect":
 		if symbol, ok := params["symbol"].(string); ok {
-			e.logger.Debug(fmt.Sprintf("Inspecting symbol: %s", symbol))
+			phaseDetail = fmt.Sprintf("Inspecting: %s", symbol)
+			e.logger.Debug(phaseDetail)
 		}
 	case "read_func":
 		if name, ok := params["name"].(string); ok {
-			e.logger.Debug(fmt.Sprintf("Reading function: %s", name))
+			phaseDetail = fmt.Sprintf("Reading: %s", name)
+			e.logger.Debug(phaseDetail)
 		}
 	case "check_code":
-		e.logger.Debug("Validating generated code")
+		phaseDetail = "Validating code"
+		e.logger.Debug(phaseDetail)
 	default:
-		e.logger.Debug(fmt.Sprintf("Executing tool: %s", toolName))
+		phaseDetail = fmt.Sprintf("Running: %s", toolName)
+		e.logger.Debug(phaseDetail)
+	}
+
+	// Update UI phase detail if available
+	if e.context != nil && e.context.UIProgram != nil && phaseDetail != "" {
+		// Determine current phase based on tool
+		currentPhase := "Context Gathering"
+		if toolName == "check_code" || toolName == "result" {
+			currentPhase = "Implementation"
+		}
+		e.context.UIProgram.UpdatePhase(e.context.TargetNum, currentPhase, phaseDetail)
 	}
 
 	// If the tool implements ContextAwareTool and we have context, provide it
