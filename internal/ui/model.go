@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -36,17 +37,33 @@ func (t *TargetView) GetAllLogs() []LogEntry {
 
 // Model is the Bubble Tea model for the TUI
 type Model struct {
-	targets []*TargetView
-	width   int
-	height  int
-	mu      sync.RWMutex
+	targets  []*TargetView
+	width    int
+	height   int
+	mu       sync.RWMutex
+	logLevel slog.Level // Current log level for filtering
 }
 
 // newModel creates a new TUI model
 func newModel() *Model {
 	return &Model{
-		targets: make([]*TargetView, 0),
+		targets:  make([]*TargetView, 0),
+		logLevel: slog.LevelInfo, // Default to INFO
 	}
+}
+
+// setLogLevel sets the log level for filtering
+func (m *Model) setLogLevel(level slog.Level) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logLevel = level
+}
+
+// shouldShowLog determines if a log should be shown based on the current log level
+func (m *Model) shouldShowLog(level slog.Level) bool {
+	// Use slog's built-in level comparison
+	// Show the log if its level is >= current level
+	return level >= m.logLevel
 }
 
 // addTarget adds a new target to track
@@ -146,23 +163,34 @@ func (m *Model) View() string {
 	// Show active targets first
 	if len(activeTargets) > 0 {
 		sb.WriteString("\nActive:\n")
-		for _, line := range activeTargets {
-			// Truncate lines if they exceed terminal width
-			displayLine := "  " + line
-			if m.width > 0 && len(displayLine) > m.width {
-				displayLine = displayLine[:m.width-3] + "..."
-			}
-			sb.WriteString(displayLine)
-			sb.WriteString("\n")
-		}
+		m.appendTargetLines(&sb, activeTargets)
 	}
 
 	// Show completed targets
 	if len(completedTargets) > 0 {
 		sb.WriteString("\nCompleted:\n")
-		for _, line := range completedTargets {
+		m.appendTargetLines(&sb, completedTargets)
+	}
+
+	return sb.String()
+}
+
+// appendTargetLines appends formatted target lines to the string builder
+func (m *Model) appendTargetLines(sb *strings.Builder, targets []string) {
+	for _, line := range targets {
+		// Handle multi-line entries (target + log)
+		lines := strings.Split(line, "\n")
+		for i, l := range lines {
+			displayLine := l
+			if i == 0 {
+				// First line gets standard indentation
+				displayLine = "  " + l
+			} else {
+				// Subsequent lines already have their own indentation
+				displayLine = "  " + l
+			}
+			
 			// Truncate lines if they exceed terminal width
-			displayLine := "  " + line
 			if m.width > 0 && len(displayLine) > m.width {
 				displayLine = displayLine[:m.width-3] + "..."
 			}
@@ -170,8 +198,6 @@ func (m *Model) View() string {
 			sb.WriteString("\n")
 		}
 	}
-
-	return sb.String()
 }
 
 // targetStats holds aggregated statistics about targets
@@ -279,8 +305,9 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			spinner := m.getSpinner(target.Status)
 			targetLine = fmt.Sprintf("%s %s", spinner, target.Name)
 
-			// Add phase information (always prioritize phase over logs)
 			target.mu.RLock()
+			
+			// Add phase information if available
 			if target.Phase != "" && target.Phase != "Initializing" {
 				targetLine += fmt.Sprintf(" [%s", target.Phase)
 				if target.PhaseDetail != "" {
@@ -288,6 +315,26 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 				}
 				targetLine += "]"
 			}
+			
+			// Always add latest log as a separate indented line
+			if len(target.Logs) > 0 {
+				// Find the latest log entry that should be shown based on log level
+				for i := len(target.Logs) - 1; i >= 0; i-- {
+					log := target.Logs[i]
+					// Skip logs that shouldn't be shown based on log level
+					if !m.shouldShowLog(log.Level) {
+						continue
+					}
+					// Truncate long messages for cleaner display
+					msg := log.Message
+					if len(msg) > 60 {
+						msg = msg[:57] + "..."
+					}
+					targetLine += fmt.Sprintf("\n    → %s", msg)
+					break
+				}
+			}
+			
 			target.mu.RUnlock()
 
 			activeTargets = append(activeTargets, targetLine)
@@ -296,6 +343,28 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			icon := m.getCompletionIcon(target.Status)
 			duration := target.EndTime.Sub(target.StartTime).Round(time.Millisecond)
 			targetLine = fmt.Sprintf("%s %s (%s)", icon, target.Name, duration)
+			
+			// Add final result message as a separate indented line (same as active targets)
+			target.mu.RLock()
+			if len(target.Logs) > 0 {
+				// Find the latest log entry that should be shown based on log level
+				for i := len(target.Logs) - 1; i >= 0; i-- {
+					log := target.Logs[i]
+					// Skip logs that shouldn't be shown based on log level
+					if !m.shouldShowLog(log.Level) {
+						continue
+					}
+					// Truncate long messages for cleaner display
+					msg := log.Message
+					if len(msg) > 60 {
+						msg = msg[:57] + "..."
+					}
+					targetLine += fmt.Sprintf("\n    → %s", msg)
+					break
+				}
+			}
+			target.mu.RUnlock()
+			
 			completedTargets = append(completedTargets, targetLine)
 		}
 	}
@@ -352,15 +421,15 @@ func (m *Model) addLog(msg logMsg) {
 	})
 
 	// Auto-update status on first log
-	if target.Status == "pending" && msg.Level == "INFO" {
+	if target.Status == "pending" && msg.Level == slog.LevelInfo {
 		target.Status = "running"
 	}
 
 	// During TUI execution, suppress DEBUG and TRACE logs from real-time display
 	// They are still stored and will be shown in the final log output
 	// This prevents cluttering the TUI with detailed API/tool execution logs
-	if msg.Level == "DEBUG" || msg.Level == "TRACE" {
-		return // Don't trigger display update for verbose logs
+	if msg.Level <= slog.LevelDebug {
+		return // Don't trigger display update for verbose logs (DEBUG and TRACE)
 	}
 }
 
@@ -387,7 +456,7 @@ type tickMsg time.Time
 
 type logMsg struct {
 	TargetIndex int
-	Level       string
+	Level       slog.Level
 	Message     string
 }
 

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,15 +11,17 @@ import (
 
 // ProgramOptions contains options for creating a Program
 type ProgramOptions struct {
-	Plain bool // Use plain text output instead of TUI
+	Plain    bool       // Use plain text output instead of TUI
+	LogLevel slog.Level // Current log level
 }
 
 // Program manages the TUI program and provides logger creation
 type Program struct {
 	model      *Model
 	teaProgram *tea.Program
-	isTerminal bool // Whether stdout is a terminal
-	plain      bool // Whether to use plain text output
+	isTerminal bool       // Whether stdout is a terminal
+	plain      bool       // Whether to use plain text output
+	logLevel   slog.Level // Current log level for filtering
 }
 
 // IsTerminal returns whether the program is running in a terminal
@@ -43,6 +46,9 @@ func NewProgramWithOptions(opts ProgramOptions) *Program {
 	// Check if stdout is a terminal
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
 
+	// Set log level in the model
+	model.setLogLevel(opts.LogLevel)
+
 	var teaProgram *tea.Program
 	if opts.Plain || !isTerminal {
 		// Plain mode or non-terminal mode - disable TUI rendering
@@ -58,6 +64,7 @@ func NewProgramWithOptions(opts ProgramOptions) *Program {
 		teaProgram: teaProgram,
 		isTerminal: isTerminal,
 		plain:      opts.Plain,
+		logLevel:   opts.LogLevel,
 	}
 }
 
@@ -82,8 +89,9 @@ func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger
 	return newTargetLogger(p, name, index)
 }
 
+
 // sendLog sends a log message to the TUI
-func (p *Program) sendLog(targetIndex int, level, message string) {
+func (p *Program) sendLog(targetIndex int, level slog.Level, message string) {
 	p.teaProgram.Send(logMsg{
 		TargetIndex: targetIndex,
 		Level:       level,

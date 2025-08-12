@@ -60,7 +60,8 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	// Create TUI program for parallel execution
 	// Use plain console output if --plain flag is set
 	uiProgram := ui.NewProgramWithOptions(ui.ProgramOptions{
-		Plain: c.config.Plain,
+		Plain:    c.config.Plain,
+		LogLevel: log.GetCurrentLevel(),
 	})
 
 	// Thread-safe collections for collecting results
@@ -176,7 +177,7 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 	// Success
 	duration := time.Since(targetStart).Round(time.Millisecond)
 	// Log through the target logger which will send to TUI
-	logger.Debug("Successfully generated implementation", "duration", duration)
+	logger.Info("Successfully generated implementation", "duration", duration)
 	uiProgram.Complete(targetNum)
 
 	return &parser.GenerationResult{
@@ -238,7 +239,7 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 			for _, target := range failedTargets {
 				logs := target.GetAllLogs()
 				for _, logEntry := range logs {
-					if logEntry.Level == "ERROR" {
+					if logEntry.Level == slog.LevelError {
 						c.logger.Error(fmt.Sprintf("[%s] %s", target.Name, logEntry.Message))
 					}
 				}
@@ -253,15 +254,15 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 					for _, logEntry := range logs {
 						// Re-emit each log entry at appropriate level
 						switch logEntry.Level {
-						case "TRACE":
+						case slog.LevelDebug - 4: // TRACE
 							c.logger.Trace(logEntry.Message)
-						case "DEBUG":
+						case slog.LevelDebug:
 							c.logger.Debug(logEntry.Message)
-						case "INFO":
+						case slog.LevelInfo:
 							c.logger.Info(logEntry.Message)
-						case "WARN":
+						case slog.LevelWarn:
 							c.logger.Warn(logEntry.Message)
-						case "ERROR":
+						case slog.LevelError:
 							c.logger.Error(logEntry.Message)
 						default:
 							c.logger.Info(logEntry.Message)

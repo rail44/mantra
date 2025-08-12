@@ -166,7 +166,7 @@ func (c *OpenAIClient) makeRequest(ctx context.Context, req OpenAIRequest) (*Ope
 	}
 
 	// Log request summary instead of full JSON
-	logger.Trace(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
+	logger.Debug(fmt.Sprintf("[API] Request: %s (msgs=%d, tools=%d, temp=%.2f)",
 		req.Model, len(req.Messages), len(req.Tools), req.Temperature))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))

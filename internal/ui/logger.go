@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -30,7 +31,7 @@ func newTargetLogger(program *Program, name string, index int) *targetLogger {
 	}
 }
 
-func (l *targetLogger) log(level, msg string, args ...any) {
+func (l *targetLogger) log(level slog.Level, msg string, args ...any) {
 	// Format message with args if provided
 	formattedMsg := msg
 	if len(args) > 0 {
@@ -44,28 +45,28 @@ func (l *targetLogger) log(level, msg string, args ...any) {
 }
 
 func (l *targetLogger) Info(msg string, args ...any) {
-	l.log("INFO", msg, args...)
+	l.log(slog.LevelInfo, msg, args...)
 }
 
 func (l *targetLogger) Debug(msg string, args ...any) {
-	l.log("DEBUG", msg, args...)
+	l.log(slog.LevelDebug, msg, args...)
 }
 
 func (l *targetLogger) Error(msg string, args ...any) {
-	l.log("ERROR", msg, args...)
+	l.log(slog.LevelError, msg, args...)
 }
 
 func (l *targetLogger) Warn(msg string, args ...any) {
-	l.log("WARN", msg, args...)
+	l.log(slog.LevelWarn, msg, args...)
 }
 
 func (l *targetLogger) Trace(msg string, args ...any) {
-	l.log("TRACE", msg, args...)
+	l.log(slog.LevelDebug-4, msg, args...) // Same as in log package
 }
 
 // LogEntry represents a single log message
 type LogEntry struct {
-	Level     string
+	Level     slog.Level
 	Message   string
 	Timestamp time.Time
 }
