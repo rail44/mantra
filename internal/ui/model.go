@@ -12,15 +12,14 @@ import (
 
 // TargetView represents the view state for a single target
 type TargetView struct {
-	Name        string
-	Index       int
-	Total       int
-	Status      string
-	Phase       string // Current phase (e.g., "Context Gathering", "Implementation")
-	PhaseDetail string // Phase-specific detail (e.g., "Analyzing codebase", "Generating code")
-	Logs        []slog.Record
-	StartTime   time.Time
-	EndTime     time.Time
+	Name      string
+	Index     int
+	Total     int
+	Status    string
+	Phase     string // Current phase (e.g., "Context Gathering", "Implementation")
+	Logs      []slog.Record
+	StartTime time.Time
+	EndTime   time.Time
 }
 
 // GetAllLogs returns a copy of all logs for the target
@@ -269,14 +268,10 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			// Active target - show with current status
 			spinner := m.getSpinner(target.Status)
 
-			// Format phase/step info to be right-aligned
+			// Format phase info to be right-aligned
 			phaseInfo := ""
 			if target.Phase != "" && target.Phase != "Initializing" {
-				phaseInfo = fmt.Sprintf("[%s", target.Phase)
-				if target.PhaseDetail != "" {
-					phaseInfo += fmt.Sprintf(": %s", target.PhaseDetail)
-				}
-				phaseInfo += "]"
+				phaseInfo = fmt.Sprintf("[%s]", target.Phase)
 			}
 
 			// Calculate padding for right alignment
@@ -300,10 +295,10 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			if len(target.Logs) > 0 {
 				// Show the latest log entry (already filtered by CallbackLogger)
 				log := target.Logs[len(target.Logs)-1]
-				// Truncate long messages for cleaner display
-				msg := log.Message
-				if len(msg) > 60 {
-					msg = msg[:57] + "..."
+				// Format message with structured attributes
+				msg := m.formatLogMessage(log)
+				if len(msg) > 90 {
+					msg = msg[:87] + "..."
 				}
 				targetLine += fmt.Sprintf("\n    • %s", msg)
 				logFound = true
@@ -325,10 +320,10 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			if len(target.Logs) > 0 {
 				// Show the latest log entry (already filtered by CallbackLogger)
 				log := target.Logs[len(target.Logs)-1]
-				// Truncate long messages for cleaner display
-				msg := log.Message
-				if len(msg) > 60 {
-					msg = msg[:57] + "..."
+				// Format message with structured attributes
+				msg := m.formatLogMessage(log)
+				if len(msg) > 90 {
+					msg = msg[:87] + "..."
 				}
 				targetLine += fmt.Sprintf("\n    • %s", msg)
 				logFound = true
@@ -386,26 +381,18 @@ func (m *Model) addLog(msg logMsg) {
 	target := m.targets[msg.TargetIndex-1]
 	target.Logs = append(target.Logs, msg.Record)
 
-	// Check for phase/step information in the log record
-	var phase, step string
+	// Check for phase information in the log record
+	var phase string
 	msg.Record.Attrs(func(a slog.Attr) bool {
-		switch a.Key {
-		case "phase":
+		if a.Key == "phase" {
 			phase = a.Value.String()
-		case "step":
-			step = a.Value.String()
 		}
 		return true
 	})
 
-	// Update phase/step if present
-	if phase != "" || step != "" {
-		if phase != "" {
-			target.Phase = phase
-		}
-		if step != "" {
-			target.PhaseDetail = step
-		}
+	// Update phase if present
+	if phase != "" {
+		target.Phase = phase
 	}
 
 	if !m.tuiEnabled {
@@ -446,6 +433,39 @@ type addTargetMsg struct {
 	Name  string
 	Index int
 	Total int
+}
+
+// formatLogMessage formats a log message with key structured attributes
+func (m *Model) formatLogMessage(record slog.Record) string {
+	msg := record.Message
+
+	// Collect all relevant attributes as key=value pairs
+	var attrs []string
+	record.Attrs(func(a slog.Attr) bool {
+		// Skip internal/redundant attributes
+		if a.Key == "phase" || a.Key == "targetIndex" ||
+			a.Key == "totalTargets" || a.Key == "targetName" {
+			return true
+		}
+		// Format as key=value
+		switch a.Value.Kind() {
+		case slog.KindDuration:
+			if d := a.Value.Duration(); d > 0 {
+				attrs = append(attrs, fmt.Sprintf("%s=%.2fs", a.Key, d.Seconds()))
+			}
+		default:
+			if v := a.Value.String(); v != "" {
+				attrs = append(attrs, fmt.Sprintf("%s=%s", a.Key, v))
+			}
+		}
+		return true
+	})
+
+	// Append attributes to message if any
+	if len(attrs) > 0 {
+		return fmt.Sprintf("%s [%s]", msg, strings.Join(attrs, " "))
+	}
+	return msg
 }
 
 // GetFailedTargets returns all failed targets

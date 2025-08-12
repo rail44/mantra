@@ -14,9 +14,12 @@ type SimpleCache struct {
 	items map[string]cacheItem
 }
 
+// hoge
+
 // mantra: キャッシュから値を取得する。存在しない場合はnilを返す。有効期限が切れている場合もnilを返す。
 func (c *SimpleCache) Get(key string) any {
-	panic("not implemented") // force regeneration
+	// hoge
+	panic("not implemented")
 }
 
 // mantra: キャッシュに値を設定する。TTLが0の場合は有効期限なし。
@@ -43,4 +46,3 @@ func (c *SimpleCache) Size() int {
 func (c *SimpleCache) Keys() []string {
 	panic("not implemented")
 }
-// Force regeneration test

@@ -18,7 +18,6 @@ import (
 type TargetEvent struct {
 	TargetIndex int
 	Phase       string
-	Step        string
 	Time        time.Time
 }
 
@@ -54,10 +53,6 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	toolContext := tools.NewContext(nil, target, packagePath)
 	r.configureClientForPhase(contextPhase, toolContext)
 
-	// Log phase step change
-	r.phaseLogger.Info("Phase step",
-		slog.String("step", StateContextInitializing))
-
 	// Build prompt
 	contextPromptBuilder := contextPhase.PromptBuilder()
 	initialPrompt, err := contextPromptBuilder.BuildForTarget(target, fileContent)
@@ -71,8 +66,7 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 	}
 
 	// Execute
-	r.phaseLogger.Info("Phase step",
-		slog.String("step", StateContextAnalyzing))
+	r.phaseLogger.Info("Analyzing...")
 	_, err = r.client.Generate(ctx, initialPrompt)
 	if err != nil {
 		r.logger.Error("Context gathering failed", "error", err.Error())
@@ -99,10 +93,6 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 	toolContext := tools.NewContext(fileInfo, target, projectRoot)
 	r.configureClientForPhase(implPhase, toolContext)
 
-	// Log phase step
-	r.phaseLogger.Info("Phase step",
-		slog.String("step", StateImplPreparing))
-
 	// Build prompt with context
 	contextResultMarkdown := formatter.FormatContextAsMarkdown(contextResult)
 	implPromptBuilder := implPhase.PromptBuilderWithContext(contextResultMarkdown)
@@ -117,8 +107,7 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 	}
 
 	// Execute
-	r.phaseLogger.Info("Phase step",
-		slog.String("step", StateImplGenerating))
+	r.phaseLogger.Info("Generating...")
 	_, err = r.client.Generate(ctx, implPrompt)
 	if err != nil {
 		r.logger.Error("Implementation failed", "error", err.Error())

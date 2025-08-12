@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,50 +19,6 @@ type toolResult struct {
 	message    OpenAIMessage
 	duration   time.Duration
 	isTerminal bool
-}
-
-// getToolStepMessage returns an appropriate step message based on tool name and result
-func getToolStepMessage(toolName string, err error) string {
-	// Error cases - use forward-looking messages
-	if err != nil {
-		switch toolName {
-		case "search":
-			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no matching") {
-				return "Expanding search"
-			}
-			return "Retrying search"
-		case "inspect":
-			return "Analyzing types"
-		case "read_func":
-			return "Reading implementations"
-		case "check_code":
-			if strings.Contains(err.Error(), "syntax") {
-				return "Fixing syntax issues"
-			}
-			if strings.Contains(err.Error(), "type") {
-				return "Resolving type errors"
-			}
-			return "Adjusting code"
-		default:
-			return "Processing"
-		}
-	}
-
-	// Success cases
-	switch toolName {
-	case "search":
-		return "Found symbols"
-	case "inspect":
-		return "Inspected types"
-	case "read_func":
-		return "Read implementations"
-	case "check_code":
-		return "Code validated"
-	case "result":
-		return "Finalizing"
-	default:
-		return "Processing"
-	}
 }
 
 // executeToolsParallel executes multiple tool calls in parallel using channels for efficient result collection
@@ -132,12 +87,9 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				} else {
 					resultContent = fmt.Sprintf(`{"error": {"message": %q, "type": "tool_error"}}`, err.Error())
 				}
-				// Log tool error with step message
-				stepMsg := getToolStepMessage(tc.Function.Name, err)
+				// Log tool error
 				logger.Info("Tool error",
-					slog.String("event", "tool_error"),
 					slog.String("tool", tc.Function.Name),
-					slog.String("step", stepMsg),
 					slog.String("error", err.Error()),
 					slog.Duration("duration", elapsed))
 			} else {
@@ -160,27 +112,20 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				if tc.Function.Name == "result" && params != nil {
 					// Check if the result tool was called with success: false
 					if success, ok := params["success"].(bool); ok && !success {
-						// Phase failed - use warning log and appropriate step message
+						// Phase failed - use warning log
 						logger.Warn("Phase failed via result tool",
-							slog.String("event", "phase_failed"),
 							slog.String("tool", tc.Function.Name),
-							slog.String("step", "Phase failed"),
 							slog.Duration("duration", elapsed))
 					} else {
 						// Phase succeeded (or success field not found)
 						logger.Info("Tool completed",
-							slog.String("event", "tool_completed"),
 							slog.String("tool", tc.Function.Name),
-							slog.String("step", "Finalizing"),
 							slog.Duration("duration", elapsed))
 					}
 				} else {
 					// Normal tool execution
-					stepMsg := getToolStepMessage(tc.Function.Name, nil)
 					logger.Info("Tool completed",
-						slog.String("event", "tool_completed"),
 						slog.String("tool", tc.Function.Name),
-						slog.String("step", stepMsg),
 						slog.Duration("duration", elapsed))
 				}
 			}
