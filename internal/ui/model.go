@@ -331,14 +331,14 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 					if len(msg) > 60 {
 						msg = msg[:57] + "..."
 					}
-					targetLine += fmt.Sprintf("\n    → %s", msg)
+					targetLine += fmt.Sprintf("\n    • %s", msg)
 					logFound = true
 					break
 				}
 			}
 			// If no log to show, add empty line to maintain consistent spacing
 			if !logFound {
-				targetLine += "\n    → (waiting...)"
+				targetLine += "\n"
 			}
 
 			target.mu.RUnlock()
@@ -366,7 +366,7 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 					if len(msg) > 60 {
 						msg = msg[:57] + "..."
 					}
-					targetLine += fmt.Sprintf("\n    → %s", msg)
+					targetLine += fmt.Sprintf("\n    • %s", msg)
 					logFound = true
 					break
 				}
@@ -374,9 +374,9 @@ func (m *Model) categorizeTargets() (activeTargets, completedTargets []string) {
 			// For completed targets, show a result message if no log found
 			if !logFound {
 				if target.Status == "completed" {
-					targetLine += "\n    → Completed successfully"
+					targetLine += "\n    • Completed successfully"
 				} else if target.Status == "failed" {
-					targetLine += "\n    → Failed"
+					targetLine += "\n    • Failed"
 				}
 			}
 			target.mu.RUnlock()

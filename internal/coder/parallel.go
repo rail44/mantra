@@ -176,6 +176,9 @@ func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc
 	// Create a target-specific logger with display name
 	logger := uiProgram.CreateTargetLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
 
+	// Log generation start
+	logger.Info("Starting generation")
+
 	// Explicitly mark target as running now that we're starting execution
 	uiProgram.MarkAsRunning(targetNum)
 
