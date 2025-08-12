@@ -44,7 +44,7 @@ func NewParallelCoder(clientConfig *llm.ClientConfig, cfg *config.Config) *Paral
 // TargetContext contains a target and its associated file context
 type TargetContext struct {
 	Target      *parser.Target
-	Index			  int
+	Index       int
 	FileContent string
 	FileInfo    *parser.FileInfo
 }
