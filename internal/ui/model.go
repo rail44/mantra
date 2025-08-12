@@ -133,35 +133,45 @@ func (m *Model) View() string {
 		return "Initializing..."
 	}
 
-	var lines []string
+	// Build output with string builder for better performance
+	var sb strings.Builder
 
 	stats := m.calculateStatistics()
 	header := m.buildHeader(stats)
-	lines = append(lines, header)
-	lines = append(lines, "")
+	sb.WriteString(header)
+	sb.WriteString("\n")
 
 	activeTargets, completedTargets := m.categorizeTargets()
 
 	// Show active targets first
 	if len(activeTargets) > 0 {
-		lines = append(lines, "Active:")
+		sb.WriteString("\nActive:\n")
 		for _, line := range activeTargets {
-			lines = append(lines, "  "+line)
+			// Truncate lines if they exceed terminal width
+			displayLine := "  " + line
+			if m.width > 0 && len(displayLine) > m.width {
+				displayLine = displayLine[:m.width-3] + "..."
+			}
+			sb.WriteString(displayLine)
+			sb.WriteString("\n")
 		}
-		lines = append(lines, "")
 	}
 
-	// Show all completed targets
+	// Show completed targets
 	if len(completedTargets) > 0 {
-		lines = append(lines, "Completed:")
+		sb.WriteString("\nCompleted:\n")
 		for _, line := range completedTargets {
-			lines = append(lines, "  "+line)
+			// Truncate lines if they exceed terminal width
+			displayLine := "  " + line
+			if m.width > 0 && len(displayLine) > m.width {
+				displayLine = displayLine[:m.width-3] + "..."
+			}
+			sb.WriteString(displayLine)
+			sb.WriteString("\n")
 		}
-		// Add empty line after completed section
-		lines = append(lines, "")
 	}
 
-	return strings.Join(lines, "\n")
+	return sb.String()
 }
 
 // targetStats holds aggregated statistics about targets

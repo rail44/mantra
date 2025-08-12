@@ -48,7 +48,8 @@ func NewProgramWithOptions(opts ProgramOptions) *Program {
 		// Plain mode or non-terminal mode - disable TUI rendering
 		teaProgram = tea.NewProgram(model, tea.WithInput(nil), tea.WithoutRenderer())
 	} else {
-		// Normal terminal mode - use TUI without alt screen to keep previous logs visible
+		// Normal terminal mode - standard TUI setup
+		// We don't use alt screen to keep previous logs visible
 		teaProgram = tea.NewProgram(model)
 	}
 

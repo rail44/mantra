@@ -175,7 +175,8 @@ func (c *ParallelCoder) generateSingleTarget(ctx context.Context, tc TargetConte
 
 	// Success
 	duration := time.Since(targetStart).Round(time.Millisecond)
-	logger.Info("Successfully generated implementation", "duration", duration)
+	// Log through the target logger which will send to TUI
+	logger.Debug("Successfully generated implementation", "duration", duration)
 	uiProgram.Complete(targetNum)
 
 	return &parser.GenerationResult{

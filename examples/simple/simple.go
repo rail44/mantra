@@ -39,11 +39,6 @@ func (c *SimpleCache) Size() int {
 	panic("not implemented")
 }
 
-// mantra: キャッシュが空かどうかを返す
-func (c *SimpleCache) IsEmpty() bool {
-	panic("not implemented")
-}
-
 // mantra: 全てのキーを返す
 func (c *SimpleCache) Keys() []string {
 	panic("not implemented")
