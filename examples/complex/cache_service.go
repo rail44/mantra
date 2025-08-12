@@ -9,7 +9,7 @@ import (
 )
 
 type cacheItem struct {
-	value     interface{}
+	value     any
 	expiresAt time.Time
 }
 
@@ -21,13 +21,13 @@ type CacheService struct {
 
 // mantra: キーに対応する値をキャッシュから取得する
 // 存在しない場合や期限切れの場合はエラーを返す
-func (c *CacheService) Get(key string) interface{} {
+func (c *CacheService) Get(key string) any {
 	panic("not implemented")
 }
 
 // mantra: キーと値をキャッシュに保存する
 // TTLで有効期限を設定し、既存の値は上書きする
-func (c *CacheService) Set(key string, value interface{}, ttl time.Duration) error {
+func (c *CacheService) Set(key string, value any, ttl time.Duration) error {
 	panic("not implemented")
 }
 

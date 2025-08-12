@@ -17,7 +17,7 @@ type ContextGatheringPhase struct {
 	temperature float32
 	tools       []tools.Tool
 	logger      *slog.Logger
-	result      interface{}
+	result      any
 	completed   bool
 	mu          sync.Mutex
 	schema      schemas.ResultSchema
@@ -52,7 +52,7 @@ func NewContextGatheringPhase(temperature float32, packagePath string, logger *s
 }
 
 // storeResult stores the result from the result tool
-func (p *ContextGatheringPhase) storeResult(result interface{}) error {
+func (p *ContextGatheringPhase) storeResult(result any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.result = result
@@ -140,7 +140,7 @@ func (p *ContextGatheringPhase) PromptBuilder() *prompt.Builder {
 }
 
 // Result returns the phase result and whether it's complete
-func (p *ContextGatheringPhase) Result() (interface{}, bool) {
+func (p *ContextGatheringPhase) Result() (any, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.result, p.completed
@@ -235,9 +235,9 @@ func (s *contextGatheringResultSchema) Schema() json.RawMessage {
 }
 
 // Validate checks if the data conforms to the context gathering schema
-func (s *contextGatheringResultSchema) Validate(data interface{}) error {
+func (s *contextGatheringResultSchema) Validate(data any) error {
 	// Basic type check
-	dataMap, ok := data.(map[string]interface{})
+	dataMap, ok := data.(map[string]any)
 	if !ok {
 		return fmt.Errorf("expected object, got %T", data)
 	}
@@ -260,7 +260,7 @@ func (s *contextGatheringResultSchema) Validate(data interface{}) error {
 			return fmt.Errorf("error field is required when success is false")
 		}
 
-		errorMap, ok := errorField.(map[string]interface{})
+		errorMap, ok := errorField.(map[string]any)
 		if !ok {
 			return fmt.Errorf("error must be an object, got %T", errorField)
 		}
@@ -282,9 +282,9 @@ func (s *contextGatheringResultSchema) Validate(data interface{}) error {
 	}
 
 	// Validate types array if present
-	if types, ok := dataMap["types"].([]interface{}); ok {
+	if types, ok := dataMap["types"].([]any); ok {
 		for i, t := range types {
-			typeMap, ok := t.(map[string]interface{})
+			typeMap, ok := t.(map[string]any)
 			if !ok {
 				return fmt.Errorf("types[%d] must be an object", i)
 			}
@@ -298,9 +298,9 @@ func (s *contextGatheringResultSchema) Validate(data interface{}) error {
 	}
 
 	// Validate functions array if present
-	if functions, ok := dataMap["functions"].([]interface{}); ok {
+	if functions, ok := dataMap["functions"].([]any); ok {
 		for i, f := range functions {
-			funcMap, ok := f.(map[string]interface{})
+			funcMap, ok := f.(map[string]any)
 			if !ok {
 				return fmt.Errorf("functions[%d] must be an object", i)
 			}
@@ -314,9 +314,9 @@ func (s *contextGatheringResultSchema) Validate(data interface{}) error {
 	}
 
 	// Validate constants array if present
-	if constants, ok := dataMap["constants"].([]interface{}); ok {
+	if constants, ok := dataMap["constants"].([]any); ok {
 		for i, c := range constants {
-			constMap, ok := c.(map[string]interface{})
+			constMap, ok := c.(map[string]any)
 			if !ok {
 				return fmt.Errorf("constants[%d] must be an object", i)
 			}
@@ -330,7 +330,7 @@ func (s *contextGatheringResultSchema) Validate(data interface{}) error {
 }
 
 // Transform converts the raw data into ContextGatheringResult
-func (s *contextGatheringResultSchema) Transform(data interface{}) (interface{}, error) {
+func (s *contextGatheringResultSchema) Transform(data any) (any, error) {
 	// Return the entire map to preserve success/error information
 	// The cmd/generate.go will handle the structure appropriately
 	return data, nil

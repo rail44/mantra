@@ -70,7 +70,7 @@ func (t *SearchTool) ParametersSchema() json.RawMessage {
 }
 
 // Execute runs the search tool
-func (t *SearchTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+func (t *SearchTool) Execute(ctx context.Context, params map[string]any) (any, error) {
 	// Extract parameters
 	pattern, ok := params["pattern"].(string)
 	if !ok {

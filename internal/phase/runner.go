@@ -41,7 +41,7 @@ func NewRunner(client *llm.Client, logger *slog.Logger) *Runner {
 }
 
 // ExecuteContextGathering executes the context gathering phase
-func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, setStep StepCallback) (map[string]interface{}, *parser.FailureReason) {
+func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Target, fileContent string, destDir string, setStep StepCallback) (map[string]any, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
 	setStep(StateContextInitializing)
@@ -88,7 +88,7 @@ func (r *Runner) ExecuteContextGathering(ctx context.Context, target *parser.Tar
 }
 
 // ExecuteImplementation executes the implementation phase
-func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]interface{}, setStep StepCallback) (string, *parser.FailureReason) {
+func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Target, fileContent string, fileInfo *parser.FileInfo, projectRoot string, contextResult map[string]any, setStep StepCallback) (string, *parser.FailureReason) {
 	// Context is passed through for cancellation
 
 	setStep(StateImplPreparing)
@@ -152,7 +152,7 @@ func (r *Runner) ExecuteImplementation(ctx context.Context, target *parser.Targe
 }
 
 // processResult processes the result from a phase
-func (r *Runner) processResult(p Phase, phaseName string) (map[string]interface{}, *parser.FailureReason) {
+func (r *Runner) processResult(p Phase, phaseName string) (map[string]any, *parser.FailureReason) {
 	phaseResult, completed := p.Result()
 	if !completed {
 		r.logger.Warn(fmt.Sprintf("%s phase did not complete with result tool", phaseName))
@@ -163,7 +163,7 @@ func (r *Runner) processResult(p Phase, phaseName string) (map[string]interface{
 		}
 	}
 
-	resultMap, ok := phaseResult.(map[string]interface{})
+	resultMap, ok := phaseResult.(map[string]any)
 	if !ok {
 		r.logger.Error(fmt.Sprintf("Unexpected result type from %s phase", phaseName), "type", fmt.Sprintf("%T", phaseResult))
 		return nil, &parser.FailureReason{
@@ -177,7 +177,7 @@ func (r *Runner) processResult(p Phase, phaseName string) (map[string]interface{
 	if success, hasSuccess := resultMap["success"].(bool); hasSuccess {
 		if !success {
 			// Extract error information
-			if errorField, hasError := resultMap["error"].(map[string]interface{}); hasError {
+			if errorField, hasError := resultMap["error"].(map[string]any); hasError {
 				message := ""
 				details := ""
 				if msg, ok := errorField["message"].(string); ok {

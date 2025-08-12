@@ -75,7 +75,7 @@ go 1.21
 
 	// Execute the tool
 	ctx := context.Background()
-	params := map[string]interface{}{
+	params := map[string]any{
 		"code": testCode,
 	}
 
@@ -173,7 +173,7 @@ go 1.21
 
 	// Execute the tool
 	ctx := context.Background()
-	params := map[string]interface{}{
+	params := map[string]any{
 		"code": testCode,
 	}
 

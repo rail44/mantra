@@ -19,6 +19,6 @@ type Provider interface {
 
 // ToolExecutor executes tool calls
 type ToolExecutor interface {
-	Execute(ctx context.Context, toolName string, params map[string]interface{}) (interface{}, error)
+	Execute(ctx context.Context, toolName string, params map[string]any) (any, error)
 	IsTerminal(toolName string) bool
 }

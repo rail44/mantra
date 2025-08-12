@@ -24,7 +24,7 @@ type Phase interface {
 	PromptBuilder() *prompt.Builder
 
 	// Result returns the phase result and whether it's complete
-	Result() (interface{}, bool)
+	Result() (any, bool)
 
 	// Reset clears the phase state for reuse
 	Reset()

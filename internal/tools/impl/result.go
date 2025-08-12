@@ -12,11 +12,11 @@ import (
 type ResultTool struct {
 	phaseName string
 	schema    schemas.ResultSchema
-	onResult  func(interface{}) error
+	onResult  func(any) error
 }
 
 // NewResultTool creates a new result tool for a specific phase
-func NewResultTool(phaseName string, schema schemas.ResultSchema, onResult func(interface{}) error) *ResultTool {
+func NewResultTool(phaseName string, schema schemas.ResultSchema, onResult func(any) error) *ResultTool {
 	return &ResultTool{
 		phaseName: phaseName,
 		schema:    schema,
@@ -40,7 +40,7 @@ func (t *ResultTool) ParametersSchema() json.RawMessage {
 }
 
 // Execute runs the result tool
-func (t *ResultTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+func (t *ResultTool) Execute(ctx context.Context, params map[string]any) (any, error) {
 	// 1. Validate the parameters against the schema
 	if err := t.schema.Validate(params); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
@@ -58,7 +58,7 @@ func (t *ResultTool) Execute(ctx context.Context, params map[string]interface{})
 	}
 
 	// 4. Return success message
-	return map[string]interface{}{
+	return map[string]any{
 		"status":  "success",
 		"message": fmt.Sprintf("%s phase completed successfully", t.phaseName),
 	}, nil

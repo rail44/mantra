@@ -47,7 +47,7 @@ type OrderRepository interface {
 
 // EventPublisher publishes domain events
 type EventPublisher interface {
-	Publish(ctx context.Context, event interface{}) error
+	Publish(ctx context.Context, event any) error
 }
 
 // OrderService handles order business logic

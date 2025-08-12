@@ -52,7 +52,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				tc.Function.Arguments = json.RawMessage(argStr)
 			}
 
-			var params map[string]interface{}
+			var params map[string]any
 			if err := json.Unmarshal(tc.Function.Arguments, &params); err != nil {
 				errorMsg := fmt.Sprintf("failed to parse tool arguments: %v", err)
 				logger.Error(errorMsg)
@@ -81,8 +81,8 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 			var resultContent string
 			if err != nil {
 				// For errors, create a structured error response
-				errorResponse := map[string]interface{}{
-					"error": map[string]interface{}{
+				errorResponse := map[string]any{
+					"error": map[string]any{
 						"message": err.Error(),
 						"type":    "tool_error",
 					},

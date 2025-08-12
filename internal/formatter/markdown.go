@@ -6,7 +6,7 @@ import (
 )
 
 // FormatContextAsMarkdown converts the context gathering result from JSON to readable Markdown
-func FormatContextAsMarkdown(contextResult map[string]interface{}) string {
+func FormatContextAsMarkdown(contextResult map[string]any) string {
 	if contextResult == nil {
 		return ""
 	}
@@ -14,17 +14,17 @@ func FormatContextAsMarkdown(contextResult map[string]interface{}) string {
 	var formatted strings.Builder
 
 	// Format types section
-	if types, ok := contextResult["types"].([]interface{}); ok && len(types) > 0 {
+	if types, ok := contextResult["types"].([]any); ok && len(types) > 0 {
 		formatted.WriteString("### Discovered Types\n\n")
 		for _, t := range types {
-			if typeMap, ok := t.(map[string]interface{}); ok {
+			if typeMap, ok := t.(map[string]any); ok {
 				if name, ok := typeMap["name"].(string); ok {
 					formatted.WriteString(fmt.Sprintf("#### %s\n", name))
 				}
 				if definition, ok := typeMap["definition"].(string); ok {
 					formatted.WriteString(fmt.Sprintf("```go\n%s\n```\n", definition))
 				}
-				if methods, ok := typeMap["methods"].([]interface{}); ok && len(methods) > 0 {
+				if methods, ok := typeMap["methods"].([]any); ok && len(methods) > 0 {
 					formatted.WriteString("**Methods:**\n")
 					for _, method := range methods {
 						if methodStr, ok := method.(string); ok {
@@ -38,10 +38,10 @@ func FormatContextAsMarkdown(contextResult map[string]interface{}) string {
 	}
 
 	// Format functions section
-	if functions, ok := contextResult["functions"].([]interface{}); ok && len(functions) > 0 {
+	if functions, ok := contextResult["functions"].([]any); ok && len(functions) > 0 {
 		formatted.WriteString("### Discovered Functions\n\n")
 		for _, f := range functions {
-			if funcMap, ok := f.(map[string]interface{}); ok {
+			if funcMap, ok := f.(map[string]any); ok {
 				if name, ok := funcMap["name"].(string); ok {
 					formatted.WriteString(fmt.Sprintf("#### %s\n", name))
 				}
@@ -58,10 +58,10 @@ func FormatContextAsMarkdown(contextResult map[string]interface{}) string {
 	}
 
 	// Format constants section
-	if constants, ok := contextResult["constants"].([]interface{}); ok && len(constants) > 0 {
+	if constants, ok := contextResult["constants"].([]any); ok && len(constants) > 0 {
 		formatted.WriteString("### Discovered Constants/Variables\n\n")
 		for _, c := range constants {
-			if constMap, ok := c.(map[string]interface{}); ok {
+			if constMap, ok := c.(map[string]any); ok {
 				if name, ok := constMap["name"].(string); ok {
 					formatted.WriteString(fmt.Sprintf("- **%s**", name))
 					if typeStr, ok := constMap["type"].(string); ok && typeStr != "" {

@@ -48,7 +48,7 @@ func (e *Executor) IsTerminal(toolName string) bool {
 }
 
 // Execute runs a tool by name with the given parameters
-func (e *Executor) Execute(ctx context.Context, toolName string, params map[string]interface{}) (interface{}, error) {
+func (e *Executor) Execute(ctx context.Context, toolName string, params map[string]any) (any, error) {
 	// Get the tool from map
 	tool, exists := e.tools[toolName]
 	if !exists {

@@ -51,7 +51,7 @@ func (t *InspectTool) ParametersSchema() json.RawMessage {
 }
 
 // Execute runs the inspect tool
-func (t *InspectTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+func (t *InspectTool) Execute(ctx context.Context, params map[string]any) (any, error) {
 	// Extract parameters
 	name, ok := params["name"].(string)
 	if !ok {
@@ -65,7 +65,7 @@ func (t *InspectTool) Execute(ctx context.Context, params map[string]interface{}
 	decl, err := t.loader.GetDeclaration(name)
 	if err != nil {
 		// Return JSON-serializable map for not found
-		return map[string]interface{}{
+		return map[string]any{
 			"found": false,
 			"name":  name,
 			"kind":  "not_found",
@@ -83,8 +83,8 @@ func (t *InspectTool) IsTerminal() bool {
 }
 
 // convertDeclarationToMap converts a Declaration to a JSON-serializable map
-func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]interface{} {
-	result := map[string]interface{}{
+func convertDeclarationToMap(decl pkgcontext.Declaration) map[string]any {
+	result := map[string]any{
 		"found":   decl.IsFound(),
 		"name":    decl.GetName(),
 		"kind":    decl.GetKind(),

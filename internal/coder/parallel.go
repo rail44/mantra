@@ -57,18 +57,25 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	// Get project root from the first target's file path
 	projectRoot := findProjectRoot(filepath.Dir(targets[0].Target.FilePath))
 
-	// Setup UI and event handling
-	uiProgram, eventCh := c.setupUI()
+	uiProgram := ui.NewProgramWithOptions(ui.ProgramOptions{
+		Plain: c.config.Plain,
+	})
 
 	// Thread-safe collections for collecting results
 	var mu sync.Mutex
 	var allResults []*parser.GenerationResult
 
-	// Channel to signal completion
-	done := make(chan struct{})
-
-	// Start generation in background
+	// Start TUI in background
+	tuiDone := make(chan error, 1)
 	go func() {
+		tuiDone <- uiProgram.Start()
+	}()
+
+	// Start generation in a separate goroutine
+	genDone := make(chan struct{})
+	go func() {
+		defer close(genDone)
+		
 		// Use errgroup with limited concurrency (max 16)
 		g, ctx := errgroup.WithContext(ctx)
 		g.SetLimit(16)
@@ -79,7 +86,13 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 			targetCtx := tc
 
 			g.Go(func() error {
-				result := c.processTarget(ctx, targetCtx, projectRoot, index, len(targets), uiProgram, eventCh)
+				// Register target with UI
+				uiProgram.AddTarget(targetCtx.Target.GetDisplayName(), index, len(targets))
+				
+				// Create and run the target coder
+				coder := NewTargetCoder(c, ctx, targetCtx, projectRoot, index, len(targets), uiProgram)
+				result := coder.Generate()
+				
 				mu.Lock()
 				allResults = append(allResults, result)
 				mu.Unlock()
@@ -89,16 +102,19 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 		// Wait for all goroutines to complete
 		g.Wait()
-
-		// Close event channel
-		close(eventCh)
-
-		// Signal completion
-		close(done)
 	}()
 
-	// Wait for generation and UI to complete
-	c.waitForCompletion(done, uiProgram)
+	// Wait for generation to complete
+	<-genDone
+	
+	// Stop the UI
+	time.Sleep(100 * time.Millisecond) // Allow final render
+	uiProgram.Quit()
+	
+	// Wait for UI to finish if it's enabled
+	if uiProgram.IsTUIEnabled() {
+		<-tuiDone
+	}
 
 	// Display logs for failed targets
 	// TUI mode already shows progress, so only display failures
@@ -121,13 +137,12 @@ type TargetCoder struct {
 	index       int
 	total       int
 	uiProgram   *ui.Program
-	eventCh     chan phase.TargetEvent
 	logger      *slog.Logger
 	startTime   time.Time
 }
 
 // NewTargetCoder creates a new target coder
-func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetContext, projectRoot string, index, total int, uiProgram *ui.Program, eventCh chan phase.TargetEvent) *TargetCoder {
+func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetContext, projectRoot string, index, total int, uiProgram *ui.Program) *TargetCoder {
 	// Create a callback handler with target attributes
 	callbackHandler := log.NewCallbackHandler(
 		func(record slog.Record) {
@@ -147,7 +162,6 @@ func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetCont
 		index:       index,
 		total:       total,
 		uiProgram:   uiProgram,
-		eventCh:     eventCh,
 		logger:      slog.New(callbackHandler),
 		startTime:   time.Now(),
 	}
@@ -192,7 +206,7 @@ func (g *TargetCoder) createClient() (*llm.Client, error) {
 }
 
 // executeContextGathering executes the context gathering phase
-func (g *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]interface{}, *parser.FailureReason) {
+func (g *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]any, *parser.FailureReason) {
 	stepCallback := func(step string) {
 		g.sendPhaseEvent(phase.PhaseContextGathering, step)
 	}
@@ -200,7 +214,7 @@ func (g *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]
 }
 
 // executeImplementation executes the implementation phase
-func (g *TargetCoder) executeImplementation(runner *phase.Runner, contextResult map[string]interface{}) (string, *parser.FailureReason) {
+func (g *TargetCoder) executeImplementation(runner *phase.Runner, contextResult map[string]any) (string, *parser.FailureReason) {
 	stepCallback := func(step string) {
 		g.sendPhaseEvent(phase.PhaseImplementation, step)
 	}
@@ -266,12 +280,7 @@ func (g *TargetCoder) markFailed() {
 
 // sendPhaseEvent sends a phase event to the UI
 func (g *TargetCoder) sendPhaseEvent(phaseName, step string) {
-	g.eventCh <- phase.TargetEvent{
-		TargetIndex: g.index,
-		Phase:       phaseName,
-		Step:        step,
-		Time:        time.Now(),
-	}
+	g.uiProgram.UpdatePhase(g.index, phaseName, step)
 }
 
 // displayFailedTargetLogs displays logs only for failed targets in TUI mode
@@ -297,72 +306,6 @@ func (c *ParallelCoder) displayFailedTargetLogs(ctx context.Context, uiProgram *
 		c.logger.Info(fmt.Sprintf("--- %s ---", target.Name))
 		for _, record := range logs {
 			c.logger.Handler().Handle(ctx, record)
-		}
-	}
-}
-
-// setupUI creates and configures the UI program with event handling
-func (c *ParallelCoder) setupUI() (*ui.Program, chan phase.TargetEvent) {
-	// Create TUI program for parallel execution
-	// Use plain console output if --plain flag is set
-	uiProgram := ui.NewProgramWithOptions(ui.ProgramOptions{
-		Plain: c.config.Plain,
-	})
-
-	// Create event channel for phase updates
-	eventCh := make(chan phase.TargetEvent, 100)
-
-	// Start UI event processor
-	go func() {
-		for event := range eventCh {
-			uiProgram.UpdatePhase(event.TargetIndex, event.Phase, event.Step)
-		}
-	}()
-
-	return uiProgram, eventCh
-}
-
-// processTarget processes a single target with UI callbacks
-func (c *ParallelCoder) processTarget(ctx context.Context, tc TargetContext, projectRoot string, index, total int, uiProgram *ui.Program, eventCh chan phase.TargetEvent) *parser.GenerationResult {
-	// Register target with UI
-	uiProgram.AddTarget(tc.Target.GetDisplayName(), index, total)
-
-	// Create and run the target coder
-	coder := NewTargetCoder(c, ctx, tc, projectRoot, index, total, uiProgram, eventCh)
-	return coder.Generate()
-}
-
-// waitForCompletion waits for generation and UI to complete
-func (c *ParallelCoder) waitForCompletion(done chan struct{}, uiProgram *ui.Program) {
-	// Wait for completion or TUI to finish
-	go func() {
-		<-done
-		time.Sleep(100 * time.Millisecond) // Allow final render
-		uiProgram.Quit()
-	}()
-
-	// Start TUI in background
-	tuiDone := make(chan error, 1)
-	go func() {
-		tuiDone <- uiProgram.Start()
-	}()
-
-	// Wait for either TUI to finish or generation to complete
-	select {
-	case <-done:
-		// Generation completed, TUI will be quit automatically
-		// Wait for TUI to actually finish if it's enabled
-		if uiProgram.IsTUIEnabled() {
-			<-tuiDone
-		}
-	case err := <-tuiDone:
-		// TUI finished (shouldn't happen normally)
-		// Don't log here as it might corrupt the display
-		// Store the error for later if needed
-		<-done // Still wait for generation to complete
-		if err != nil {
-			// Log after everything is done
-			c.logger.Debug("TUI error", "error", err)
 		}
 	}
 }

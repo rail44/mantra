@@ -42,7 +42,7 @@ func IgnoredFunction() {
 }
 
 type Repository struct {
-	client interface{}
+	client any
 }
 
 // mantra: ユーザーをIDで取得

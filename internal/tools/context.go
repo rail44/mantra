@@ -18,7 +18,7 @@ type Context struct {
 	ProjectRoot string
 
 	// Additional context that might be needed by tools
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }
 
 // NewContext creates a new tool context
@@ -27,7 +27,7 @@ func NewContext(fileInfo *parser.FileInfo, target *parser.Target, projectRoot st
 		FileInfo:    fileInfo,
 		Target:      target,
 		ProjectRoot: projectRoot,
-		Metadata:    make(map[string]interface{}),
+		Metadata:    make(map[string]any),
 	}
 }
 
@@ -38,7 +38,7 @@ func (c *Context) Clone() *Context {
 	}
 
 	// Create new metadata map
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range c.Metadata {
 		metadata[k] = v
 	}

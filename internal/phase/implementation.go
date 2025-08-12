@@ -18,7 +18,7 @@ type ImplementationPhase struct {
 	tools       []tools.Tool
 	projectRoot string
 	logger      *slog.Logger
-	result      interface{}
+	result      any
 	completed   bool
 	mu          sync.Mutex
 	schema      schemas.ResultSchema
@@ -54,7 +54,7 @@ func NewImplementationPhase(temperature float32, projectRoot string, logger *slo
 }
 
 // storeResult stores the result from the result tool
-func (p *ImplementationPhase) storeResult(result interface{}) error {
+func (p *ImplementationPhase) storeResult(result any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.result = result
@@ -149,7 +149,7 @@ func (p *ImplementationPhase) PromptBuilderWithContext(contextResult string) *pr
 }
 
 // Result returns the phase result and whether it's complete
-func (p *ImplementationPhase) Result() (interface{}, bool) {
+func (p *ImplementationPhase) Result() (any, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.result, p.completed
@@ -206,9 +206,9 @@ func (s *implementationResultSchema) Schema() json.RawMessage {
 }
 
 // Validate checks if the data conforms to the implementation schema
-func (s *implementationResultSchema) Validate(data interface{}) error {
+func (s *implementationResultSchema) Validate(data any) error {
 	// Basic type check
-	dataMap, ok := data.(map[string]interface{})
+	dataMap, ok := data.(map[string]any)
 	if !ok {
 		return fmt.Errorf("expected object, got %T", data)
 	}
@@ -231,7 +231,7 @@ func (s *implementationResultSchema) Validate(data interface{}) error {
 			return fmt.Errorf("error field is required when success is false")
 		}
 
-		errorMap, ok := errorField.(map[string]interface{})
+		errorMap, ok := errorField.(map[string]any)
 		if !ok {
 			return fmt.Errorf("error must be an object, got %T", errorField)
 		}
@@ -263,8 +263,8 @@ func (s *implementationResultSchema) Validate(data interface{}) error {
 }
 
 // Transform converts the raw data into ImplementationResult
-func (s *implementationResultSchema) Transform(data interface{}) (interface{}, error) {
-	dataMap := data.(map[string]interface{})
+func (s *implementationResultSchema) Transform(data any) (any, error) {
+	dataMap := data.(map[string]any)
 
 	// Return the entire map to preserve success/error information
 	// The cmd/generate.go will handle the structure appropriately

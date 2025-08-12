@@ -27,11 +27,11 @@ func ExtractTypeString(expr ast.Expr) string {
 	case *ast.ChanType:
 		return "chan " + ExtractTypeString(t.Value)
 	case *ast.InterfaceType:
-		return "interface{}"
+		return "any"
 	case *ast.FuncType:
 		return FormatFuncType(t)
 	default:
-		return "interface{}"
+		return "any"
 	}
 }
 
@@ -80,7 +80,7 @@ func IsBuiltinType(typeName string) bool {
 		"uint32":      true,
 		"uint64":      true,
 		"uintptr":     true,
-		"interface{}": true,
+		"any": true,
 	}
 	return builtins[typeName]
 }

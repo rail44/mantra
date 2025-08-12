@@ -75,7 +75,7 @@ func (t *CheckCodeTool) SetContext(toolCtx *tools.Context) {
 }
 
 // Execute runs the static analysis tool
-func (t *CheckCodeTool) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+func (t *CheckCodeTool) Execute(ctx context.Context, params map[string]any) (any, error) {
 	// Extract parameters
 	code, ok := params["code"].(string)
 	if !ok {
@@ -374,7 +374,7 @@ func collectAnalyzers() []*analysis.Analyzer {
 }
 
 // runAnalyzer runs a single analyzer
-func runAnalyzer(analyzer *analysis.Analyzer, pkg *packages.Package, results map[*analysis.Analyzer]interface{}, report func(analysis.Diagnostic)) (interface{}, error) {
+func runAnalyzer(analyzer *analysis.Analyzer, pkg *packages.Package, results map[*analysis.Analyzer]any, report func(analysis.Diagnostic)) (any, error) {
 	pass := &analysis.Pass{
 		Analyzer:          analyzer,
 		Fset:              pkg.Fset,
@@ -400,7 +400,7 @@ func runAnalyzer(analyzer *analysis.Analyzer, pkg *packages.Package, results map
 }
 
 // runAnalyzerSafe runs an analyzer with panic recovery
-func runAnalyzerSafe(analyzer *analysis.Analyzer, pkg *packages.Package, results map[*analysis.Analyzer]interface{}, report func(analysis.Diagnostic)) {
+func runAnalyzerSafe(analyzer *analysis.Analyzer, pkg *packages.Package, results map[*analysis.Analyzer]any, report func(analysis.Diagnostic)) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Silently skip analyzers that panic (usually due to missing dependencies)
@@ -453,7 +453,7 @@ func (t *CheckCodeTool) runAnalyzersWithFilter(pkgs []*packages.Package, modifie
 	allAnalyzers := collectAnalyzers()
 
 	// Run analyzers
-	analyzersResults := make(map[*analysis.Analyzer]interface{})
+	analyzersResults := make(map[*analysis.Analyzer]any)
 
 	// Run inspect analyzer first (many analyzers depend on it)
 	if result, err := runAnalyzer(inspect.Analyzer, targetPkg, analyzersResults, nil); err == nil {

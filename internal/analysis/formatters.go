@@ -19,7 +19,7 @@ func FormatTypeDefinition(spec *ast.TypeSpec, fset *token.FileSet) string {
 	case *ast.InterfaceType:
 		result.WriteString(FormatInterfaceType(t))
 	default:
-		result.WriteString("interface{}")
+		result.WriteString("any")
 	}
 
 	return result.String()

@@ -10,8 +10,8 @@ type ResultSchema interface {
 	Schema() json.RawMessage
 
 	// Validate checks if the data conforms to the schema
-	Validate(data interface{}) error
+	Validate(data any) error
 
 	// Transform converts the raw data into the appropriate structure
-	Transform(data interface{}) (interface{}, error)
+	Transform(data any) (any, error)
 }

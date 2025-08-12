@@ -39,7 +39,7 @@ type ChatMessage struct {
 }
 
 // ToolChoice represents how the model should use tools
-type ToolChoice interface{}
+type ToolChoice any
 
 // Specific tool choice types
 type (

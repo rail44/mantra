@@ -30,7 +30,7 @@ type OpenAIRequest struct {
 	Messages          []OpenAIMessage `json:"messages"`
 	Temperature       float32         `json:"temperature"`
 	Tools             []Tool          `json:"tools,omitempty"`
-	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
+	ToolChoice        any     `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool            `json:"parallel_tool_calls,omitempty"`
 	Provider          *ProviderSpec   `json:"provider,omitempty"` // OpenRouter provider specification
 }
