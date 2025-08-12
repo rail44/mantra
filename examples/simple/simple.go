@@ -43,8 +43,3 @@ func (c *SimpleCache) Size() int {
 func (c *SimpleCache) Keys() []string {
 	panic("not implemented")
 }
-
-// mantra: オポポースをオポポースしとく
-func Opoporse() string {
-	panic("not implemented")
-}

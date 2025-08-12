@@ -44,6 +44,7 @@ func NewParallelCoder(clientConfig *llm.ClientConfig, cfg *config.Config) *Paral
 // TargetContext contains a target and its associated file context
 type TargetContext struct {
 	Target      *parser.Target
+	Index			  int
 	FileContent string
 	FileInfo    *parser.FileInfo
 }
@@ -71,47 +72,39 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 		tuiDone <- uiProgram.Start()
 	}()
 
-	// Start generation in a separate goroutine
-	genDone := make(chan struct{})
-	go func() {
-		defer close(genDone)
-		
-		// Use errgroup with limited concurrency (max 16)
-		g, ctx := errgroup.WithContext(ctx)
-		g.SetLimit(16)
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(16)
 
-		// Process each target in parallel
-		for i, tc := range targets {
-			index := i + 1
-			targetCtx := tc
+	// Process each target in parallel
+	for _, tc := range targets {
+		g.Go(func() error {
+			// Register target with UI
+			uiProgram.AddTarget(tc.Target.GetDisplayName(), tc.Index, len(targets))
 
-			g.Go(func() error {
-				// Register target with UI
-				uiProgram.AddTarget(targetCtx.Target.GetDisplayName(), index, len(targets))
-				
-				// Create and run the target coder
-				coder := NewTargetCoder(c, ctx, targetCtx, projectRoot, index, len(targets), uiProgram)
-				result := coder.Generate()
-				
-				mu.Lock()
-				allResults = append(allResults, result)
-				mu.Unlock()
-				return nil
+			handler := log.NewCallbackHandler(
+				uiProgram.SendLog,
+			).WithAttrs([]slog.Attr{
+				slog.Int("targetIndex", tc.Index),
+				slog.Int("totalTargets", len(targets)),
+				slog.String("targetName", tc.Target.GetDisplayName()),
 			})
-		}
 
-		// Wait for all goroutines to complete
-		g.Wait()
-	}()
+			coder := NewTargetCoder(ctx, c, tc, projectRoot, slog.New(handler), uiProgram)
+			result := coder.Generate()
 
-	// Wait for generation to complete
-	<-genDone
-	
+			mu.Lock()
+			allResults = append(allResults, result)
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	g.Wait()
+
 	// Stop the UI
 	time.Sleep(100 * time.Millisecond) // Allow final render
 	uiProgram.Quit()
-	
-	// Wait for UI to finish if it's enabled
+
 	if uiProgram.IsTUIEnabled() {
 		<-tuiDone
 	}
@@ -119,10 +112,6 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 	// Display logs for failed targets
 	// TUI mode already shows progress, so only display failures
 	// Plain mode shows simple progress, so also only display failures
-	if uiProgram.IsTUIEnabled() {
-		// Add a newline after TUI to ensure clean output
-		fmt.Fprintln(os.Stderr, "")
-	}
 	c.displayFailedTargetLogs(ctx, uiProgram)
 
 	return allResults, nil
@@ -130,43 +119,30 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 // TargetCoder handles the code generation for a single target
 type TargetCoder struct {
-	coder       *ParallelCoder
 	ctx         context.Context
+	coder       *ParallelCoder
 	target      TargetContext
 	projectRoot string
-	index       int
-	total       int
 	uiProgram   *ui.Program
 	logger      *slog.Logger
-	startTime   time.Time
 }
 
 // NewTargetCoder creates a new target coder
-func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetContext, projectRoot string, index, total int, uiProgram *ui.Program) *TargetCoder {
-	// Create a callback handler with target attributes
-	callbackHandler := log.NewCallbackHandler(
-		uiProgram.SendLog,
-	).WithAttrs([]slog.Attr{
-		slog.Int("targetIndex", index),
-		slog.Int("totalTargets", total),
-		slog.String("targetName", target.Target.GetDisplayName()),
-	})
-
+func NewTargetCoder(ctx context.Context, coder *ParallelCoder, target TargetContext, projectRoot string, logger *slog.Logger, uiProgram *ui.Program) *TargetCoder {
 	return &TargetCoder{
-		coder:       coder,
 		ctx:         ctx,
+		coder:       coder,
 		target:      target,
 		projectRoot: projectRoot,
-		index:       index,
-		total:       total,
 		uiProgram:   uiProgram,
-		logger:      slog.New(callbackHandler),
-		startTime:   time.Now(),
+		logger:      logger,
 	}
 }
 
 // Generate executes the code generation process for the target
 func (t *TargetCoder) Generate() *parser.GenerationResult {
+	startTime := time.Now()
+
 	// Log generation start
 	t.logger.Info("Starting generation")
 
@@ -176,7 +152,7 @@ func (t *TargetCoder) Generate() *parser.GenerationResult {
 	// Create LLM client
 	client, err := t.createClient()
 	if err != nil {
-		return t.failureResult("initialization", fmt.Sprintf("Failed to create AI client: %v", err), "Check your API configuration and network connection")
+		return t.failureResult(startTime, "initialization", fmt.Sprintf("Failed to create AI client: %v", err), "Check your API configuration and network connection")
 	}
 
 	// Execute phases
@@ -185,17 +161,17 @@ func (t *TargetCoder) Generate() *parser.GenerationResult {
 	// Phase 1: Context Gathering
 	contextResult, failureReason := t.executeContextGathering(runner)
 	if failureReason != nil {
-		return t.phaseFailureResult(failureReason)
+		return t.phaseFailureResult(startTime, failureReason)
 	}
 
 	// Phase 2: Implementation
 	implementation, failureReason := t.executeImplementation(runner, contextResult)
 	if failureReason != nil {
-		return t.phaseFailureResult(failureReason)
+		return t.phaseFailureResult(startTime, failureReason)
 	}
 
 	// Success
-	return t.successResult(implementation)
+	return t.successResult(startTime, implementation)
 }
 
 // createClient creates a new LLM client for this target
@@ -220,8 +196,8 @@ func (t *TargetCoder) executeImplementation(runner *phase.Runner, contextResult 
 }
 
 // successResult creates a successful generation result
-func (t *TargetCoder) successResult(implementation string) *parser.GenerationResult {
-	duration := time.Since(t.startTime).Round(time.Millisecond)
+func (t *TargetCoder) successResult(startTime time.Time, implementation string) *parser.GenerationResult {
+	duration := time.Since(startTime).Round(time.Millisecond)
 	t.logger.Info("Successfully generated implementation", "duration", duration)
 	t.markComplete()
 
@@ -234,7 +210,7 @@ func (t *TargetCoder) successResult(implementation string) *parser.GenerationRes
 }
 
 // failureResult creates a failure result
-func (t *TargetCoder) failureResult(phase, message, context string) *parser.GenerationResult {
+func (t *TargetCoder) failureResult(startTime time.Time, phase, message, context string) *parser.GenerationResult {
 	t.markFailed()
 	return &parser.GenerationResult{
 		Target:  t.target.Target,
@@ -244,18 +220,18 @@ func (t *TargetCoder) failureResult(phase, message, context string) *parser.Gene
 			Message: message,
 			Context: context,
 		},
-		Duration: time.Since(t.startTime).Round(time.Millisecond),
+		Duration: time.Since(startTime).Round(time.Millisecond),
 	}
 }
 
 // phaseFailureResult creates a failure result from a phase error
-func (t *TargetCoder) phaseFailureResult(failureReason *parser.FailureReason) *parser.GenerationResult {
+func (t *TargetCoder) phaseFailureResult(startTime time.Time, failureReason *parser.FailureReason) *parser.GenerationResult {
 	t.markFailed()
 	return &parser.GenerationResult{
 		Target:        t.target.Target,
 		Success:       false,
 		FailureReason: failureReason,
-		Duration:      time.Since(t.startTime).Round(time.Millisecond),
+		Duration:      time.Since(startTime).Round(time.Millisecond),
 	}
 }
 
@@ -263,22 +239,22 @@ func (t *TargetCoder) phaseFailureResult(failureReason *parser.FailureReason) *p
 
 // markRunning marks the target as running
 func (t *TargetCoder) markRunning() {
-	t.uiProgram.MarkAsRunning(t.index)
+	t.uiProgram.MarkAsRunning(t.target.Index)
 }
 
 // markComplete marks the target as complete
 func (t *TargetCoder) markComplete() {
-	t.uiProgram.Complete(t.index)
+	t.uiProgram.Complete(t.target.Index)
 }
 
 // markFailed marks the target as failed
 func (t *TargetCoder) markFailed() {
-	t.uiProgram.Fail(t.index)
+	t.uiProgram.Fail(t.target.Index)
 }
 
 // sendPhaseEvent sends a phase event to the UI
 func (t *TargetCoder) sendPhaseEvent(phaseName, step string) {
-	t.uiProgram.UpdatePhase(t.index, phaseName, step)
+	t.uiProgram.UpdatePhase(t.target.Index, phaseName, step)
 }
 
 // displayFailedTargetLogs displays logs only for failed targets in TUI mode
@@ -293,6 +269,8 @@ func (c *ParallelCoder) displayFailedTargetLogs(ctx context.Context, uiProgram *
 	if len(failedTargets) == 0 {
 		return
 	}
+
+	fmt.Fprintln(os.Stderr, "")
 
 	c.logger.Info("=== Logs for failed targets ===")
 	for _, target := range failedTargets {

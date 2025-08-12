@@ -255,12 +255,15 @@ func (a *GenerateApp) collectTargets(results []*detector.FileDetectionResult, ge
 		}
 
 		// Collect targets that need generation
+		index := 1
 		for _, status := range result.Statuses {
+			index += 1
 			if status.Status != detector.StatusCurrent {
 				targets = append(targets, coder.TargetContext{
 					Target:      status.Target,
 					FileContent: string(content),
 					FileInfo:    result.FileInfo,
+					Index:       index,
 				})
 			}
 		}
