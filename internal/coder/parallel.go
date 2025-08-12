@@ -145,9 +145,7 @@ type TargetCoder struct {
 func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetContext, projectRoot string, index, total int, uiProgram *ui.Program) *TargetCoder {
 	// Create a callback handler with target attributes
 	callbackHandler := log.NewCallbackHandler(
-		func(record slog.Record) {
-			uiProgram.SendLog(record)
-		},
+		uiProgram.SendLog,
 	).WithAttrs([]slog.Attr{
 		slog.Int("targetIndex", index),
 		slog.Int("totalTargets", total),
@@ -168,67 +166,67 @@ func NewTargetCoder(coder *ParallelCoder, ctx context.Context, target TargetCont
 }
 
 // Generate executes the code generation process for the target
-func (g *TargetCoder) Generate() *parser.GenerationResult {
+func (t *TargetCoder) Generate() *parser.GenerationResult {
 	// Log generation start
-	g.logger.Info("Starting generation")
+	t.logger.Info("Starting generation")
 
 	// Mark target as running
-	g.markRunning()
+	t.markRunning()
 
 	// Create LLM client
-	client, err := g.createClient()
+	client, err := t.createClient()
 	if err != nil {
-		return g.failureResult("initialization", fmt.Sprintf("Failed to create AI client: %v", err), "Check your API configuration and network connection")
+		return t.failureResult("initialization", fmt.Sprintf("Failed to create AI client: %v", err), "Check your API configuration and network connection")
 	}
 
 	// Execute phases
-	runner := phase.NewRunner(client, g.logger)
+	runner := phase.NewRunner(client, t.logger)
 
 	// Phase 1: Context Gathering
-	contextResult, failureReason := g.executeContextGathering(runner)
+	contextResult, failureReason := t.executeContextGathering(runner)
 	if failureReason != nil {
-		return g.phaseFailureResult(failureReason)
+		return t.phaseFailureResult(failureReason)
 	}
 
 	// Phase 2: Implementation
-	implementation, failureReason := g.executeImplementation(runner, contextResult)
+	implementation, failureReason := t.executeImplementation(runner, contextResult)
 	if failureReason != nil {
-		return g.phaseFailureResult(failureReason)
+		return t.phaseFailureResult(failureReason)
 	}
 
 	// Success
-	return g.successResult(implementation)
+	return t.successResult(implementation)
 }
 
 // createClient creates a new LLM client for this target
-func (g *TargetCoder) createClient() (*llm.Client, error) {
-	return llm.NewClient(g.coder.clientConfig, g.coder.httpClient, g.logger)
+func (t *TargetCoder) createClient() (*llm.Client, error) {
+	return llm.NewClient(t.coder.clientConfig, t.coder.httpClient, t.logger)
 }
 
 // executeContextGathering executes the context gathering phase
-func (g *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]any, *parser.FailureReason) {
+func (t *TargetCoder) executeContextGathering(runner *phase.Runner) (map[string]any, *parser.FailureReason) {
 	stepCallback := func(step string) {
-		g.sendPhaseEvent(phase.PhaseContextGathering, step)
+		t.sendPhaseEvent(phase.PhaseContextGathering, step)
 	}
-	return runner.ExecuteContextGathering(g.ctx, g.target.Target, g.target.FileContent, g.coder.config.Dest, stepCallback)
+	return runner.ExecuteContextGathering(t.ctx, t.target.Target, t.target.FileContent, t.coder.config.Dest, stepCallback)
 }
 
 // executeImplementation executes the implementation phase
-func (g *TargetCoder) executeImplementation(runner *phase.Runner, contextResult map[string]any) (string, *parser.FailureReason) {
+func (t *TargetCoder) executeImplementation(runner *phase.Runner, contextResult map[string]any) (string, *parser.FailureReason) {
 	stepCallback := func(step string) {
-		g.sendPhaseEvent(phase.PhaseImplementation, step)
+		t.sendPhaseEvent(phase.PhaseImplementation, step)
 	}
-	return runner.ExecuteImplementation(g.ctx, g.target.Target, g.target.FileContent, g.target.FileInfo, g.projectRoot, contextResult, stepCallback)
+	return runner.ExecuteImplementation(t.ctx, t.target.Target, t.target.FileContent, t.target.FileInfo, t.projectRoot, contextResult, stepCallback)
 }
 
 // successResult creates a successful generation result
-func (g *TargetCoder) successResult(implementation string) *parser.GenerationResult {
-	duration := time.Since(g.startTime).Round(time.Millisecond)
-	g.logger.Info("Successfully generated implementation", "duration", duration)
-	g.markComplete()
+func (t *TargetCoder) successResult(implementation string) *parser.GenerationResult {
+	duration := time.Since(t.startTime).Round(time.Millisecond)
+	t.logger.Info("Successfully generated implementation", "duration", duration)
+	t.markComplete()
 
 	return &parser.GenerationResult{
-		Target:         g.target.Target,
+		Target:         t.target.Target,
 		Success:        true,
 		Implementation: implementation,
 		Duration:       duration,
@@ -236,51 +234,51 @@ func (g *TargetCoder) successResult(implementation string) *parser.GenerationRes
 }
 
 // failureResult creates a failure result
-func (g *TargetCoder) failureResult(phase, message, context string) *parser.GenerationResult {
-	g.markFailed()
+func (t *TargetCoder) failureResult(phase, message, context string) *parser.GenerationResult {
+	t.markFailed()
 	return &parser.GenerationResult{
-		Target:  g.target.Target,
+		Target:  t.target.Target,
 		Success: false,
 		FailureReason: &parser.FailureReason{
 			Phase:   phase,
 			Message: message,
 			Context: context,
 		},
-		Duration: time.Since(g.startTime).Round(time.Millisecond),
+		Duration: time.Since(t.startTime).Round(time.Millisecond),
 	}
 }
 
 // phaseFailureResult creates a failure result from a phase error
-func (g *TargetCoder) phaseFailureResult(failureReason *parser.FailureReason) *parser.GenerationResult {
-	g.markFailed()
+func (t *TargetCoder) phaseFailureResult(failureReason *parser.FailureReason) *parser.GenerationResult {
+	t.markFailed()
 	return &parser.GenerationResult{
-		Target:        g.target.Target,
+		Target:        t.target.Target,
 		Success:       false,
 		FailureReason: failureReason,
-		Duration:      time.Since(g.startTime).Round(time.Millisecond),
+		Duration:      time.Since(t.startTime).Round(time.Millisecond),
 	}
 }
 
 // UI callback methods
 
 // markRunning marks the target as running
-func (g *TargetCoder) markRunning() {
-	g.uiProgram.MarkAsRunning(g.index)
+func (t *TargetCoder) markRunning() {
+	t.uiProgram.MarkAsRunning(t.index)
 }
 
 // markComplete marks the target as complete
-func (g *TargetCoder) markComplete() {
-	g.uiProgram.Complete(g.index)
+func (t *TargetCoder) markComplete() {
+	t.uiProgram.Complete(t.index)
 }
 
 // markFailed marks the target as failed
-func (g *TargetCoder) markFailed() {
-	g.uiProgram.Fail(g.index)
+func (t *TargetCoder) markFailed() {
+	t.uiProgram.Fail(t.index)
 }
 
 // sendPhaseEvent sends a phase event to the UI
-func (g *TargetCoder) sendPhaseEvent(phaseName, step string) {
-	g.uiProgram.UpdatePhase(g.index, phaseName, step)
+func (t *TargetCoder) sendPhaseEvent(phaseName, step string) {
+	t.uiProgram.UpdatePhase(t.index, phaseName, step)
 }
 
 // displayFailedTargetLogs displays logs only for failed targets in TUI mode
