@@ -75,8 +75,8 @@ func (p *Program) Start() error {
 	return err
 }
 
-// CreateTargetLogger creates a logger for a specific target
-func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger {
+// AddTarget registers a new target for UI tracking
+func (p *Program) AddTarget(name string, index, total int) {
 	// Add target to model
 	p.model.addTarget(name, index, total)
 
@@ -84,13 +84,10 @@ func (p *Program) CreateTargetLogger(name string, index, total int) TargetLogger
 	if p.shouldShowPlainOutput() {
 		fmt.Fprintf(os.Stderr, "[%d/%d] Processing: %s\n", index, total, name)
 	}
-
-	// No longer auto-start TUI here - Start() must be called explicitly
-	return newTargetLogger(p, name, index)
 }
 
-// sendLog sends a log message to the TUI
-func (p *Program) sendLog(targetIndex int, level slog.Level, message string) {
+// SendLog sends a log message to the TUI
+func (p *Program) SendLog(targetIndex int, level slog.Level, message string) {
 	p.teaProgram.Send(logMsg{
 		TargetIndex: targetIndex,
 		Level:       level,

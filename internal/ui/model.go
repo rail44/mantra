@@ -10,6 +10,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// LogEntry represents a single log message
+type LogEntry struct {
+	Level     slog.Level
+	Message   string
+	Timestamp time.Time
+}
+
 // TargetView represents the view state for a single target
 type TargetView struct {
 	Name        string

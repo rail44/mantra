@@ -95,6 +95,9 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 			targetCtx := tc
 
 			g.Go(func() error {
+				// Register target with UI
+				uiProgram.AddTarget(targetCtx.Target.GetDisplayName(), index, total)
+				
 				// Create event callback for this target
 				eventCallback := func(phaseName, step string) {
 					eventCh <- phase.TargetEvent{
@@ -107,8 +110,8 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 				// Create target callbacks
 				targetCallbacks := TargetCallbacks{
-					CreateLogger: func(displayName string, targetNum, totalTargets int) log.Logger {
-						return uiProgram.CreateTargetLogger(displayName, targetNum, totalTargets)
+					SendLog: func(targetNum int, level slog.Level, message string) {
+						uiProgram.SendLog(targetNum, level, message)
 					},
 					MarkRunning: func(targetNum int) {
 						uiProgram.MarkAsRunning(targetNum)
@@ -187,7 +190,7 @@ func (c *ParallelCoder) ExecuteTargets(ctx context.Context, targets []TargetCont
 
 // TargetCallbacks contains callbacks for target lifecycle events
 type TargetCallbacks struct {
-	CreateLogger func(displayName string, targetNum, totalTargets int) log.Logger
+	SendLog      func(targetNum int, level slog.Level, message string)
 	MarkRunning  func(targetNum int)
 	Complete     func(targetNum int)
 	Fail         func(targetNum int)
@@ -197,8 +200,27 @@ type TargetCallbacks struct {
 func (c *ParallelCoder) generateSingleTargetWithCallback(ctx context.Context, tc TargetContext, projectRoot string, targetNum, totalTargets int, callbacks TargetCallbacks, eventCallback func(string, string)) *parser.GenerationResult {
 	targetStart := time.Now()
 
-	// Create a target-specific logger with display name
-	logger := callbacks.CreateLogger(tc.Target.GetDisplayName(), targetNum, totalTargets)
+	// Create a base logger with target metadata
+	baseLogger := log.Default()
+	
+	// Create an intercepting logger that sends logs to UI
+	logger := log.NewInterceptLogger(baseLogger, func(level slog.Level, msg string, args []any) {
+		// Filter based on global log level
+		if level < log.GetCurrentLevel() {
+			return
+		}
+		
+		// Format message with args
+		formattedMsg := msg
+		if len(args) > 0 {
+			formattedMsg = fmt.Sprintf("%s %v", msg, args)
+		}
+		
+		// Send to UI via callback
+		if callbacks.SendLog != nil {
+			callbacks.SendLog(targetNum, level, formattedMsg)
+		}
+	})
 
 	// Log generation start
 	logger.Info("Starting generation")
@@ -293,13 +315,12 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 	if len(failedTargets) > 0 {
 		// In plain output mode, be more concise
 		if !uiProgram.IsTUIEnabled() {
-			// Only show ERROR level logs for plain output mode
+			// Show logs for failed targets (already filtered by log level)
 			for _, target := range failedTargets {
 				logs := target.GetAllLogs()
 				for _, logEntry := range logs {
-					if logEntry.Level == slog.LevelError {
-						c.logger.Error(fmt.Sprintf("[%s] %s", target.Name, logEntry.Message))
-					}
+					// No manual filtering needed - logs are already filtered by TargetLogger
+					c.reEmitLogEntry(logEntry, target.Name)
 				}
 			}
 		} else {
@@ -310,25 +331,32 @@ func (c *ParallelCoder) displayFailedTargetLogs(uiProgram *ui.Program) {
 				if len(logs) > 0 {
 					c.logger.Info(fmt.Sprintf("--- %s ---", target.Name))
 					for _, logEntry := range logs {
-						// Re-emit each log entry at appropriate level
-						switch logEntry.Level {
-						case slog.LevelDebug - 4: // TRACE
-							c.logger.Trace(logEntry.Message)
-						case slog.LevelDebug:
-							c.logger.Debug(logEntry.Message)
-						case slog.LevelInfo:
-							c.logger.Info(logEntry.Message)
-						case slog.LevelWarn:
-							c.logger.Warn(logEntry.Message)
-						case slog.LevelError:
-							c.logger.Error(logEntry.Message)
-						default:
-							c.logger.Info(logEntry.Message)
-						}
+						// Re-emit each log entry at appropriate level (already filtered)
+						c.reEmitLogEntry(logEntry, target.Name)
 					}
 				}
 			}
 		}
+	}
+}
+
+// reEmitLogEntry re-emits a log entry at the appropriate level
+func (c *ParallelCoder) reEmitLogEntry(logEntry ui.LogEntry, targetName string) {
+	message := fmt.Sprintf("[%s] %s", targetName, logEntry.Message)
+	
+	switch logEntry.Level {
+	case slog.LevelDebug - 4: // TRACE
+		c.logger.Trace(message)
+	case slog.LevelDebug:
+		c.logger.Debug(message)
+	case slog.LevelInfo:
+		c.logger.Info(message)
+	case slog.LevelWarn:
+		c.logger.Warn(message)
+	case slog.LevelError:
+		c.logger.Error(message)
+	default:
+		c.logger.Info(message)
 	}
 }
 
