@@ -3,8 +3,8 @@ use mantra::{config, generator};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::info;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 /// Mantra - AI-powered Go code generation tool
 #[derive(Parser, Debug)]
@@ -12,10 +12,6 @@ use tracing_subscriber::FmtSubscriber;
 struct Args {
     #[command(subcommand)]
     command: Commands,
-
-    /// Log level (error, warn, info, debug, trace)
-    #[arg(long, short = 'l', global = true)]
-    log_level: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -34,14 +30,13 @@ enum Commands {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Setup logging
-    let log_level = args
-        .log_level
-        .as_deref()
-        .and_then(|s| s.parse::<Level>().ok())
-        .unwrap_or(Level::WARN);
+    // Setup logging with RUST_LOG environment variable
+    // Default to "warn" if RUST_LOG is not set
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
 
-    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(env_filter)
+        .finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
 
