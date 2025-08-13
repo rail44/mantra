@@ -32,6 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1"
 hashbrown = "0.14"
 walkdir = "2"
+jsonrpsee = { version = "0.24", features = ["client", "server"] }
 
 # UI (for later)
 # ratatui = "0.26"
