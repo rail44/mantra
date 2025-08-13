@@ -66,13 +66,16 @@ pub struct StdioReceiver {
 
 impl StdioReceiver {
     pub fn new(stdout: AsyncBufReader<ChildStdout>) -> Self {
-        Self { 
+        Self {
             stdout,
             notification_handler: None,
         }
     }
-    
-    pub fn with_notification_handler(stdout: AsyncBufReader<ChildStdout>, handler: Arc<NotificationHandler>) -> Self {
+
+    pub fn with_notification_handler(
+        stdout: AsyncBufReader<ChildStdout>,
+        handler: Arc<NotificationHandler>,
+    ) -> Self {
         Self {
             stdout,
             notification_handler: Some(handler),
@@ -123,7 +126,7 @@ impl TransportReceiverT for StdioReceiver {
             .map_err(|e| TransportError(format!("Failed to read message body: {}", e)))?;
 
         debug!("Received LSP message: {}", String::from_utf8_lossy(&buffer));
-        
+
         // 通知ハンドラーがある場合、notificationをチェック
         if let Some(handler) = &self.notification_handler {
             if let Ok(msg) = serde_json::from_slice::<Value>(&buffer) {
@@ -136,7 +139,7 @@ impl TransportReceiverT for StdioReceiver {
                         let params = params.cloned().unwrap_or(Value::Null);
                         let handler = handler.clone();
                         let method = method.to_string();
-                        
+
                         // 非同期でハンドラーに渡す（ブロッキングを避ける）
                         tokio::spawn(async move {
                             if let Err(e) = handler.handle_notification(&method, params).await {
@@ -147,7 +150,7 @@ impl TransportReceiverT for StdioReceiver {
                 }
             }
         }
-        
+
         Ok(ReceivedMessage::Bytes(buffer))
     }
 }

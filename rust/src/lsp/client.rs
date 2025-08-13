@@ -1,132 +1,181 @@
 use anyhow::Result;
-use jsonrpsee::core::client::{Client as RpcClient, ClientBuilder};
-use std::ops::Deref;
-use std::sync::Arc;
-use tokio::io::BufReader as AsyncBufReader;
-use tokio::process::{Child, Command};
-use tracing::info;
+use jsonrpsee::core::client::ClientT;
+use jsonrpsee::core::params::ObjectParams;
+use jsonrpsee::core::traits::ToRpcParams;
+use serde::de::Error;
+use serde::Serialize;
+use serde_json::Value;
 
-use crate::lsp::transport::{StdioReceiver, StdioSender};
-use crate::lsp::{NotificationHandler, PublishDiagnosticsParams};
+use crate::lsp::connection::LspConnection;
+use crate::lsp::PublishDiagnosticsParams;
+use crate::lsp::{Hover, InitializeResult, Position, TextDocumentIdentifier, TextDocumentItem};
 
-/// Create a new LSP client by starting a language server process
-/// Returns a RpcClient that implements LspRpcClient trait methods
-/// NOTE: 後方互換性のため、通知ハンドラーなしのバージョンを維持
-pub async fn create_lsp_client(command: &str, args: &[&str]) -> Result<(RpcClient, Child)> {
-    info!("Starting LSP server: {} {:?}", command, args);
-
-    let mut cmd = Command::new(command);
-    for arg in args {
-        cmd.arg(arg);
-    }
-
-    let mut process = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-
-    let stdin = process.stdin.take().expect("Failed to get stdin");
-    let stdout = process.stdout.take().expect("Failed to get stdout");
-
-    // Create transport components
-    let sender = StdioSender::new(stdin);
-    let receiver = StdioReceiver::new(AsyncBufReader::new(stdout));
-
-    // Build the client
-    let rpc_client = ClientBuilder::default().build_with_tokio(sender, receiver);
-
-    Ok((rpc_client, process))
+// パラメータ構造体をキャメルケース変換付きで定義
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeParams {
+    process_id: Option<u32>,
+    root_uri: Option<String>,
+    capabilities: Value,
+    workspace_folders: Option<Vec<Value>>,
 }
 
-/// 通知ハンドラー付きのLSPクライアントを作成
-pub async fn create_lsp_client_with_notifications(
-    command: &str, 
-    args: &[&str]
-) -> Result<(RpcClient, Child, Arc<NotificationHandler>)> {
-    info!("Starting LSP server with notification support: {} {:?}", command, args);
-
-    let mut cmd = Command::new(command);
-    for arg in args {
-        cmd.arg(arg);
+impl ToRpcParams for InitializeParams {
+    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
+        let mut params = ObjectParams::new();
+        params
+            .insert("processId", self.process_id)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert("rootUri", self.root_uri)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert("capabilities", self.capabilities)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert("workspaceFolders", self.workspace_folders)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params.to_rpc_params()
     }
-
-    let mut process = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-
-    let stdin = process.stdin.take().expect("Failed to get stdin");
-    let stdout = process.stdout.take().expect("Failed to get stdout");
-
-    // 通知ハンドラーを作成
-    let notification_handler = Arc::new(NotificationHandler::new());
-
-    // Create transport components with notification handler
-    let sender = StdioSender::new(stdin);
-    let receiver = StdioReceiver::with_notification_handler(
-        AsyncBufReader::new(stdout),
-        notification_handler.clone(),
-    );
-
-    // Build the client
-    let rpc_client = ClientBuilder::default().build_with_tokio(sender, receiver);
-
-    Ok((rpc_client, process, notification_handler))
 }
 
-/// LSPクライアントラッパー（通知ハンドラー付き）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HoverParams {
+    text_document: TextDocumentIdentifier,
+    position: Position,
+}
+
+impl ToRpcParams for HoverParams {
+    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
+        let mut params = ObjectParams::new();
+        params
+            .insert("textDocument", self.text_document)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert("position", self.position)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params.to_rpc_params()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DidOpenParams {
+    text_document: TextDocumentItem,
+}
+
+impl ToRpcParams for DidOpenParams {
+    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
+        let mut params = ObjectParams::new();
+        params
+            .insert("textDocument", self.text_document)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params.to_rpc_params()
+    }
+}
+
+/// LSP client that constructs JSON-RPC requests with proper camelCase conversion
 pub struct Client {
-    client: RpcClient,
-    process: Child,
-    notification_handler: Arc<NotificationHandler>,
+    connection: LspConnection,
 }
 
 impl Client {
-    /// 新しいLSPクライアントを作成
+    /// Start a new LSP server and create a client
     pub async fn new(command: &str, args: &[&str]) -> Result<Self> {
-        let (client, process, notification_handler) = 
-            create_lsp_client_with_notifications(command, args).await?;
-        
-        Ok(Self {
-            client,
-            process,
-            notification_handler,
-        })
+        let connection = LspConnection::new(command, args).await?;
+        Ok(Self { connection })
     }
-    
-    /// RpcClientへの参照を取得
-    pub fn rpc_client(&self) -> &RpcClient {
-        &self.client
+
+    /// Initialize the LSP connection
+    pub async fn initialize(
+        &self,
+        process_id: Option<u32>,
+        root_uri: Option<String>,
+        capabilities: Value,
+        workspace_folders: Option<Vec<Value>>,
+    ) -> Result<InitializeResult> {
+        let params = InitializeParams {
+            process_id,
+            root_uri,
+            capabilities,
+            workspace_folders,
+        };
+
+        let result = self.connection.client.request("initialize", params).await?;
+
+        Ok(serde_json::from_value(result)?)
     }
-    
-    /// 診断情報を待機
-    pub async fn wait_for_diagnostics(&self, uri: &str) -> Result<PublishDiagnosticsParams> {
-        self.notification_handler.wait_for_diagnostics(uri).await
-    }
-    
-    /// タイムアウト付きで診断情報を待機
-    pub async fn wait_for_diagnostics_timeout(
-        &self, 
-        uri: &str,
-        timeout: std::time::Duration
-    ) -> Result<PublishDiagnosticsParams> {
-        self.notification_handler.wait_for_diagnostics_timeout(uri, timeout).await
-    }
-    
-    /// プロセスを終了
-    pub async fn shutdown(mut self) -> Result<()> {
-        self.process.kill().await?;
+
+    /// Send initialized notification
+    pub async fn initialized(&self) -> Result<()> {
+        // Empty params for initialized notification
+        let params = ObjectParams::new();
+        self.connection
+            .client
+            .notification("initialized", params)
+            .await?;
         Ok(())
     }
-}
 
-// RpcClientへの透過的なアクセスを提供
-impl Deref for Client {
-    type Target = RpcClient;
-    
-    fn deref(&self) -> &Self::Target {
-        &self.client
+    /// Wait for diagnostics for a specific URI
+    pub async fn wait_for_diagnostics(&self, uri: &str) -> Result<PublishDiagnosticsParams> {
+        self.connection
+            .notification_handler
+            .wait_for_diagnostics(uri)
+            .await
+    }
+
+    /// Wait for diagnostics with a timeout
+    pub async fn wait_for_diagnostics_timeout(
+        &self,
+        uri: &str,
+        timeout: std::time::Duration,
+    ) -> Result<PublishDiagnosticsParams> {
+        self.connection
+            .notification_handler
+            .wait_for_diagnostics_timeout(uri, timeout)
+            .await
+    }
+
+    /// Shutdown the LSP server
+    pub async fn shutdown(self) -> Result<()> {
+        self.connection.shutdown().await
+    }
+
+    /// Get hover information at a position
+    pub async fn hover(
+        &self,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+    ) -> Result<Option<Hover>> {
+        let params = HoverParams {
+            text_document,
+            position,
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/hover", params)
+            .await?;
+
+        // Handle null response as None
+        if result.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(serde_json::from_value(result)?))
+        }
+    }
+
+    /// Open a text document notification
+    pub async fn did_open(&self, text_document: TextDocumentItem) -> Result<()> {
+        let params = DidOpenParams { text_document };
+
+        self.connection
+            .client
+            .notification("textDocument/didOpen", params)
+            .await?;
+        Ok(())
     }
 }

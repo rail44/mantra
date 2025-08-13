@@ -256,24 +256,24 @@ fn parse_function_as_target(
 /// Get LSP positions for function parameters and return type
 pub fn get_function_type_positions(node: &Node) -> Vec<(u32, u32)> {
     let mut positions = Vec::new();
-    
+
     // Get parameter types
     if let Some(params_node) = node.child_by_field_name("parameters") {
         collect_parameter_type_positions(&params_node, &mut positions);
     }
-    
+
     // Get return type
     if let Some(result_node) = node.child_by_field_name("result") {
         collect_result_type_positions(&result_node, &mut positions);
     }
-    
+
     positions
 }
 
 /// Collect positions of parameter types
 fn collect_parameter_type_positions(params_node: &Node, positions: &mut Vec<(u32, u32)>) {
     let mut cursor = params_node.walk();
-    
+
     for child in params_node.children(&mut cursor) {
         if child.kind() == "parameter_declaration" {
             // Find type in parameter declaration
@@ -307,10 +307,18 @@ fn collect_result_type_positions(result_node: &Node, positions: &mut Vec<(u32, u
 
 /// Check if a node represents a type
 fn is_type_node(node: &Node) -> bool {
-    matches!(node.kind(), 
-        "type_identifier" | "qualified_type" | "pointer_type" | 
-        "array_type" | "slice_type" | "map_type" | "channel_type" |
-        "function_type" | "interface_type" | "struct_type"
+    matches!(
+        node.kind(),
+        "type_identifier"
+            | "qualified_type"
+            | "pointer_type"
+            | "array_type"
+            | "slice_type"
+            | "map_type"
+            | "channel_type"
+            | "function_type"
+            | "interface_type"
+            | "struct_type"
     )
 }
 

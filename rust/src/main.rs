@@ -41,13 +41,7 @@ fn main() -> Result<()> {
         .and_then(|s| s.parse::<Level>().ok())
         .unwrap_or(Level::WARN);
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_file(false)
-        .with_line_number(false)
-        .finish();
+    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
 

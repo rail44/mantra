@@ -1,8 +1,8 @@
+use crate::lsp::rpc::PublishDiagnosticsParams;
+use anyhow::Result;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
-use serde_json::Value;
-use anyhow::Result;
-use crate::lsp::rpc::PublishDiagnosticsParams;
 
 /// LSP通知ハンドラー
 pub struct NotificationHandler {
@@ -24,8 +24,11 @@ impl NotificationHandler {
         match method {
             "textDocument/publishDiagnostics" => {
                 let diagnostics: PublishDiagnosticsParams = serde_json::from_value(params)?;
-                tracing::debug!("Received diagnostics for {}: {} items", 
-                    diagnostics.uri, diagnostics.diagnostics.len());
+                tracing::debug!(
+                    "Received diagnostics for {}: {} items",
+                    diagnostics.uri,
+                    diagnostics.diagnostics.len()
+                );
                 self.diagnostics_tx.send(diagnostics)?;
             }
             _ => {
@@ -44,6 +47,12 @@ impl NotificationHandler {
                     if diagnostics.uri == uri {
                         return Ok(diagnostics);
                     }
+                    // 他のURIの診断は無視して待機を続ける
+                    tracing::trace!(
+                        "Skipping diagnostics for different URI: {} (waiting for: {})",
+                        diagnostics.uri,
+                        uri
+                    );
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!("Missed {} diagnostics notifications", n);
@@ -57,9 +66,9 @@ impl NotificationHandler {
 
     /// タイムアウト付きで診断情報を待機
     pub async fn wait_for_diagnostics_timeout(
-        &self, 
-        uri: &str, 
-        timeout: std::time::Duration
+        &self,
+        uri: &str,
+        timeout: std::time::Duration,
     ) -> Result<PublishDiagnosticsParams> {
         tokio::time::timeout(timeout, self.wait_for_diagnostics(uri))
             .await
