@@ -8,10 +8,8 @@ async fn main() -> anyhow::Result<()> {
         model: "gpt-3.5-turbo".to_string(),
         url: std::env::var("OPENAI_API_URL")
             .unwrap_or_else(|_| "https://api.openai.com".to_string()),
-        dest: "./generated".to_string(),
         api_key: std::env::var("OPENAI_API_KEY").ok(),
         log_level: Some("debug".to_string()),
-        plain: false,
         openrouter: None,
     };
 

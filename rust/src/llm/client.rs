@@ -77,10 +77,8 @@ mod tests {
         let config = Config {
             model: "gpt-3.5-turbo".to_string(),
             url: "https://api.openai.com".to_string(),
-            dest: "./generated".to_string(),
             api_key: Some("test-key".to_string()),
             log_level: None,
-            plain: false,
             openrouter: None,
         };
 
@@ -93,10 +91,8 @@ mod tests {
         let config = Config {
             model: "openai/gpt-3.5-turbo".to_string(),
             url: "https://openrouter.ai".to_string(),
-            dest: "./generated".to_string(),
             api_key: Some("test-key".to_string()),
             log_level: None,
-            plain: false,
             openrouter: Some(OpenRouterConfig {
                 providers: vec!["openai".to_string(), "anthropic".to_string()],
             }),

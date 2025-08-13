@@ -57,21 +57,7 @@ pub struct Return {
     pub typ: String,
 }
 
-impl Target {
-    /// Get display name for the target (including receiver for methods)
-    pub fn get_display_name(&self) -> String {
-        if let Some(receiver) = &self.receiver {
-            format!("({} {}).{}", receiver.name, receiver.typ, self.name)
-        } else {
-            self.name.clone()
-        }
-    }
-
-    /// Get function signature
-    pub fn get_function_signature(&self) -> String {
-        self.signature.clone()
-    }
-}
+impl Target {}
 
 /// Extract file information from parsed tree
 pub fn extract_file_info(path: &Path, source: &str, tree: Tree) -> Result<FileInfo> {

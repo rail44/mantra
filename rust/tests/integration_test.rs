@@ -12,9 +12,7 @@ async fn test_generate_output() {
         url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
         model: "test-model".to_string(),
         api_key: Some("test-key".to_string()),
-        dest: "output".to_string(),
         log_level: None,
-        plain: false,
         openrouter: None,
     };
 

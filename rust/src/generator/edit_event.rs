@@ -33,14 +33,13 @@ pub fn convert_to_lsp_edits(
     tree: &tree_sitter::Tree,
     events: Vec<EditEvent>,
 ) -> Result<Vec<TextEdit>> {
-    use crate::parser::editor::TreeEditor;
+    use crate::parser::editor::find_function_info;
 
     let mut edits = Vec::new();
-    let editor = TreeEditor::new(source.to_string(), tree.clone());
 
     for event in events {
         // Find function in tree by signature
-        if let Some(func_info) = editor.find_function_info(&event.signature) {
+        if let Some(func_info) = find_function_info(source, tree, &event.signature) {
             // We need to replace two parts:
             // 1. Add/update checksum comment before function
             // 2. Replace function body
@@ -120,7 +119,6 @@ fn byte_to_position_single(source: &str, byte_pos: usize) -> Position {
 
     Position::new(line as u32, (byte_pos - line_start_byte) as u32)
 }
-
 
 /// Indent code with given prefix
 fn indent_code(code: &str, indent: &str) -> String {

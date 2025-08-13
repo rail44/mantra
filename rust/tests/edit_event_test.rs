@@ -39,9 +39,13 @@ func Multiply(x, y int) int {
     assert_eq!(edits.len(), 4);
 
     // Find edits containing our expected content
-    let has_add_checksum = edits.iter().any(|e| e.new_text.contains("mantra:checksum:12345678"));
+    let has_add_checksum = edits
+        .iter()
+        .any(|e| e.new_text.contains("mantra:checksum:12345678"));
     let has_add_body = edits.iter().any(|e| e.new_text.contains("return a + b"));
-    let has_multiply_checksum = edits.iter().any(|e| e.new_text.contains("mantra:checksum:87654321"));
+    let has_multiply_checksum = edits
+        .iter()
+        .any(|e| e.new_text.contains("mantra:checksum:87654321"));
     let has_multiply_body = edits.iter().any(|e| e.new_text.contains("return x * y"));
 
     assert!(has_add_checksum, "Should have Add checksum edit");

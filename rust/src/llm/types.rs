@@ -30,13 +30,6 @@ impl Message {
             content: content.into(),
         }
     }
-
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::Assistant,
-            content: content.into(),
-        }
-    }
 }
 
 /// Request for completion API

@@ -14,18 +14,11 @@ pub struct Config {
     /// API endpoint URL (required)
     pub url: String,
 
-    /// Output directory for generated files (required)
-    pub dest: String,
-
     /// API key for authentication (optional)
     pub api_key: Option<String>,
 
     /// Log level: error, warn, info, debug, trace
     pub log_level: Option<String>,
-
-    /// Plain output mode (from CLI flag, not from config file)
-    #[serde(skip)]
-    pub plain: bool,
 
     /// OpenRouter-specific configuration
     pub openrouter: Option<OpenRouterConfig>,
@@ -66,10 +59,6 @@ impl Config {
         // Validate required fields
         config.validate()?;
 
-        // Normalize paths relative to config file location
-        let config_dir = config_path.parent().unwrap_or(Path::new("."));
-        config.normalize_paths(config_dir);
-
         Ok(config)
     }
 
@@ -80,9 +69,6 @@ impl Config {
         }
         if self.url.is_empty() {
             anyhow::bail!("'url' is required in mantra.toml");
-        }
-        if self.dest.is_empty() {
-            anyhow::bail!("'dest' is required in mantra.toml");
         }
         Ok(())
     }
@@ -97,34 +83,6 @@ impl Config {
         }
 
         // Could expand other fields if needed
-    }
-
-    /// Normalize paths to be relative to config file location
-    fn normalize_paths(&mut self, config_dir: &Path) {
-        // If dest is relative, make it relative to config file location
-        if !Path::new(&self.dest).is_absolute() {
-            let full_path = config_dir.join(&self.dest);
-            self.dest = full_path.to_string_lossy().to_string();
-        }
-    }
-
-    /// Get the package name from the destination directory
-    pub fn get_package_name(&self) -> String {
-        Path::new(&self.dest)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("generated")
-            .to_string()
-    }
-
-    /// Get the API key, checking environment variable if not in config
-    pub fn get_api_key(&self) -> Option<String> {
-        self.api_key.clone().or_else(|| {
-            // Try common environment variable names
-            env::var("OPENROUTER_API_KEY")
-                .ok()
-                .or_else(|| env::var("OPENAI_API_KEY").ok())
-        })
     }
 }
 
@@ -198,10 +156,8 @@ mod tests {
         let mut config = Config {
             model: "test-model".to_string(),
             url: "http://localhost".to_string(),
-            dest: "./output".to_string(),
             api_key: None,
             log_level: None,
-            plain: false,
             openrouter: None,
         };
 

@@ -14,9 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
         model: "anthropic/claude-3.5-sonnet".to_string(),
         api_key: Some("test-key-123".to_string()),
-        dest: "output".to_string(),
         log_level: Some("debug".to_string()),
-        plain: false,
         openrouter: None,
     };
 
