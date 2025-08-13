@@ -1,6 +1,9 @@
 pub mod client;
-pub mod transport;
-pub mod types;
+pub mod rpc;
+mod transport;
 
-pub use client::Client;
-pub use types::*;
+pub use client::create_lsp_client;
+pub use rpc::{
+    DidOpenTextDocumentParams, HoverParams, InitializeParams, LspRpcClient, Position,
+    TextDocumentIdentifier, TextDocumentItem,
+};
