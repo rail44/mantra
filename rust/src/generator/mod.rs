@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::config::Config;
 use crate::llm::{LLMClient, Message, CompletionRequest};
-use crate::parser::{GoParser, target::Target};
+use crate::parser::{GoParser, target::Target, checksum::calculate_checksum, editor::TreeEditor};
 
 /// Code generator that handles the entire generation process
 pub struct Generator {
@@ -22,6 +22,8 @@ impl Generator {
     pub async fn generate_file(&self, file_path: &Path) -> Result<String> {
         // Parse the file
         let mut parser = GoParser::new()?;
+        let source = std::fs::read_to_string(file_path)?;
+        let tree = parser.parse(&source)?;
         let file_info = parser.parse_file(file_path)?;
         
         tracing::info!("Found {} targets in file", file_info.targets.len());
@@ -29,22 +31,28 @@ impl Generator {
             tracing::info!("  - {} ({})", target.name, target.instruction);
         }
         
-        // Process each target
-        let mut modified_source = file_info.source_content.clone();
+        // Create tree editor
+        let mut editor = TreeEditor::new(source, tree);
         
+        // Process each target
         for target in &file_info.targets {
+            // Calculate checksum
+            let checksum = calculate_checksum(target);
+            
             // Generate code for this target
             let generated_code = self.generate_target(target, &file_info.package_name).await?;
             
-            // Replace the function body in the source
-            modified_source = self.replace_function_body(
-                &modified_source,
-                target,
-                &generated_code
-            )?;
+            // Find the function info and replace
+            if let Some(func_info) = editor.find_function_info(&target.signature) {
+                // Replace the function body using tree-sitter
+                editor.replace_function_body(&func_info, &generated_code, checksum)?;
+            } else {
+                tracing::warn!("Could not find function node for: {}", target.signature);
+            }
         }
         
-        Ok(modified_source)
+        // Apply all edits and return
+        Ok(editor.apply_edits())
     }
     
     /// Generate code for a single target function
@@ -120,48 +128,4 @@ impl Generator {
         code.to_string()
     }
     
-    /// Replace a function body in the source code
-    fn replace_function_body(&self, source: &str, target: &Target, new_body: &str) -> Result<String> {
-        // Find the function and replace its body
-        let lines: Vec<String> = source.lines().map(|s| s.to_string()).collect();
-        let mut result = Vec::new();
-        let mut i = 0;
-        
-        while i < lines.len() {
-            let line = &lines[i];
-            
-            // Check if this is the target function
-            if line.contains(&target.signature) {
-                // Add the function signature
-                result.push(format!("{} {}", target.signature, new_body));
-                
-                // Skip the old function body
-                i += 1;
-                let mut brace_count = 0;
-                let mut started = false;
-                
-                while i < lines.len() {
-                    let line = &lines[i];
-                    for ch in line.chars() {
-                        if ch == '{' {
-                            brace_count += 1;
-                            started = true;
-                        } else if ch == '}' {
-                            brace_count -= 1;
-                        }
-                    }
-                    
-                    if started && brace_count == 0 {
-                        break;
-                    }
-                    i += 1;
-                }
-            } else {
-                result.push(line.clone());
-            }
-            i += 1;
-        }
-        
-        Ok(result.join("\n"))
-    }
 }
