@@ -2,12 +2,14 @@ pub mod edit_event;
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use tree_sitter::TreeCursor;
 
 use self::edit_event::EditEvent;
 use crate::config::Config;
 use crate::editor::TextEdit;
 use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
-use crate::parser::{checksum::calculate_checksum, target::Target, GoParser};
+use crate::lsp::{create_lsp_client, LspRpcClient, InitializeParams, HoverParams, DidOpenTextDocumentParams, TextDocumentIdentifier, TextDocumentItem, Position};
+use crate::parser::{checksum::calculate_checksum, target::{Target, get_function_type_positions}, GoParser};
 
 /// Code generator that handles the entire generation process
 pub struct Generator {
@@ -42,9 +44,9 @@ impl Generator {
             // Calculate checksum
             let checksum = calculate_checksum(target);
 
-            // Generate code for this target
+            // Generate code for this target with type information
             let generated_code = self
-                .generate_target(target, &file_info.package_name)
+                .generate_target(target, &file_info.package_name, file_path, &source, &tree)
                 .await?;
 
             // Create edit event
@@ -115,7 +117,7 @@ impl Generator {
     }
 
     /// Generate code for a single target function
-    async fn generate_target(&self, target: &Target, package_name: &str) -> Result<String> {
+    async fn generate_target(&self, target: &Target, package_name: &str, file_path: &Path, source: &str, tree: &tree_sitter::Tree) -> Result<String> {
         // Check for test mode
         if std::env::var("MANTRA_TEST_MODE").is_ok() {
             // Return mock response based on function name
@@ -129,8 +131,17 @@ impl Generator {
             .to_string());
         }
 
-        // Build the prompt
-        let prompt = self.build_prompt(target, package_name);
+        // Collect type information from LSP
+        let type_info = match self.find_function_node_and_get_type_info(tree, source, target, file_path).await {
+            Ok(info) => info,
+            Err(e) => {
+                tracing::warn!("Failed to get type info for {}: {}", target.name, e);
+                "No type information available".to_string()
+            }
+        };
+
+        // Build the prompt with type information
+        let prompt = self.build_prompt_with_types(target, package_name, &type_info);
 
         tracing::debug!("Generating for target: {}", target.name);
         tracing::debug!("Prompt: {}", prompt);
@@ -175,16 +186,138 @@ impl Generator {
         Ok(cleaned)
     }
 
-    /// Build a prompt for the LLM
-    fn build_prompt(&self, target: &Target, package_name: &str) -> String {
+    /// Find function node in tree and get type information from LSP
+    async fn find_function_node_and_get_type_info(&self, tree: &tree_sitter::Tree, source: &str, target: &Target, file_path: &Path) -> Result<String> {
+        let root_node = tree.root_node();
+        let mut cursor = root_node.walk();
+        
+        // Find the matching function node
+        let function_node = self.find_function_by_name(&mut cursor, source, &target.name)?;
+        
+        // Get LSP positions for parameter and return types
+        let type_positions = get_function_type_positions(&function_node);
+        
+        // Get type information for all positions
+        self.collect_type_info_at_positions(file_path, source, &type_positions).await
+    }
+    
+    /// Find function node by name in the tree
+    fn find_function_by_name<'a>(&self, cursor: &mut TreeCursor<'a>, source: &str, function_name: &str) -> Result<tree_sitter::Node<'a>> {
+        loop {
+            let node = cursor.node();
+            if node.kind() == "function_declaration" || node.kind() == "method_declaration" {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                        if name == function_name {
+                            return Ok(node);
+                        }
+                    }
+                }
+            }
+            
+            if cursor.goto_first_child() {
+                if let Ok(found) = self.find_function_by_name(cursor, source, function_name) {
+                    return Ok(found);
+                }
+                cursor.goto_parent();
+            }
+            
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+        anyhow::bail!("Function '{}' not found in tree", function_name)
+    }
+    
+    /// Collect type information at multiple positions using LSP
+    async fn collect_type_info_at_positions(&self, file_path: &Path, source: &str, positions: &[(u32, u32)]) -> Result<String> {
+        if positions.is_empty() {
+            return Ok("No type positions found".to_string());
+        }
+
+        // Start LSP client once for all positions
+        let (lsp_client, _process) = create_lsp_client("gopls", &[]).await?;
+
+        // Initialize LSP  
+        let workspace_root = file_path.parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(".");
+
+        let init_params = InitializeParams {
+            process_id: Some(std::process::id()),
+            root_uri: Some(format!("file://{}", workspace_root)),
+            capabilities: serde_json::json!({
+                "textDocument": {
+                    "hover": {
+                        "contentFormat": ["markdown", "plaintext"]
+                    },
+                    "synchronization": {
+                        "didOpen": true
+                    }
+                }
+            }),
+            workspace_folders: Some(vec![serde_json::json!({
+                "uri": format!("file://{}", workspace_root),
+                "name": "workspace"
+            })]),
+        };
+
+        let _init_result = LspRpcClient::initialize(&lsp_client, init_params).await?;
+        LspRpcClient::initialized(&lsp_client).await?;
+
+        // Open the document
+        let file_uri = format!("file://{}", file_path.to_string_lossy());
+        let did_open_params = DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: file_uri.clone(),
+                language_id: "go".to_string(),
+                version: 1,
+                text: source.to_string(),
+            },
+        };
+        LspRpcClient::did_open(&lsp_client, did_open_params).await?;
+
+        // Wait for processing
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+        let mut type_infos = Vec::new();
+        
+        // Get hover information for each position
+        for (line, character) in positions.iter() {
+            let hover_params = HoverParams {
+                text_document: TextDocumentIdentifier {
+                    uri: file_uri.clone(),
+                },
+                position: Position { line: *line, character: *character },
+            };
+
+            match LspRpcClient::hover(&lsp_client, hover_params).await? {
+                Some(hover) => {
+                    let type_info = format!("Position {}:{} - {:?}", line, character, hover.contents);
+                    tracing::info!("Type info at {}:{} - {}", line, character, type_info);
+                    type_infos.push(type_info);
+                }
+                None => {
+                    tracing::warn!("No hover information available at {}:{}", line, character);
+                    type_infos.push(format!("Position {}:{} - No information", line, character));
+                }
+            }
+        }
+
+        Ok(type_infos.join("; "))
+    }
+
+    /// Build a prompt for the LLM with type information
+    fn build_prompt_with_types(&self, target: &Target, package_name: &str, type_info: &str) -> String {
         format!(
             "Generate the Go implementation for this function:\n\n\
              Package: {}\n\
              Function signature: {}\n\
-             Instruction: {}\n\n\
+             Instruction: {}\n\
+             Type information: {}\n\n\
              Return only the code that goes inside the function body (without the curly braces).\n\
              For example, if the function should add two numbers, just return: return a + b",
-            package_name, target.signature, target.instruction
+            package_name, target.signature, target.instruction, type_info
         )
     }
 
