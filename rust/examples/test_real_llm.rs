@@ -45,11 +45,6 @@ async fn main() -> anyhow::Result<()> {
     let response = client.complete(request).await?;
 
     println!("\nResponse received!");
-    println!("Model: {}", response.model);
-    println!(
-        "Tokens used: {} (prompt) + {} (completion) = {} total",
-        response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens
-    );
 
     if let Some(choice) = response.choices.first() {
         println!("\nGenerated code:");

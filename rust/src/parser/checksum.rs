@@ -18,29 +18,19 @@ pub fn calculate_checksum(target: &Target) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::target::{Param, Target};
-    use std::path::PathBuf;
+    use crate::parser::target::Target;
 
     #[test]
     fn test_checksum_changes_with_signature() {
         let mut target = Target {
             name: "TestFunc".to_string(),
-            receiver: None,
-            params: vec![Param {
-                name: "id".to_string(),
-                typ: "string".to_string(),
-            }],
-            returns: vec![],
             instruction: "Test instruction".to_string(),
-            file_path: PathBuf::from("test.go"),
-            has_panic: true,
             signature: "func TestFunc(id string)".to_string(),
         };
 
         let checksum1 = calculate_checksum(&target);
 
-        // Change parameter type
-        target.params[0].typ = "int".to_string();
+        // Change signature
         target.signature = "func TestFunc(id int)".to_string();
         let checksum2 = calculate_checksum(&target);
 
@@ -54,12 +44,7 @@ mod tests {
     fn test_checksum_changes_with_instruction() {
         let mut target = Target {
             name: "TestFunc".to_string(),
-            receiver: None,
-            params: vec![],
-            returns: vec![],
             instruction: "Original instruction".to_string(),
-            file_path: PathBuf::from("test.go"),
-            has_panic: true,
             signature: "func TestFunc()".to_string(),
         };
 
@@ -79,12 +64,7 @@ mod tests {
     fn test_checksum_stable() {
         let target = Target {
             name: "TestFunc".to_string(),
-            receiver: None,
-            params: vec![],
-            returns: vec![],
             instruction: "Test instruction".to_string(),
-            file_path: PathBuf::from("test.go"),
-            has_panic: true,
             signature: "func TestFunc()".to_string(),
         };
 

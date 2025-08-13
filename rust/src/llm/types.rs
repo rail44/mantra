@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Role in the conversation
+/// Role in the message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -42,33 +42,14 @@ pub struct CompletionRequest {
     pub max_tokens: Option<u32>,
 }
 
-/// Response from completion API
+/// Response from completion API - only fields we actually use
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompletionResponse {
-    pub id: String,
-    pub object: String,
-    pub created: u64,
-    pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_fingerprint: Option<String>,
     pub choices: Vec<Choice>,
-    pub usage: Usage,
 }
 
-/// Choice in the response
+/// Choice in the response - only fields we actually use
 #[derive(Debug, Clone, Deserialize)]
 pub struct Choice {
-    pub index: u32,
     pub message: Message,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logprobs: Option<serde_json::Value>,
-    pub finish_reason: String,
-}
-
-/// Token usage information
-#[derive(Debug, Clone, Deserialize)]
-pub struct Usage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
 }

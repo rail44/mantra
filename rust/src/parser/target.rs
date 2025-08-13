@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tree_sitter::{Node, Tree, TreeCursor};
 
 /// Maximum allowed gap between a mantra comment and its target function
@@ -12,9 +12,6 @@ pub struct FileInfo {
     pub package_name: String,
     pub imports: Vec<Import>,
     pub targets: Vec<Target>,
-    pub file_path: PathBuf,
-    pub source_content: String,
-    pub source_lines: Vec<String>,
 }
 
 /// Import statement
@@ -28,33 +25,8 @@ pub struct Import {
 #[derive(Debug, Clone)]
 pub struct Target {
     pub name: String,
-    pub receiver: Option<Receiver>,
-    pub params: Vec<Param>,
-    pub returns: Vec<Return>,
     pub instruction: String,
-    pub file_path: PathBuf,
-    pub has_panic: bool,
     pub signature: String,
-}
-
-/// Method receiver
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Receiver {
-    pub name: String,
-    pub typ: String,
-}
-
-/// Function parameter
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Param {
-    pub name: String,
-    pub typ: String,
-}
-
-/// Return value
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Return {
-    pub typ: String,
 }
 
 impl Target {}
@@ -65,9 +37,6 @@ pub fn extract_file_info(path: &Path, source: &str, tree: Tree) -> Result<FileIn
         package_name: String::new(),
         imports: Vec::new(),
         targets: Vec::new(),
-        file_path: path.to_path_buf(),
-        source_content: source.to_string(),
-        source_lines: source.lines().map(String::from).collect(),
     };
 
     let root_node = tree.root_node();
@@ -265,7 +234,7 @@ fn extract_functions_with_mantra(
 fn parse_function_as_target(
     node: &Node,
     source: &str,
-    file_path: &Path,
+    _file_path: &Path,
     instruction: String,
 ) -> Result<Target> {
     let name = node
@@ -274,172 +243,32 @@ fn parse_function_as_target(
         .unwrap_or("unknown")
         .to_string();
 
-    let receiver = if node.kind() == "method_declaration" {
-        extract_receiver(node, source)
-    } else {
-        None
-    };
-
-    let params = extract_parameters(node, source);
-    let returns = extract_returns(node, source);
-    let has_panic = check_has_panic(node, source);
-
-    // Build signature
-    let signature = build_signature(&name, &receiver, &params, &returns);
+    // Build signature directly from node
+    let signature = extract_signature(node, source);
 
     Ok(Target {
         name,
-        receiver,
-        params,
-        returns,
         instruction,
-        file_path: file_path.to_path_buf(),
-        has_panic,
         signature,
     })
 }
 
-/// Extract receiver from method declaration
-fn extract_receiver(node: &Node, source: &str) -> Option<Receiver> {
-    node.child_by_field_name("receiver").and_then(|receiver| {
-        // The receiver is a parameter_list, iterate through its children
-        let mut cursor = receiver.walk();
-        for child in receiver.children(&mut cursor) {
-            if child.kind() == "parameter_declaration" {
-                let name = child
-                    .child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                    .unwrap_or("receiver")
-                    .to_string();
+/// Extract signature directly from source
+fn extract_signature(node: &Node, source: &str) -> String {
+    // Get the text from the start of the function to the opening brace
+    let start = node.start_byte();
+    let mut end = node.end_byte();
 
-                let typ = child
-                    .child_by_field_name("type")
-                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                return Some(Receiver { name, typ });
-            }
-        }
-        None
-    })
-}
-
-/// Extract parameters from function declaration
-fn extract_parameters(node: &Node, source: &str) -> Vec<Param> {
-    let mut params = Vec::new();
-
-    if let Some(params_node) = node.child_by_field_name("parameters") {
-        let mut cursor = params_node.walk();
-        for child in params_node.children(&mut cursor) {
-            if child.kind() == "parameter_declaration" {
-                let name = child
-                    .child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                    .unwrap_or("")
-                    .to_string();
-
-                let typ = child
-                    .child_by_field_name("type")
-                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                    .unwrap_or("any")
-                    .to_string();
-
-                if !name.is_empty() {
-                    params.push(Param { name, typ });
-                }
-            }
-        }
-    }
-
-    params
-}
-
-/// Extract return types from function declaration
-fn extract_returns(node: &Node, source: &str) -> Vec<Return> {
-    let mut returns = Vec::new();
-
-    if let Some(result_node) = node.child_by_field_name("result") {
-        // Check if it's a single type or parameter list
-        if result_node.kind() == "parameter_list" {
-            let mut cursor = result_node.walk();
-            for child in result_node.children(&mut cursor) {
-                if child.kind() == "parameter_declaration" {
-                    if let Some(type_node) = child.child_by_field_name("type") {
-                        if let Ok(typ) = type_node.utf8_text(source.as_bytes()) {
-                            returns.push(Return {
-                                typ: typ.to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        } else {
-            // Single return type
-            if let Ok(typ) = result_node.utf8_text(source.as_bytes()) {
-                returns.push(Return {
-                    typ: typ.to_string(),
-                });
-            }
-        }
-    }
-
-    returns
-}
-
-/// Check if function contains panic("not implemented")
-fn check_has_panic(node: &Node, source: &str) -> bool {
+    // Find the body to get just the signature
     if let Some(body) = node.child_by_field_name("body") {
-        let body_text = body.utf8_text(source.as_bytes()).unwrap_or("");
-        body_text.contains(r#"panic("not implemented")"#)
-    } else {
-        false
-    }
-}
-
-/// Build function signature string
-fn build_signature(
-    name: &str,
-    receiver: &Option<Receiver>,
-    params: &[Param],
-    returns: &[Return],
-) -> String {
-    let mut sig = String::new();
-
-    // Add receiver if method
-    if let Some(recv) = receiver {
-        sig.push_str(&format!("({} {}) ", recv.name, recv.typ));
+        end = body.start_byte();
     }
 
-    // Add function name
-    sig.push_str(&format!("func {}(", name));
-
-    // Add parameters
-    for (i, param) in params.iter().enumerate() {
-        if i > 0 {
-            sig.push_str(", ");
-        }
-        sig.push_str(&format!("{} {}", param.name, param.typ));
-    }
-    sig.push(')');
-
-    // Add returns
-    if !returns.is_empty() {
-        if returns.len() == 1 {
-            sig.push_str(&format!(" {}", returns[0].typ));
-        } else {
-            sig.push_str(" (");
-            for (i, ret) in returns.iter().enumerate() {
-                if i > 0 {
-                    sig.push_str(", ");
-                }
-                sig.push_str(&ret.typ);
-            }
-            sig.push(')');
-        }
-    }
-
-    sig
+    source[start..end]
+        .trim()
+        .trim_end_matches('{')
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -468,11 +297,7 @@ func GetUser(id string) (*User, error) {
         let target = &file_info.targets[0];
         assert_eq!(target.name, "GetUser");
         assert_eq!(target.instruction, "Get user by ID from database");
-        assert!(target.has_panic);
-        assert_eq!(target.params.len(), 1);
-        assert_eq!(target.params[0].name, "id");
-        assert_eq!(target.params[0].typ, "string");
-        assert_eq!(target.returns.len(), 2);
+        assert_eq!(target.signature, "func GetUser(id string) (*User, error)");
     }
 
     #[test]
@@ -494,10 +319,9 @@ func (s *UserService) SaveUser(ctx context.Context, user *User) error {
 
         let target = &file_info.targets[0];
         assert_eq!(target.name, "SaveUser");
-        assert!(target.receiver.is_some());
-
-        let receiver = target.receiver.as_ref().unwrap();
-        assert_eq!(receiver.name, "s");
-        assert_eq!(receiver.typ, "*UserService");
+        assert_eq!(
+            target.signature,
+            "func (s *UserService) SaveUser(ctx context.Context, user *User) error"
+        );
     }
 }

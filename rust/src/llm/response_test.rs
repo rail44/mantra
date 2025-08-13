@@ -32,16 +32,13 @@ mod tests {
         assert!(response.is_ok());
 
         let response = response.unwrap();
-        assert_eq!(response.id, "chatcmpl-8xYZ123");
-        assert_eq!(response.model, "gpt-3.5-turbo-0613");
         assert_eq!(response.choices.len(), 1);
-        assert_eq!(response.choices[0].finish_reason, "stop");
         assert!(response.choices[0].message.content.contains("func GetUser"));
     }
 
     #[test]
     fn test_parse_openrouter_response() {
-        // OpenRouterは基本的に同じ形式だが、modelフィールドが異なる場合がある
+        // OpenRouterは基本的に同じ形式
         let json_response = r#"{
             "id": "gen-abc123",
             "object": "chat.completion",
@@ -68,6 +65,7 @@ mod tests {
         assert!(response.is_ok());
 
         let response = response.unwrap();
-        assert_eq!(response.model, "openai/gpt-3.5-turbo");
+        assert_eq!(response.choices.len(), 1);
+        assert_eq!(response.choices[0].message.content, "Generated code here");
     }
 }
