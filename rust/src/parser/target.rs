@@ -66,7 +66,7 @@ impl Target {
             self.name.clone()
         }
     }
-    
+
     /// Get function signature
     pub fn get_function_signature(&self) -> String {
         self.signature.clone()
@@ -83,25 +83,25 @@ pub fn extract_file_info(path: &Path, source: &str, tree: Tree) -> Result<FileIn
         source_content: source.to_string(),
         source_lines: source.lines().map(String::from).collect(),
     };
-    
+
     let root_node = tree.root_node();
-    
+
     // Extract package name
     file_info.package_name = extract_package_name(&root_node, source)?;
-    
+
     // Extract imports
     file_info.imports = extract_imports(&root_node, source);
-    
+
     // Extract mantra targets
     file_info.targets = extract_targets(&root_node, source, path)?;
-    
+
     Ok(file_info)
 }
 
 /// Extract package name from source
 fn extract_package_name(root: &Node, source: &str) -> Result<String> {
     let mut cursor = root.walk();
-    
+
     for child in root.children(&mut cursor) {
         if child.kind() == "package_clause" {
             // tree-sitter-go uses package_identifier as a child node, not a field
@@ -113,7 +113,7 @@ fn extract_package_name(root: &Node, source: &str) -> Result<String> {
             }
         }
     }
-    
+
     anyhow::bail!("Package name not found")
 }
 
@@ -121,21 +121,21 @@ fn extract_package_name(root: &Node, source: &str) -> Result<String> {
 fn extract_imports(root: &Node, source: &str) -> Vec<Import> {
     let mut imports = Vec::new();
     let mut cursor = root.walk();
-    
+
     for child in root.children(&mut cursor) {
         if child.kind() == "import_declaration" {
             // Handle both single and grouped imports
             extract_import_specs(&child, source, &mut imports);
         }
     }
-    
+
     imports
 }
 
 /// Extract import specs from import declaration
 fn extract_import_specs(node: &Node, source: &str, imports: &mut Vec<Import>) {
     let mut cursor = node.walk();
-    
+
     for child in node.children(&mut cursor) {
         if child.kind() == "import_spec_list" {
             // Grouped imports
@@ -161,7 +161,7 @@ fn parse_import_spec(spec: &Node, source: &str) -> Option<Import> {
     let mut path = String::new();
     let mut alias = None;
     let mut cursor = spec.walk();
-    
+
     for child in spec.children(&mut cursor) {
         match child.kind() {
             "interpreted_string_literal" => {
@@ -178,7 +178,7 @@ fn parse_import_spec(spec: &Node, source: &str) -> Option<Import> {
             _ => {}
         }
     }
-    
+
     if !path.is_empty() {
         Some(Import { path, alias })
     } else {
@@ -190,10 +190,10 @@ fn parse_import_spec(spec: &Node, source: &str) -> Option<Import> {
 fn extract_targets(root: &Node, source: &str, file_path: &Path) -> Result<Vec<Target>> {
     let mut targets = Vec::new();
     let mut mantra_comments = extract_mantra_comments(root, source)?;
-    
+
     // Find functions with mantra comments
     extract_functions_with_mantra(root, source, file_path, &mut mantra_comments, &mut targets)?;
-    
+
     Ok(targets)
 }
 
@@ -201,7 +201,7 @@ fn extract_targets(root: &Node, source: &str, file_path: &Path) -> Result<Vec<Ta
 fn extract_mantra_comments(root: &Node, source: &str) -> Result<Vec<(usize, String)>> {
     let mut comments = Vec::new();
     let mut cursor = root.walk();
-    
+
     visit_nodes(&mut cursor, &mut |node| {
         if node.kind() == "comment" {
             if let Ok(text) = node.utf8_text(source.as_bytes()) {
@@ -214,7 +214,7 @@ fn extract_mantra_comments(root: &Node, source: &str) -> Result<Vec<(usize, Stri
             }
         }
     });
-    
+
     Ok(comments)
 }
 
@@ -226,12 +226,12 @@ where
     loop {
         let node = cursor.node();
         callback(&node);
-        
+
         if cursor.goto_first_child() {
             visit_nodes(cursor, callback);
             cursor.goto_parent();
         }
-        
+
         if !cursor.goto_next_sibling() {
             break;
         }
@@ -247,12 +247,12 @@ fn extract_functions_with_mantra(
     targets: &mut Vec<Target>,
 ) -> Result<()> {
     let mut cursor = root.walk();
-    
+
     visit_nodes(&mut cursor, &mut |node| {
         if node.kind() == "function_declaration" || node.kind() == "method_declaration" {
             // Check if there's a mantra comment before this function
             let func_start = node.start_byte();
-            
+
             // Find the closest mantra comment before this function
             let mut instruction = None;
             mantra_comments.retain(|(comment_end, instr)| {
@@ -263,7 +263,7 @@ fn extract_functions_with_mantra(
                     true
                 }
             });
-            
+
             if let Some(instruction) = instruction {
                 if let Ok(target) = parse_function_as_target(node, source, file_path, instruction) {
                     targets.push(target);
@@ -271,7 +271,7 @@ fn extract_functions_with_mantra(
             }
         }
     });
-    
+
     Ok(())
 }
 
@@ -287,20 +287,20 @@ fn parse_function_as_target(
         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
         .unwrap_or("unknown")
         .to_string();
-    
+
     let receiver = if node.kind() == "method_declaration" {
         extract_receiver(node, source)
     } else {
         None
     };
-    
+
     let params = extract_parameters(node, source);
     let returns = extract_returns(node, source);
     let has_panic = check_has_panic(node, source);
-    
+
     // Build signature
     let signature = build_signature(&name, &receiver, &params, &returns);
-    
+
     Ok(Target {
         name,
         receiver,
@@ -315,35 +315,34 @@ fn parse_function_as_target(
 
 /// Extract receiver from method declaration
 fn extract_receiver(node: &Node, source: &str) -> Option<Receiver> {
-    node.child_by_field_name("receiver")
-        .and_then(|receiver| {
-            // The receiver is a parameter_list, iterate through its children
-            let mut cursor = receiver.walk();
-            for child in receiver.children(&mut cursor) {
-                if child.kind() == "parameter_declaration" {
-                    let name = child
-                        .child_by_field_name("name")
-                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                        .unwrap_or("receiver")
-                        .to_string();
-                    
-                    let typ = child
-                        .child_by_field_name("type")
-                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    
-                    return Some(Receiver { name, typ });
-                }
+    node.child_by_field_name("receiver").and_then(|receiver| {
+        // The receiver is a parameter_list, iterate through its children
+        let mut cursor = receiver.walk();
+        for child in receiver.children(&mut cursor) {
+            if child.kind() == "parameter_declaration" {
+                let name = child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                    .unwrap_or("receiver")
+                    .to_string();
+
+                let typ = child
+                    .child_by_field_name("type")
+                    .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                return Some(Receiver { name, typ });
             }
-            None
-        })
+        }
+        None
+    })
 }
 
 /// Extract parameters from function declaration
 fn extract_parameters(node: &Node, source: &str) -> Vec<Param> {
     let mut params = Vec::new();
-    
+
     if let Some(params_node) = node.child_by_field_name("parameters") {
         let mut cursor = params_node.walk();
         for child in params_node.children(&mut cursor) {
@@ -353,27 +352,27 @@ fn extract_parameters(node: &Node, source: &str) -> Vec<Param> {
                     .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                     .unwrap_or("")
                     .to_string();
-                
+
                 let typ = child
                     .child_by_field_name("type")
                     .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                     .unwrap_or("any")
                     .to_string();
-                
+
                 if !name.is_empty() {
                     params.push(Param { name, typ });
                 }
             }
         }
     }
-    
+
     params
 }
 
 /// Extract return types from function declaration
 fn extract_returns(node: &Node, source: &str) -> Vec<Return> {
     let mut returns = Vec::new();
-    
+
     if let Some(result_node) = node.child_by_field_name("result") {
         // Check if it's a single type or parameter list
         if result_node.kind() == "parameter_list" {
@@ -398,7 +397,7 @@ fn extract_returns(node: &Node, source: &str) -> Vec<Return> {
             }
         }
     }
-    
+
     returns
 }
 
@@ -420,15 +419,15 @@ fn build_signature(
     returns: &[Return],
 ) -> String {
     let mut sig = String::new();
-    
+
     // Add receiver if method
     if let Some(recv) = receiver {
         sig.push_str(&format!("({} {}) ", recv.name, recv.typ));
     }
-    
+
     // Add function name
     sig.push_str(&format!("func {}(", name));
-    
+
     // Add parameters
     for (i, param) in params.iter().enumerate() {
         if i > 0 {
@@ -437,7 +436,7 @@ fn build_signature(
         sig.push_str(&format!("{} {}", param.name, param.typ));
     }
     sig.push(')');
-    
+
     // Add returns
     if !returns.is_empty() {
         if returns.len() == 1 {
@@ -453,7 +452,7 @@ fn build_signature(
             sig.push(')');
         }
     }
-    
+
     sig
 }
 
@@ -461,7 +460,7 @@ fn build_signature(
 mod tests {
     use super::*;
     use crate::parser::GoParser;
-    
+
     #[test]
     fn test_extract_mantra_target() {
         let source = r#"
@@ -472,14 +471,14 @@ func GetUser(id string) (*User, error) {
     panic("not implemented")
 }
 "#;
-        
+
         let mut parser = GoParser::new().unwrap();
         let tree = parser.parse(source).unwrap();
         let file_info = extract_file_info(Path::new("test.go"), source, tree).unwrap();
-        
+
         assert_eq!(file_info.package_name, "main");
         assert_eq!(file_info.targets.len(), 1);
-        
+
         let target = &file_info.targets[0];
         assert_eq!(target.name, "GetUser");
         assert_eq!(target.instruction, "Get user by ID from database");
@@ -489,7 +488,7 @@ func GetUser(id string) (*User, error) {
         assert_eq!(target.params[0].typ, "string");
         assert_eq!(target.returns.len(), 2);
     }
-    
+
     #[test]
     fn test_extract_method() {
         let source = r#"
@@ -500,17 +499,17 @@ func (s *UserService) SaveUser(ctx context.Context, user *User) error {
     panic("not implemented")
 }
 "#;
-        
+
         let mut parser = GoParser::new().unwrap();
         let tree = parser.parse(source).unwrap();
         let file_info = extract_file_info(Path::new("test.go"), source, tree).unwrap();
-        
+
         assert_eq!(file_info.targets.len(), 1);
-        
+
         let target = &file_info.targets[0];
         assert_eq!(target.name, "SaveUser");
         assert!(target.receiver.is_some());
-        
+
         let receiver = target.receiver.as_ref().unwrap();
         assert_eq!(receiver.name, "s");
         assert_eq!(receiver.typ, "*UserService");

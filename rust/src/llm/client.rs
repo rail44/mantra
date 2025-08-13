@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use reqwest::{Client, header};
+use reqwest::{header, Client};
 
-use crate::config::Config;
 use super::types::{CompletionRequest, CompletionResponse};
+use crate::config::Config;
 
 /// LLM API client
 pub struct LLMClient {
@@ -18,7 +18,7 @@ impl LLMClient {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/json"),
         );
-        
+
         // Add API key if provided
         if let Some(api_key) = &config.api_key {
             headers.insert(
@@ -27,71 +27,42 @@ impl LLMClient {
                     .context("Invalid API key format")?,
             );
         }
-        
+
         let client = Client::builder()
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(120))
             .build()
             .context("Failed to build HTTP client")?;
-        
+
         Ok(Self { client, config })
     }
-    
+
     /// Send a completion request
     pub async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        let url = format!("{}/v1/chat/completions", self.config.url);
-        
-        let response = self.client
+        let url = format!("{}/chat/completions", self.config.url);
+
+        let response = self
+            .client
             .post(&url)
             .json(&request)
             .send()
             .await
             .context("Failed to send request")?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             anyhow::bail!("API request failed with status {}: {}", status, error_text);
         }
-        
+
         let completion = response
             .json::<CompletionResponse>()
             .await
             .context("Failed to parse response")?;
-        
-        Ok(completion)
-    }
-    
-    /// Send a completion request with OpenRouter-specific configuration
-    pub async fn complete_openrouter(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        // OpenRouter already has /api/v1 in the URL from config, just add /chat/completions
-        let url = format!("{}/chat/completions", self.config.url);
-        
-        // Add OpenRouter-specific configuration if present
-        if let Some(_openrouter) = &self.config.openrouter {
-            // OpenRouter supports provider routing via model name
-            // e.g., "openai/gpt-3.5-turbo" or "anthropic/claude-2"
-            // The providers list in config is for documentation/validation
-        }
-        
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("Failed to send request to OpenRouter")?;
-        
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            anyhow::bail!("OpenRouter API request failed with status {}: {}", status, error_text);
-        }
-        
-        let completion = response
-            .json::<CompletionResponse>()
-            .await
-            .context("Failed to parse OpenRouter response")?;
-        
+
         Ok(completion)
     }
 }
@@ -100,7 +71,7 @@ impl LLMClient {
 mod tests {
     use super::*;
     use crate::config::OpenRouterConfig;
-    
+
     #[test]
     fn test_client_creation() {
         let config = Config {
@@ -112,11 +83,11 @@ mod tests {
             plain: false,
             openrouter: None,
         };
-        
+
         let client = LLMClient::new(config);
         assert!(client.is_ok());
     }
-    
+
     #[test]
     fn test_client_with_openrouter() {
         let config = Config {
@@ -130,7 +101,7 @@ mod tests {
                 providers: vec!["openai".to_string(), "anthropic".to_string()],
             }),
         };
-        
+
         let client = LLMClient::new(config);
         assert!(client.is_ok());
     }

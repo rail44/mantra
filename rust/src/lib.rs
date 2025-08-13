@@ -1,4 +1,5 @@
 pub mod config;
-pub mod parser;
-pub mod llm;
+pub mod editor;
 pub mod generator;
+pub mod llm;
+pub mod parser;

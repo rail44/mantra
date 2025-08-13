@@ -23,14 +23,14 @@ impl Message {
             content: content.into(),
         }
     }
-    
+
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
             content: content.into(),
         }
     }
-    
+
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,

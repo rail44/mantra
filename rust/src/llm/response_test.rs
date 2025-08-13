@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::llm::types::CompletionResponse;
-    
+
     #[test]
     fn test_parse_real_response() {
         let json_response = r#"{
@@ -27,10 +27,10 @@ mod tests {
                 "total_tokens": 195
             }
         }"#;
-        
+
         let response: Result<CompletionResponse, _> = serde_json::from_str(json_response);
         assert!(response.is_ok());
-        
+
         let response = response.unwrap();
         assert_eq!(response.id, "chatcmpl-8xYZ123");
         assert_eq!(response.model, "gpt-3.5-turbo-0613");
@@ -38,7 +38,7 @@ mod tests {
         assert_eq!(response.choices[0].finish_reason, "stop");
         assert!(response.choices[0].message.content.contains("func GetUser"));
     }
-    
+
     #[test]
     fn test_parse_openrouter_response() {
         // OpenRouterは基本的に同じ形式だが、modelフィールドが異なる場合がある
@@ -63,10 +63,10 @@ mod tests {
                 "total_tokens": 150
             }
         }"#;
-        
+
         let response: Result<CompletionResponse, _> = serde_json::from_str(json_response);
         assert!(response.is_ok());
-        
+
         let response = response.unwrap();
         assert_eq!(response.model, "openai/gpt-3.5-turbo");
     }

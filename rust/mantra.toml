@@ -5,7 +5,7 @@ model = "mistralai/devstral-small"
 url = "https://openrouter.ai/api/v1"
 
 # Output directory
-dest = "../simple_mantra"
+dest = "output"
 
 # API key from environment variable
 api_key = "${OPENROUTER_API_KEY}"
