@@ -89,16 +89,12 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		}
 	}
 
-	// Execute the tool
-	start := time.Now()
 	result, err := tool.Execute(execCtx, params)
-	duration := time.Since(start)
 
 	// Log the result
 	if err != nil {
 		e.logger.Error(fmt.Sprintf("Tool '%s' failed", toolName),
-			slog.String("error", err.Error()),
-			slog.Duration("duration", duration))
+			slog.String("error", err.Error()))
 		return nil, err
 	}
 

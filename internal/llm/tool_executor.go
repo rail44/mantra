@@ -90,8 +90,7 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 				// Log tool error
 				logger.Info("Tool error",
 					slog.String("tool", tc.Function.Name),
-					slog.String("error", err.Error()),
-					slog.Duration("duration", elapsed))
+					slog.String("error", err.Error()))
 			} else {
 				// For success, marshal the result directly
 				if result == nil {
@@ -114,19 +113,16 @@ func (c *OpenAIClient) executeToolsParallel(ctx context.Context, toolCalls []Too
 					if success, ok := params["success"].(bool); ok && !success {
 						// Phase failed - use warning log
 						logger.Warn("Phase failed via result tool",
-							slog.String("tool", tc.Function.Name),
-							slog.Duration("duration", elapsed))
+							slog.String("tool", tc.Function.Name))
 					} else {
 						// Phase succeeded (or success field not found)
 						logger.Info("Tool completed",
-							slog.String("tool", tc.Function.Name),
-							slog.Duration("duration", elapsed))
+							slog.String("tool", tc.Function.Name))
 					}
 				} else {
 					// Normal tool execution
 					logger.Info("Tool completed",
-						slog.String("tool", tc.Function.Name),
-						slog.Duration("duration", elapsed))
+						slog.String("tool", tc.Function.Name))
 				}
 			}
 
