@@ -23,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
         ],
         temperature: 0.0,
         max_tokens: Some(10),
+        provider: None,
     };
 
     println!("Sending request...");

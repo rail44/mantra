@@ -32,6 +32,13 @@ impl Message {
     }
 }
 
+/// Provider specification for OpenRouter
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only: Option<Vec<String>>,
+}
+
 /// Request for completion API
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionRequest {
@@ -40,6 +47,8 @@ pub struct CompletionRequest {
     pub temperature: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderSpec>,
 }
 
 /// Response from completion API - only fields we actually use

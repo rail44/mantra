@@ -28,6 +28,14 @@ impl LLMClient {
             );
         }
 
+        // Add app identification headers (primarily for OpenRouter, but safe for all providers)
+        // These headers help with app discovery on platforms that support them
+        headers.insert(
+            "HTTP-Referer",
+            header::HeaderValue::from_static("https://github.com/rail44/mantra"),
+        );
+        headers.insert("X-Title", header::HeaderValue::from_static("mantra"));
+
         let client = Client::builder()
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(120))

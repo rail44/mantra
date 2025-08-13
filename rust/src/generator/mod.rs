@@ -6,7 +6,7 @@ use std::path::Path;
 use self::edit_event::EditEvent;
 use crate::config::Config;
 use crate::editor::TextEdit;
-use crate::llm::{CompletionRequest, LLMClient, Message};
+use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
 use crate::parser::{checksum::calculate_checksum, target::Target, GoParser};
 
 /// Code generator that handles the entire generation process
@@ -136,7 +136,7 @@ impl Generator {
         tracing::debug!("Prompt: {}", prompt);
 
         // Create the request
-        let request = CompletionRequest {
+        let mut request = CompletionRequest {
             model: self.config.model.clone(),
             messages: vec![
                 Message::system("You are a Go code generator. Generate only the function body implementation without the curly braces. Do not include the function signature. Do not include any comments or explanations. Do not use markdown code blocks. Return only the Go code that goes inside the function body."),
@@ -144,7 +144,17 @@ impl Generator {
             ],
             temperature: 0.2,
             max_tokens: Some(1000),
+            provider: None,
         };
+
+        // Add OpenRouter provider specification if configured
+        if let Some(openrouter_config) = &self.config.openrouter {
+            if !openrouter_config.providers.is_empty() {
+                request.provider = Some(ProviderSpec {
+                    only: Some(openrouter_config.providers.clone()),
+                });
+            }
+        }
 
         // Send to LLM (OpenAI-compatible endpoint)
         let response = self.client.complete(request).await?;

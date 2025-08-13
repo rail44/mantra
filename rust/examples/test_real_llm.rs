@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
         ],
         temperature: 0.2,
         max_tokens: Some(500),
+        provider: None,
     };
 
     println!("\nSending request to LLM...");
