@@ -1,5 +1,6 @@
 mod config;
 mod parser;
+mod llm;
 
 use anyhow::Result;
 use clap::Parser;
