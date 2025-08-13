@@ -1,0 +1,8 @@
+# Simple config for testing
+model = "mistralai/devstral-small"
+url = "https://openrouter.ai/api/v1"
+dest = "./generated"
+api_key = "${OPENROUTER_API_KEY}"
+
+[openrouter]
+providers = ["mistral"]
