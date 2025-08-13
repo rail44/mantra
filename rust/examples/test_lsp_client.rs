@@ -36,7 +36,10 @@ async fn main() -> Result<()> {
         })]),
     };
     let init_result = LspRpcClient::initialize(&client, init_params).await?;
-    println!("Initialization result: {:?}", init_result);
+    println!("Server capabilities - Hover: {}", init_result.capabilities.hover_provider);
+    if let Some(server_info) = &init_result.server_info {
+        println!("Server: {} {:?}", server_info.name, server_info.version);
+    }
 
     // Send initialized notification
     LspRpcClient::initialized(&client).await?;
@@ -70,7 +73,15 @@ async fn main() -> Result<()> {
     };
     let hover_result = LspRpcClient::hover(&client, hover_params).await?;
 
-    println!("Hover result: {:?}", hover_result);
+    match hover_result {
+        Some(hover) => {
+            println!("Hover content: {:?}", hover.contents);
+            if let Some(range) = hover.range {
+                println!("Hover range: {:?}", range);
+            }
+        }
+        None => println!("No hover information available"),
+    }
 
     Ok(())
 }
