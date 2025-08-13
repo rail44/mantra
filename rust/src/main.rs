@@ -1,8 +1,4 @@
-mod config;
-mod editor;
-mod generator;
-mod llm;
-mod parser;
+use mantra::{config, editor, generator, llm, parser};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

@@ -1,9 +1,13 @@
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::client::{ReceivedMessage, TransportReceiverT, TransportSenderT};
+use serde_json::Value;
 use std::fmt;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tracing::debug;
+
+use crate::lsp::NotificationHandler;
 
 /// Error type for LSP transport operations
 #[derive(Debug)]
@@ -57,11 +61,22 @@ impl TransportSenderT for StdioSender {
 /// Handles receiving LSP messages from stdout
 pub struct StdioReceiver {
     stdout: AsyncBufReader<ChildStdout>,
+    notification_handler: Option<Arc<NotificationHandler>>,
 }
 
 impl StdioReceiver {
     pub fn new(stdout: AsyncBufReader<ChildStdout>) -> Self {
-        Self { stdout }
+        Self { 
+            stdout,
+            notification_handler: None,
+        }
+    }
+    
+    pub fn with_notification_handler(stdout: AsyncBufReader<ChildStdout>, handler: Arc<NotificationHandler>) -> Self {
+        Self {
+            stdout,
+            notification_handler: Some(handler),
+        }
     }
 }
 
@@ -108,6 +123,31 @@ impl TransportReceiverT for StdioReceiver {
             .map_err(|e| TransportError(format!("Failed to read message body: {}", e)))?;
 
         debug!("Received LSP message: {}", String::from_utf8_lossy(&buffer));
+        
+        // 通知ハンドラーがある場合、notificationをチェック
+        if let Some(handler) = &self.notification_handler {
+            if let Ok(msg) = serde_json::from_slice::<Value>(&buffer) {
+                // notificationかどうかチェック（idがなくmethodがある）
+                if msg.get("id").is_none() && msg.get("method").is_some() {
+                    if let (Some(method), params) = (
+                        msg.get("method").and_then(|m| m.as_str()),
+                        msg.get("params"),
+                    ) {
+                        let params = params.cloned().unwrap_or(Value::Null);
+                        let handler = handler.clone();
+                        let method = method.to_string();
+                        
+                        // 非同期でハンドラーに渡す（ブロッキングを避ける）
+                        tokio::spawn(async move {
+                            if let Err(e) = handler.handle_notification(&method, params).await {
+                                debug!("Failed to handle notification: {}", e);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        
         Ok(ReceivedMessage::Bytes(buffer))
     }
 }

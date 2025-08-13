@@ -8,7 +8,7 @@ use self::edit_event::EditEvent;
 use crate::config::Config;
 use crate::editor::TextEdit;
 use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
-use crate::lsp::{create_lsp_client, LspRpcClient, InitializeParams, HoverParams, DidOpenTextDocumentParams, TextDocumentIdentifier, TextDocumentItem, Position};
+use crate::lsp::{Client as LspClient, LspRpcClient, InitializeParams, HoverParams, DidOpenTextDocumentParams, TextDocumentIdentifier, TextDocumentItem, Position};
 use crate::parser::{checksum::calculate_checksum, target::{Target, get_function_type_positions}, GoParser};
 
 /// Code generator that handles the entire generation process
@@ -235,8 +235,8 @@ impl Generator {
             return Ok("No type positions found".to_string());
         }
 
-        // Start LSP client once for all positions
-        let (lsp_client, _process) = create_lsp_client("gopls", &[]).await?;
+        // Start LSP client with notification support
+        let lsp_client = LspClient::new("gopls", &[]).await?;
 
         // Initialize LSP  
         let workspace_root = file_path.parent()
@@ -262,8 +262,8 @@ impl Generator {
             })]),
         };
 
-        let _init_result = LspRpcClient::initialize(&lsp_client, init_params).await?;
-        LspRpcClient::initialized(&lsp_client).await?;
+        let _init_result = LspRpcClient::initialize(lsp_client.rpc_client(), init_params).await?;
+        LspRpcClient::initialized(lsp_client.rpc_client()).await?;
 
         // Open the document
         let file_uri = format!("file://{}", file_path.to_string_lossy());
@@ -275,10 +275,18 @@ impl Generator {
                 text: source.to_string(),
             },
         };
-        LspRpcClient::did_open(&lsp_client, did_open_params).await?;
+        LspRpcClient::did_open(lsp_client.rpc_client(), did_open_params).await?;
 
-        // Wait for processing
-        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+        // Wait for diagnostics to ensure the file is analyzed
+        let timeout = std::time::Duration::from_secs(5);
+        match lsp_client.wait_for_diagnostics_timeout(&file_uri, timeout).await {
+            Ok(diagnostics) => {
+                tracing::debug!("Received {} diagnostics for {}", diagnostics.diagnostics.len(), file_uri);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to receive diagnostics: {}. Continuing anyway.", e);
+            }
+        }
 
         let mut type_infos = Vec::new();
         
@@ -291,7 +299,7 @@ impl Generator {
                 position: Position { line: *line, character: *character },
             };
 
-            match LspRpcClient::hover(&lsp_client, hover_params).await? {
+            match LspRpcClient::hover(lsp_client.rpc_client(), hover_params).await? {
                 Some(hover) => {
                     let type_info = format!("Position {}:{} - {:?}", line, character, hover.contents);
                     tracing::info!("Type info at {}:{} - {}", line, character, type_info);

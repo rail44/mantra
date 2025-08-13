@@ -92,6 +92,43 @@ pub struct Range {
     pub end: Position,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub range: Range,
+    pub severity: Option<u32>,
+    pub code: Option<DiagnosticCode>,
+    pub source: Option<String>,
+    pub message: String,
+    #[serde(rename = "relatedInformation")]
+    pub related_information: Option<Vec<DiagnosticRelatedInformation>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DiagnosticCode {
+    Number(u32),
+    String(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticRelatedInformation {
+    pub location: Location,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Location {
+    pub uri: String,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishDiagnosticsParams {
+    pub uri: String,
+    pub version: Option<i32>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 /// Define LSP RPC interface using proc macro
 /// This generates type-safe client methods automatically
 #[rpc(client)]
@@ -100,18 +137,15 @@ pub trait LspRpc {
     #[method(name = "initialize", param_kind = map)]
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult, jsonrpsee::core::Error>;
 
-    /// Send initialized notification
+    /// Send initialized notification (no return = notification in LSP spec)
     #[method(name = "initialized", param_kind = map)]
-    async fn initialized(&self) -> Result<(), jsonrpsee::core::Error>;
+    async fn initialized(&self);
 
     /// Get hover information at a position
     #[method(name = "textDocument/hover", param_kind = map)]
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>, jsonrpsee::core::Error>;
 
-    /// Open a text document
+    /// Open a text document notification (no return = notification in LSP spec)
     #[method(name = "textDocument/didOpen", param_kind = map)]
-    async fn did_open(
-        &self,
-        params: DidOpenTextDocumentParams,
-    ) -> Result<(), jsonrpsee::core::Error>;
+    async fn did_open(&self, params: DidOpenTextDocumentParams);
 }
