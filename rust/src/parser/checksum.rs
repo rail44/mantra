@@ -18,7 +18,7 @@ pub fn calculate_checksum(target: &Target) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::target::{Param, Return, Target};
+    use crate::parser::target::{Param, Target};
     use std::path::PathBuf;
 
     #[test]

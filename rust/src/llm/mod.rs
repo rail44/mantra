@@ -5,4 +5,4 @@ pub mod types;
 mod response_test;
 
 pub use client::LLMClient;
-pub use types::{Choice, CompletionRequest, CompletionResponse, Message, Role, Usage};
+pub use types::{CompletionRequest, Message};

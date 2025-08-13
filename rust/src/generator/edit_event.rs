@@ -85,7 +85,7 @@ pub fn convert_to_lsp_edits(
             // Replace function body
             let indented_body = indent_code(&event.new_body, "\t");
             let formatted_body = if indented_body.trim().is_empty() {
-                format!("{{\n\tpanic(\"not implemented\")\n}}")
+                "{\n\tpanic(\"not implemented\")\n}".to_string()
             } else {
                 format!("{{\n{}\n}}", indented_body)
             };
@@ -121,38 +121,6 @@ fn byte_to_position_single(source: &str, byte_pos: usize) -> Position {
     Position::new(line as u32, (byte_pos - line_start_byte) as u32)
 }
 
-/// Convert byte positions to line/character positions
-fn byte_to_position(source: &str, start_byte: usize, end_byte: usize) -> (Position, Position) {
-    let mut line = 0;
-    let mut line_start_byte = 0;
-    let mut current_byte = 0;
-
-    let mut start_pos = Position::new(0, 0);
-    let mut end_pos = Position::new(0, 0);
-
-    for ch in source.chars() {
-        if current_byte == start_byte {
-            start_pos = Position::new(line as u32, (current_byte - line_start_byte) as u32);
-        }
-        if current_byte == end_byte {
-            end_pos = Position::new(line as u32, (current_byte - line_start_byte) as u32);
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            line_start_byte = current_byte + ch.len_utf8();
-        }
-        current_byte += ch.len_utf8();
-    }
-
-    // Handle end_byte at end of file
-    if current_byte == end_byte {
-        end_pos = Position::new(line as u32, (current_byte - line_start_byte) as u32);
-    }
-
-    (start_pos, end_pos)
-}
 
 /// Indent code with given prefix
 fn indent_code(code: &str, indent: &str) -> String {

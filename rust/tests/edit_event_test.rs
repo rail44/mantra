@@ -35,16 +35,17 @@ func Multiply(x, y int) int {
     // Convert to LSP edits
     let edits = convert_to_lsp_edits(source, &tree, events).unwrap();
 
-    // Check we got edits
-    assert_eq!(edits.len(), 2);
+    // Check we got edits (2 for each function: checksum comment + body)
+    assert_eq!(edits.len(), 4);
 
-    // Check first edit
-    let edit1 = &edits[0];
-    assert!(edit1.new_text.contains("mantra:checksum:12345678"));
-    assert!(edit1.new_text.contains("return a + b"));
+    // Find edits containing our expected content
+    let has_add_checksum = edits.iter().any(|e| e.new_text.contains("mantra:checksum:12345678"));
+    let has_add_body = edits.iter().any(|e| e.new_text.contains("return a + b"));
+    let has_multiply_checksum = edits.iter().any(|e| e.new_text.contains("mantra:checksum:87654321"));
+    let has_multiply_body = edits.iter().any(|e| e.new_text.contains("return x * y"));
 
-    // Check second edit
-    let edit2 = &edits[1];
-    assert!(edit2.new_text.contains("mantra:checksum:87654321"));
-    assert!(edit2.new_text.contains("return x * y"));
+    assert!(has_add_checksum, "Should have Add checksum edit");
+    assert!(has_add_body, "Should have Add body edit");
+    assert!(has_multiply_checksum, "Should have Multiply checksum edit");
+    assert!(has_multiply_body, "Should have Multiply body edit");
 }

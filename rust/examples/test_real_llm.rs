@@ -41,12 +41,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\nSending request to LLM...");
 
-    // Use appropriate method based on URL
-    let response = if config.url.contains("openrouter") {
-        client.complete_openrouter(request).await?
-    } else {
-        client.complete(request).await?
-    };
+    // Send request to LLM (works with OpenRouter's OpenAI-compatible API)
+    let response = client.complete(request).await?;
 
     println!("\nResponse received!");
     println!("Model: {}", response.model);

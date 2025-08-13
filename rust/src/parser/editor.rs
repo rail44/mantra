@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use tree_sitter::{Node, Tree, TreeCursor};
+use anyhow::Result;
+use tree_sitter::{Node, Tree};
 
 /// Represents an edit operation on the source code
 #[derive(Debug, Clone)]
