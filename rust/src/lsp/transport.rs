@@ -65,13 +65,6 @@ pub struct StdioReceiver {
 }
 
 impl StdioReceiver {
-    pub fn new(stdout: AsyncBufReader<ChildStdout>) -> Self {
-        Self {
-            stdout,
-            notification_handler: None,
-        }
-    }
-
     pub fn with_notification_handler(
         stdout: AsyncBufReader<ChildStdout>,
         handler: Arc<NotificationHandler>,

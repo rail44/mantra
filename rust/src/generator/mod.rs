@@ -212,7 +212,7 @@ impl Generator {
         let mut cursor = root_node.walk();
 
         // Find the matching function node
-        let function_node = self.find_function_by_name(&mut cursor, source, &target.name)?;
+        let function_node = Self::find_function_by_name(&mut cursor, source, &target.name)?;
 
         // Get LSP positions for parameter and return types
         let type_positions = get_function_type_positions(&function_node);
@@ -224,7 +224,6 @@ impl Generator {
 
     /// Find function node by name in the tree
     fn find_function_by_name<'a>(
-        &self,
         cursor: &mut TreeCursor<'a>,
         source: &str,
         function_name: &str,
@@ -242,7 +241,7 @@ impl Generator {
             }
 
             if cursor.goto_first_child() {
-                if let Ok(found) = self.find_function_by_name(cursor, source, function_name) {
+                if let Ok(found) = Self::find_function_by_name(cursor, source, function_name) {
                     return Ok(found);
                 }
                 cursor.goto_parent();

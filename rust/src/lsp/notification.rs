@@ -10,13 +10,19 @@ pub struct NotificationHandler {
     diagnostics_rx: Arc<Mutex<broadcast::Receiver<PublishDiagnosticsParams>>>,
 }
 
-impl NotificationHandler {
-    pub fn new() -> Self {
+impl Default for NotificationHandler {
+    fn default() -> Self {
         let (tx, rx) = broadcast::channel(100);
         Self {
             diagnostics_tx: tx,
             diagnostics_rx: Arc::new(Mutex::new(rx)),
         }
+    }
+}
+
+impl NotificationHandler {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// 通知メッセージを処理する
