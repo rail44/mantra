@@ -30,7 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Utilities
 regex = "1"
-sha2 = "0.10"
+hashbrown = "0.14"
 walkdir = "2"
 
 # UI (for later)
