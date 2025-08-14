@@ -1,5 +1,5 @@
 use mantra::config::Config;
-use mantra::generator::Generator;
+use mantra::generator::DocumentManager;
 use std::path::Path;
 
 #[tokio::test]
@@ -16,12 +16,12 @@ async fn test_generate_output() {
         openrouter: None,
     };
 
-    // Create generator
-    let generator = Generator::new(config).unwrap();
-
     // Test with simple file
     let file_path = Path::new("examples/simple_test.go");
-    let result = generator.generate_file(file_path).await.unwrap();
+
+    // Create document manager
+    let mut doc_manager = DocumentManager::new(config, file_path).unwrap();
+    let result = doc_manager.generate_all().await.unwrap();
 
     // Check that line count is reasonable (not too many extra lines)
     let line_count = result.lines().count();

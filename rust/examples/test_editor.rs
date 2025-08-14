@@ -1,5 +1,5 @@
 use mantra::config::Config;
-use mantra::generator::Generator;
+use mantra::generator::DocumentManager;
 use std::path::Path;
 
 #[tokio::main]
@@ -18,9 +18,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         openrouter: None,
     };
 
-    // Create generator
-    let generator = Generator::new(config)?;
-
     // Test with simple file
     let file_path = Path::new("examples/simple_test.go");
 
@@ -29,7 +26,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Mock LLM response for testing
     std::env::set_var("MOCK_LLM_RESPONSE", "return a + b");
 
-    let result = generator.generate_file(file_path).await?;
+    // Create document manager
+    let mut doc_manager = DocumentManager::new(config, file_path)?;
+    let result = doc_manager.generate_all().await?;
 
     println!("Generated output:\n{}", result);
 

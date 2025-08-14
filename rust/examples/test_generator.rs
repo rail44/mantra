@@ -1,5 +1,5 @@
 use mantra::config::Config;
-use mantra::generator::Generator;
+use mantra::generator::DocumentManager;
 use std::path::Path;
 
 #[tokio::main]
@@ -12,12 +12,11 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Config loaded: model={}", config.model);
 
-    let generator = Generator::new(config)?;
-
     let file_path = Path::new("../examples/simple/simple.go");
     println!("Processing file: {}", file_path.display());
 
-    let result = generator.generate_file(file_path).await?;
+    let mut doc_manager = DocumentManager::new(config, file_path)?;
+    let result = doc_manager.generate_all().await?;
 
     println!("Generated output:");
     println!("{}", result);

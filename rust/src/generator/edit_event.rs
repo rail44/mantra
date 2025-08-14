@@ -122,27 +122,5 @@ fn byte_to_position_single(source: &str, byte_pos: usize) -> Position {
 
 /// Indent code with given prefix
 fn indent_code(code: &str, indent: &str) -> String {
-    let code = code.trim();
-    let code = if code.starts_with('{') && code.ends_with('}') {
-        &code[1..code.len() - 1]
-    } else {
-        code
-    };
-
-    let lines: Vec<String> = code
-        .lines()
-        .map(|line| {
-            if line.trim().is_empty() {
-                String::new()
-            } else {
-                format!("{}{}", indent, line.trim_start())
-            }
-        })
-        .collect();
-
-    if lines.is_empty() {
-        format!("{}{}", indent, "panic(\"not implemented\")")
-    } else {
-        lines.join("\n")
-    }
+    crate::incremental_editor::indent_code(code, indent)
 }

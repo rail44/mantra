@@ -49,7 +49,7 @@ fn main() -> Result<()> {
 }
 
 async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
-    use generator::Generator;
+    use generator::DocumentManager;
 
     // Load configuration
     info!("Loading configuration from: {}", config_dir.display());
@@ -57,11 +57,11 @@ async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
 
     info!("Generating code for: {}", file.display());
 
-    // Create generator
-    let generator = Generator::new(config)?;
+    // Create document manager
+    let mut doc_manager = DocumentManager::new(config, &file)?;
 
     // Generate code
-    let result = generator.generate_file(&file).await?;
+    let result = doc_manager.generate_all().await?;
 
     // Output to stdout
     print!("{}", result);
