@@ -1,6 +1,7 @@
 pub mod checksum;
 pub mod editor;
 pub mod target;
+pub mod target_map;
 
 use anyhow::{Context, Result};
 use std::path::Path;
