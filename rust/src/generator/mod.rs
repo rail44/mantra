@@ -350,19 +350,23 @@ impl Generator {
                 .await?
             {
                 Some(hover) => {
-                    let type_info =
-                        format!("Position {}:{} - {:?}", line, character, hover.contents);
-                    tracing::info!("Type info at {}:{} - {}", line, character, type_info);
-                    type_infos.push(type_info);
+                    // Extract the actual markdown content
+                    let markdown_content = match hover.contents {
+                        crate::lsp::MarkupContent::PlainText(text) => text,
+                        crate::lsp::MarkupContent::Markdown { value, .. } => value,
+                    };
+
+                    tracing::info!("Type info at {}:{} - {}", line, character, markdown_content);
+                    type_infos.push(markdown_content);
                 }
                 None => {
                     tracing::warn!("No hover information available at {}:{}", line, character);
-                    type_infos.push(format!("Position {}:{} - No information", line, character));
+                    // Don't include "No information" entries in the prompt
                 }
             }
         }
 
-        Ok(type_infos.join("; "))
+        Ok(type_infos.join("\n\n"))
     }
 
     /// Build a prompt for the LLM with type information
@@ -372,16 +376,23 @@ impl Generator {
         package_name: &str,
         type_info: &str,
     ) -> String {
-        format!(
+        let mut prompt = format!(
             "Generate the Go implementation for this function:\n\n\
              Package: {}\n\
              Function signature: {}\n\
-             Instruction: {}\n\
-             Type information: {}\n\n\
-             Return only the code that goes inside the function body (without the curly braces).\n\
-             For example, if the function should add two numbers, just return: return a + b",
-            package_name, target.signature, target.instruction, type_info
-        )
+             Instruction: {}",
+            package_name, target.signature, target.instruction
+        );
+
+        if !type_info.is_empty() {
+            prompt.push_str("\n\nType information:\n");
+            prompt.push_str(type_info);
+        }
+
+        prompt.push_str("\n\nReturn only the code that goes inside the function body (without the curly braces).\n\
+                        For example, if the function should add two numbers, just return: return a + b");
+
+        prompt
     }
 
     /// Clean up generated code (remove markdown blocks, etc.)
