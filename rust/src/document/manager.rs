@@ -125,8 +125,6 @@ impl DocumentManager {
 
     /// Prepare generation tasks by collecting target information
     fn prepare_generation_tasks(&self) -> Result<Vec<GenerationTask>> {
-        use crate::parser::target::get_function_type_positions;
-
         let target_map = TargetMap::build(&self.tree, self.editor.source())?;
 
         tracing::info!("Found {} targets in file", target_map.len());
@@ -134,19 +132,10 @@ impl DocumentManager {
             tracing::info!("  - {} ({})", target.name, target.instruction);
         }
 
-        // Collect all necessary information for generation
+        // Collect checksums for parallel generation
         let tasks = target_map
             .checksums()
-            .map(|checksum| {
-                let (target, node) = target_map.get(checksum).unwrap();
-                let type_positions = get_function_type_positions(node);
-                GenerationTask {
-                    checksum,
-                    target: target.clone(),
-                    package_name: target_map.package_name().to_string(),
-                    type_positions,
-                }
-            })
+            .map(|checksum| GenerationTask { checksum })
             .collect();
 
         Ok(tasks)
@@ -157,34 +146,46 @@ impl DocumentManager {
         &self,
         tasks: Vec<GenerationTask>,
     ) -> Result<Vec<GeneratedEvent>> {
+        // Build target map once for all tasks
+        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
+        let package_name = target_map.package_name().to_string();
+
+        // Extract all necessary data upfront
+        let generation_data: Vec<_> = tasks
+            .into_iter()
+            .filter_map(|task| {
+                target_map
+                    .get(task.checksum)
+                    .map(|(target, node)| (task.checksum, target.clone(), *node))
+            })
+            .collect();
+
         let file_path = self.file_path.clone();
         let source = self.editor.source().to_string();
         let target_generator = &self.target_generator;
 
-        let generation_futures = tasks.into_iter().map(move |task| {
-            let file_path = file_path.clone();
-            let source = source.clone();
+        let generation_futures =
+            generation_data
+                .into_iter()
+                .map(move |(checksum, target, node)| {
+                    let file_path = file_path.clone();
+                    let source = source.clone();
+                    let package_name = package_name.clone();
 
-            async move {
-                // Generate code for this target
-                let generated_code = target_generator
-                    .generate_with_positions(
-                        &task.target,
-                        &task.package_name,
-                        &file_path,
-                        &source,
-                        &task.type_positions,
-                    )
-                    .await?;
+                    async move {
+                        // Generate code for this target
+                        let generated_code = target_generator
+                            .generate(&target, &package_name, &file_path, &source, &node)
+                            .await?;
 
-                Ok::<_, anyhow::Error>(GeneratedEvent {
-                    checksum: task.checksum,
-                    target_name: task.target.name.clone(),
-                    signature: task.target.signature.clone(),
-                    generated_code,
-                })
-            }
-        });
+                        Ok::<_, anyhow::Error>(GeneratedEvent {
+                            checksum,
+                            target_name: target.name.clone(),
+                            signature: target.signature.clone(),
+                            generated_code,
+                        })
+                    }
+                });
 
         // Execute all generation tasks in parallel
         let results = join_all(generation_futures).await;
@@ -317,12 +318,9 @@ impl DocumentManager {
     }
 }
 
-/// Task for generating code for a single target
+/// Task for generating code for a single target  
 struct GenerationTask {
     checksum: u64,
-    target: crate::parser::target::Target,
-    package_name: String,
-    type_positions: Vec<(u32, u32)>,
 }
 
 /// Result of code generation for a single target

@@ -29,28 +29,15 @@ impl TargetGenerator {
         source: &str,
         node: &Node<'_>,
     ) -> Result<String> {
-        let type_positions = get_function_type_positions(node);
-        self.generate_with_positions(target, package_name, file_path, source, &type_positions)
-            .await
-    }
-
-    /// Generate code for a single target with pre-extracted type positions
-    pub async fn generate_with_positions(
-        &self,
-        target: &Target,
-        package_name: &str,
-        file_path: &Path,
-        source: &str,
-        type_positions: &[(u32, u32)],
-    ) -> Result<String> {
         // Check for test mode
         if std::env::var("MANTRA_TEST_MODE").is_ok() {
             return Ok(self.generate_test_response(target));
         }
 
         // Collect type information from LSP
+        let type_positions = get_function_type_positions(node);
         let type_info = self
-            .collect_type_info_at_positions(file_path, source, type_positions)
+            .collect_type_info_at_positions(file_path, source, &type_positions)
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!("Failed to get type info for {}: {}", target.name, e);
