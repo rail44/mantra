@@ -45,8 +45,14 @@ pub fn convert_to_lsp_edits(
             let body_node = node.child_by_field_name("body");
 
             let func_start_byte = node.start_byte();
-            let body_start = body_node.as_ref().map(|n| n.start_byte()).unwrap_or(node.end_byte());
-            let body_end = body_node.as_ref().map(|n| n.end_byte()).unwrap_or(node.end_byte());
+            let body_start = body_node
+                .as_ref()
+                .map(|n| n.start_byte())
+                .unwrap_or(node.end_byte());
+            let body_end = body_node
+                .as_ref()
+                .map(|n| n.end_byte())
+                .unwrap_or(node.end_byte());
 
             // Find the line before the function to add checksum comment
             let func_start_pos = byte_to_position_single(source, func_start_byte);
