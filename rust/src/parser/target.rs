@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tree_sitter::{Node, Tree, TreeCursor};
 
+use crate::language::{go::Go, LanguageSupport};
+
 /// Maximum allowed gap between a mantra comment and its target function
 const MAX_COMMENT_GAP: usize = 50;
 
@@ -156,15 +158,14 @@ fn extract_targets(root: &Node, source: &str, file_path: &Path) -> Result<Vec<Ta
 fn extract_mantra_comments(root: &Node, source: &str) -> Result<Vec<(usize, String)>> {
     let mut comments = Vec::new();
     let mut cursor = root.walk();
+    let language = Go::new();
 
     visit_nodes(&mut cursor, &mut |node| {
         if node.kind() == "comment" {
             if let Ok(text) = node.utf8_text(source.as_bytes()) {
-                let text = text.trim();
-                if text.starts_with("// mantra:") {
-                    let instruction = text.strip_prefix("// mantra:").unwrap().trim();
+                if let Some(instruction) = language.extract_instruction(text) {
                     let end_byte = node.end_byte();
-                    comments.push((end_byte, instruction.to_string()));
+                    comments.push((end_byte, instruction));
                 }
             }
         }
