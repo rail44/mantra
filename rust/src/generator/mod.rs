@@ -3,16 +3,10 @@ pub mod edit_event;
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use self::edit_event::EditEvent;
 use crate::config::Config;
-use crate::editor::TextEdit;
 use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
 use crate::lsp::{Client as LspClient, Position, TextDocumentIdentifier, TextDocumentItem};
-use crate::parser::{
-    target::{get_function_type_positions, Target},
-    target_map::TargetMap,
-    GoParser,
-};
+use crate::parser::target::{get_function_type_positions, Target};
 
 /// Code generator that handles the entire generation process
 pub struct Generator {
@@ -27,97 +21,121 @@ impl Generator {
         Ok(Self { config, client })
     }
 
-    /// Generate code for a single file
+    /// Generate code for a single file using incremental editing
     pub async fn generate_file(&self, file_path: &Path) -> Result<String> {
-        // Parse the file
-        let mut parser = GoParser::new()?;
-        let source = std::fs::read_to_string(file_path)?;
-        let tree = parser.parse(&source)?;
-        
-        // Build target map with single traversal
-        let target_map = TargetMap::build(&tree, &source)?;
+        use crate::generator::edit_event::EditEvent;
+        use crate::incremental_editor::IncrementalEditor;
 
-        tracing::info!("Found {} targets in file", target_map.len());
-        for target in target_map.targets() {
-            tracing::info!("  - {} ({})", target.name, target.instruction);
-        }
+        // Create incremental editor
+        let mut editor = IncrementalEditor::new(file_path)?;
 
-        // Collect edit events for all targets
-        let mut events = Vec::new();
+        // Collect targets and their information before processing
+        let targets_to_process: Vec<_> = {
+            let target_map = editor.build_target_map()?;
 
-        for checksum in target_map.checksums() {
-            let (target, node) = target_map.get(checksum).unwrap();
+            tracing::info!("Found {} targets in file", target_map.len());
+            for target in target_map.targets() {
+                tracing::info!("  - {} ({})", target.name, target.instruction);
+            }
 
-            // Generate code for this target with type information
-            let generated_code = self
-                .generate_target_with_node(target, target_map.package_name(), file_path, &source, node)
-                .await?;
+            // Collect all necessary information while target_map is valid
+            target_map
+                .checksums()
+                .map(|checksum| {
+                    let (target, node) = target_map.get(checksum).unwrap();
+                    (
+                        checksum,
+                        target.clone(),
+                        target_map.package_name().to_string(),
+                        node.start_byte(),
+                        node.end_byte(),
+                    )
+                })
+                .collect()
+        };
 
-            // Create edit event
-            events.push(EditEvent::new(
-                checksum,
-                target.signature.clone(),
-                generated_code,
-            ));
-        }
+        // Process each target incrementally
+        for (checksum, target, package_name, _start_byte, _end_byte) in targets_to_process {
+            // Generate code and create EditEvent with node info
+            let (event, node_start_byte) = {
+                // Re-build target map for current state to get updated node
+                let target_map = editor.build_target_map()?;
 
-        // Convert events to LSP-style edits
-        let edits = edit_event::convert_to_lsp_edits(&source, &tree, events)?;
+                // Find the node for this function by name
+                let node_opt = target_map
+                    .targets()
+                    .zip(target_map.nodes())
+                    .find(|(t, _)| t.name == target.name)
+                    .map(|(_, n)| (n.clone(), n.start_byte()));
 
-        // Apply edits to source (simple string replacement for now)
-        let mut result = source.clone();
+                if let Some((node, start_byte)) = node_opt {
+                    // Generate code for this target
+                    let generated_code = self
+                        .generate_target_with_node(
+                            &target,
+                            &package_name,
+                            file_path,
+                            editor.source(),
+                            &node,
+                        )
+                        .await?;
 
-        // Sort edits by position (reverse order to apply from end to start)
-        let mut sorted_edits = edits;
-        sorted_edits
-            .sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
-
-        for edit in sorted_edits {
-            // Simple string replacement based on line/character positions
-            result = self.apply_edit_to_string(&result, &edit);
-        }
-
-        Ok(result)
-    }
-
-    /// Apply a single edit to a string
-    fn apply_edit_to_string(&self, source: &str, edit: &TextEdit) -> String {
-        let lines: Vec<&str> = source.lines().collect();
-        let mut result = String::new();
-
-        for (line_num, line) in lines.iter().enumerate() {
-            if line_num as u32 == edit.range.start.line {
-                // This is the line where the edit starts
-                if line_num as u32 == edit.range.end.line {
-                    // Edit is within a single line
-                    result.push_str(&line[..edit.range.start.character as usize]);
-                    result.push_str(&edit.new_text);
-                    result.push_str(&line[edit.range.end.character as usize..]);
+                    // Create EditEvent with checksum, signature, and generated code
+                    (
+                        Some(EditEvent::new(
+                            checksum,
+                            target.signature.clone(),
+                            generated_code,
+                        )),
+                        start_byte,
+                    )
                 } else {
-                    // Edit starts on this line but ends on another
-                    result.push_str(&line[..edit.range.start.character as usize]);
-                    result.push_str(&edit.new_text);
-                    // Skip lines until end line
+                    (None, 0)
                 }
-            } else if line_num as u32 > edit.range.start.line
-                && (line_num as u32) < edit.range.end.line
-            {
-                // Skip lines in the middle of the edit range
-                continue;
-            } else if line_num as u32 == edit.range.end.line {
-                // This is the line where the edit ends
-                result.push_str(&line[edit.range.end.character as usize..]);
-            } else {
-                // Lines outside the edit range
-                result.push_str(line);
-            }
+            };
 
-            if line_num < lines.len() - 1 {
-                result.push('\n');
+            // Apply the EditEvent if we have one
+            if let Some(event) = event {
+                // Extract node info we need
+                let node_info = {
+                    let target_map = editor.build_target_map()?;
+                    let mut result = None;
+                    for node in target_map.nodes() {
+                        if node.start_byte() == node_start_byte {
+                            let func_start = node.start_byte();
+                            if let Some(body_node) = node.child_by_field_name("body") {
+                                result = Some((
+                                    func_start,
+                                    true,
+                                    body_node.start_byte(),
+                                    body_node.end_byte(),
+                                ));
+                            } else {
+                                result = Some((func_start, false, 0, 0));
+                            }
+                            break;
+                        }
+                    }
+                    result
+                };
+
+                let (func_start, has_body, body_start, body_end) = match node_info {
+                    Some(info) => info,
+                    None => continue,
+                };
+
+                editor.apply_edit_event(event, func_start, has_body, body_start, body_end)?;
+
+                tracing::debug!(
+                    "Applied edit for {} (checksum: {:x})",
+                    target.name,
+                    checksum
+                );
             }
         }
 
-        result
+        // Return the final edited source
+        Ok(editor.source().to_string())
     }
 
     /// Generate code for a single target function with its node
@@ -200,7 +218,6 @@ impl Generator {
 
         Ok(cleaned)
     }
-
 
     /// Collect type information at multiple positions using LSP
     async fn collect_type_info_at_positions(

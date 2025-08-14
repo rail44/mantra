@@ -29,6 +29,13 @@ impl GoParser {
             .context("Failed to parse Go source code")
     }
 
+    /// Parse Go source code with optional old tree for incremental parsing
+    pub fn parse_incremental(&mut self, source: &str, old_tree: Option<&Tree>) -> Result<Tree> {
+        self.parser
+            .parse(source, old_tree)
+            .context("Failed to parse Go source code")
+    }
+
     /// Parse a Go file and extract targets
     pub fn parse_file(&mut self, path: &Path) -> Result<target::FileInfo> {
         let source = std::fs::read_to_string(path)
