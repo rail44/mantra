@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let file_path = Path::new("../examples/simple/simple.go");
     println!("Processing file: {}", file_path.display());
 
-    let mut doc_manager = DocumentManager::new(config, file_path)?;
+    let mut doc_manager = DocumentManager::new(config, file_path).await?;
     let result = doc_manager.generate_all().await?;
 
     println!("Generated output:");

@@ -5,6 +5,7 @@ use jsonrpsee::core::traits::ToRpcParams;
 use serde::de::Error;
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::lsp::connection::LspConnection;
 use crate::lsp::PublishDiagnosticsParams;
@@ -76,15 +77,18 @@ impl ToRpcParams for DidOpenParams {
 }
 
 /// LSP client that constructs JSON-RPC requests with proper camelCase conversion
+#[derive(Clone)]
 pub struct Client {
-    connection: LspConnection,
+    connection: Arc<LspConnection>,
 }
 
 impl Client {
     /// Start a new LSP server and create a client
     pub async fn new(command: &str, args: &[&str]) -> Result<Self> {
         let connection = LspConnection::new(command, args).await?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection: Arc::new(connection),
+        })
     }
 
     /// Initialize the LSP connection
@@ -138,9 +142,17 @@ impl Client {
             .await
     }
 
-    /// Shutdown the LSP server
+    /// Shutdown the LSP server (consumes self)
+    /// Note: Because the client is Clone, ensure all clones are dropped before shutdown
     pub async fn shutdown(self) -> Result<()> {
-        self.connection.shutdown().await
+        // Try to get the inner connection if this is the last reference
+        match Arc::try_unwrap(self.connection) {
+            Ok(connection) => connection.shutdown().await,
+            Err(_) => {
+                tracing::warn!("Cannot shutdown LSP server: other references still exist");
+                Ok(())
+            }
+        }
     }
 
     /// Get hover information at a position
@@ -177,5 +189,56 @@ impl Client {
             .notification("textDocument/didOpen", params)
             .await?;
         Ok(())
+    }
+
+    pub async fn did_change(
+        &self,
+        text_document: VersionedTextDocumentIdentifier,
+        content_changes: Vec<TextDocumentContentChangeEvent>,
+    ) -> Result<()> {
+        let params = DidChangeParams {
+            text_document,
+            content_changes,
+        };
+
+        self.connection
+            .client
+            .notification("textDocument/didChange", params)
+            .await?;
+        Ok(())
+    }
+}
+
+// didChange関連の構造体
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionedTextDocumentIdentifier {
+    pub uri: String,
+    pub version: i32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextDocumentContentChangeEvent {
+    pub text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DidChangeParams {
+    text_document: VersionedTextDocumentIdentifier,
+    content_changes: Vec<TextDocumentContentChangeEvent>,
+}
+
+impl ToRpcParams for DidChangeParams {
+    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
+        let mut params = ObjectParams::new();
+        params
+            .insert("textDocument", self.text_document)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert("contentChanges", self.content_changes)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params.to_rpc_params()
     }
 }

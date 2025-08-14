@@ -57,8 +57,8 @@ async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
 
     info!("Generating code for: {}", file.display());
 
-    // Create document manager
-    let mut doc_manager = DocumentManager::new(config, &file)?;
+    // Create document manager with LSP support
+    let mut doc_manager = DocumentManager::new(config, &file).await?;
 
     // Generate code
     let result = doc_manager.generate_all().await?;

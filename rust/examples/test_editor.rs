@@ -26,8 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Mock LLM response for testing
     std::env::set_var("MOCK_LLM_RESPONSE", "return a + b");
 
-    // Create document manager
-    let mut doc_manager = DocumentManager::new(config, file_path)?;
+    // Create document manager without LSP for testing
+    let mut doc_manager = DocumentManager::new_without_lsp(config, file_path)?;
     let result = doc_manager.generate_all().await?;
 
     println!("Generated output:\n{}", result);

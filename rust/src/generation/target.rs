@@ -11,13 +11,28 @@ use crate::parser::target::{get_function_type_positions, Target};
 pub struct TargetGenerator {
     config: Config,
     client: LLMClient,
+    lsp_client: Option<LspClient>,
 }
 
 impl TargetGenerator {
     /// Create a new target generator
     pub fn new(config: Config) -> Result<Self> {
         let client = LLMClient::new(config.clone())?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            lsp_client: None,
+        })
+    }
+
+    /// Create a new target generator with LSP client
+    pub fn new_with_lsp(config: Config, lsp_client: LspClient) -> Result<Self> {
+        let client = LLMClient::new(config.clone())?;
+        Ok(Self {
+            config,
+            client,
+            lsp_client: Some(lsp_client),
+        })
     }
 
     /// Generate code for a single target with its AST node
@@ -80,6 +95,65 @@ impl TargetGenerator {
             return Ok("No type positions found".to_string());
         }
 
+        // Use existing LSP client if available, otherwise create a new one
+        let lsp_client = match &self.lsp_client {
+            Some(client) => client,
+            None => {
+                // Fallback: create temporary LSP client for backward compatibility
+                return self
+                    .collect_type_info_with_new_lsp(file_path, source, type_positions)
+                    .await;
+            }
+        };
+
+        // LSP client is already initialized, just use it directly
+        let absolute_path = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(file_path)
+        };
+
+        let file_uri = format!("file://{}", absolute_path.to_string_lossy());
+
+        // Collect hover information
+        let mut type_infos = Vec::new();
+        for (line, character) in type_positions.iter() {
+            match lsp_client
+                .hover(
+                    TextDocumentIdentifier {
+                        uri: file_uri.clone(),
+                    },
+                    Position {
+                        line: *line,
+                        character: *character,
+                    },
+                )
+                .await?
+            {
+                Some(hover) => {
+                    let markdown_content = match hover.contents {
+                        crate::lsp::MarkupContent::PlainText(text) => text,
+                        crate::lsp::MarkupContent::Markdown { value, .. } => value,
+                    };
+                    tracing::info!("Type info at {}:{} - {}", line, character, markdown_content);
+                    type_infos.push(markdown_content);
+                }
+                None => {
+                    tracing::warn!("No hover information available at {}:{}", line, character);
+                }
+            }
+        }
+
+        Ok(type_infos.join("\n\n"))
+    }
+
+    /// Collect type information with a new temporary LSP client (backward compatibility)
+    async fn collect_type_info_with_new_lsp(
+        &self,
+        file_path: &Path,
+        source: &str,
+        type_positions: &[(u32, u32)],
+    ) -> Result<String> {
         // Start LSP client
         let lsp_client = LspClient::new("gopls", &[]).await?;
 

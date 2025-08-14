@@ -6,6 +6,10 @@ use tree_sitter::{InputEdit, Point, Tree};
 use crate::config::Config;
 use crate::editor::{indent_code, IncrementalEditor};
 use crate::generation::{EditEvent, TargetGenerator};
+use crate::lsp::{
+    client::{TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier},
+    Client as LspClient, TextDocumentItem,
+};
 use crate::parser::{target_map::TargetMap, GoParser};
 
 /// Manages document state including Tree-sitter tree and coordinates generation
@@ -22,6 +26,10 @@ pub struct DocumentManager {
     editor: IncrementalEditor,
     /// File path
     file_path: std::path::PathBuf,
+    /// LSP client (optional, for LSP mode)
+    lsp_client: Option<LspClient>,
+    /// Document version for LSP
+    document_version: i32,
 }
 
 impl DocumentManager {
@@ -84,8 +92,80 @@ impl DocumentManager {
             new_end_position: new_end_point,
         }
     }
-    /// Create a new document manager for a file
-    pub fn new(config: Config, file_path: &Path) -> Result<Self> {
+    /// Create a new document manager with LSP support (default)
+    pub async fn new(config: Config, file_path: &Path) -> Result<Self> {
+        let source = std::fs::read_to_string(file_path)?;
+        let mut parser = GoParser::new()?;
+        let tree = parser.parse(&source)?;
+        let editor = IncrementalEditor::new(source.clone());
+
+        // Initialize LSP client
+        let lsp_client = LspClient::new("gopls", &[]).await?;
+
+        // Get absolute path for LSP
+        let absolute_path = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(file_path)
+        };
+
+        let workspace_root = absolute_path
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(".");
+
+        // Initialize LSP
+        let _init_result = lsp_client
+            .initialize(
+                Some(std::process::id()),
+                Some(format!("file://{}", workspace_root)),
+                serde_json::json!({
+                    "textDocument": {
+                        "hover": {
+                            "contentFormat": ["markdown", "plaintext"]
+                        },
+                        "synchronization": {
+                            "didOpen": true,
+                            "didChange": true
+                        }
+                    }
+                }),
+                Some(vec![serde_json::json!({
+                    "uri": format!("file://{}", workspace_root),
+                    "name": "workspace"
+                })]),
+            )
+            .await?;
+        lsp_client.initialized().await?;
+
+        // Open the document
+        let file_uri = format!("file://{}", absolute_path.to_string_lossy());
+        lsp_client
+            .did_open(TextDocumentItem {
+                uri: file_uri,
+                language_id: "go".to_string(),
+                version: 1,
+                text: source.clone(),
+            })
+            .await?;
+
+        // Create target generator with shared LSP client
+        let target_generator = TargetGenerator::new_with_lsp(config.clone(), lsp_client.clone())?;
+
+        Ok(Self {
+            _config: config,
+            target_generator,
+            parser,
+            tree,
+            editor,
+            file_path: file_path.to_path_buf(),
+            lsp_client: Some(lsp_client),
+            document_version: 1,
+        })
+    }
+
+    /// Create a new document manager without LSP support (for testing)
+    pub fn new_without_lsp(config: Config, file_path: &Path) -> Result<Self> {
         let target_generator = TargetGenerator::new(config.clone())?;
         let source = std::fs::read_to_string(file_path)?;
         let mut parser = GoParser::new()?;
@@ -99,6 +179,8 @@ impl DocumentManager {
             tree,
             editor,
             file_path: file_path.to_path_buf(),
+            lsp_client: None,
+            document_version: 0,
         })
     }
 
@@ -116,7 +198,7 @@ impl DocumentManager {
 
         // Phase 3: Apply all edits sequentially
         for event in generated_events {
-            self.apply_generated_event(event)?;
+            self.apply_generated_event(event).await?;
         }
 
         // Return the final edited source
@@ -195,7 +277,7 @@ impl DocumentManager {
     }
 
     /// Apply a generated event to the document
-    fn apply_generated_event(&mut self, event: GeneratedEvent) -> Result<()> {
+    async fn apply_generated_event(&mut self, event: GeneratedEvent) -> Result<()> {
         // Re-build target map for current state
         let target_map = TargetMap::build(&self.tree, self.editor.source())?;
 
@@ -220,7 +302,8 @@ impl DocumentManager {
             let edit_event = EditEvent::new(event.checksum, event.signature, event.generated_code);
 
             // Apply the edit event
-            self.apply_edit_event(edit_event, func_start, body_info)?;
+            self.apply_edit_event(edit_event, func_start, body_info)
+                .await?;
 
             tracing::debug!(
                 "Applied edit for {} (checksum: {:x})",
@@ -232,8 +315,45 @@ impl DocumentManager {
         Ok(())
     }
 
+    /// Send LSP didChange notification
+    async fn send_did_change(&mut self) -> Result<()> {
+        if let Some(lsp_client) = &self.lsp_client {
+            // Increment version
+            self.document_version += 1;
+
+            // Get file URI
+            let absolute_path = if self.file_path.is_absolute() {
+                self.file_path.clone()
+            } else {
+                std::env::current_dir()?.join(&self.file_path)
+            };
+            let file_uri = format!("file://{}", absolute_path.to_string_lossy());
+
+            // Send full document content as change
+            let content_change = TextDocumentContentChangeEvent {
+                text: self.editor.source().to_string(),
+            };
+
+            lsp_client
+                .did_change(
+                    VersionedTextDocumentIdentifier {
+                        uri: file_uri,
+                        version: self.document_version,
+                    },
+                    vec![content_change],
+                )
+                .await?;
+
+            tracing::debug!(
+                "Sent didChange notification (version: {})",
+                self.document_version
+            );
+        }
+        Ok(())
+    }
+
     /// Apply an EditEvent to the document
-    fn apply_edit_event(
+    async fn apply_edit_event(
         &mut self,
         event: EditEvent,
         func_start_byte: usize,
@@ -247,6 +367,9 @@ impl DocumentManager {
                 .get(func_line - 1)
                 .map(|line| line.contains("// mantra:checksum:"))
                 .unwrap_or(false);
+
+        // Track if any changes were made
+        let mut changes_made = false;
 
         // Add checksum comment if not present
         if !has_checksum && func_line > 0 {
@@ -264,6 +387,8 @@ impl DocumentManager {
             self.tree = self
                 .parser
                 .parse_incremental(self.editor.source(), Some(&self.tree))?;
+
+            changes_made = true;
         }
 
         // Replace the function body if it exists
@@ -311,7 +436,14 @@ impl DocumentManager {
                 self.tree = self
                     .parser
                     .parse_incremental(self.editor.source(), Some(&self.tree))?;
+
+                changes_made = true;
             }
+        }
+
+        // Send didChange notification if LSP is active and changes were made
+        if changes_made {
+            self.send_did_change().await?;
         }
 
         Ok(())

@@ -19,8 +19,8 @@ async fn test_generate_output() {
     // Test with simple file
     let file_path = Path::new("examples/simple_test.go");
 
-    // Create document manager
-    let mut doc_manager = DocumentManager::new(config, file_path).unwrap();
+    // Create document manager without LSP for testing
+    let mut doc_manager = DocumentManager::new_without_lsp(config, file_path).unwrap();
     let result = doc_manager.generate_all().await.unwrap();
 
     // Check that line count is reasonable (not too many extra lines)
