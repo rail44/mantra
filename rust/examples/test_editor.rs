@@ -1,5 +1,5 @@
 use mantra::config::Config;
-use mantra::generator::DocumentManager;
+use mantra::document::DocumentManager;
 use std::path::Path;
 
 #[tokio::main]

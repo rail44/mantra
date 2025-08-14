@@ -1,4 +1,4 @@
-use mantra::generator::edit_event::{convert_to_lsp_edits, EditEvent};
+use mantra::generation::{convert_to_lsp_edits, EditEvent};
 use mantra::parser::GoParser;
 
 #[test]
@@ -18,15 +18,15 @@ func Multiply(x, y int) int {
     let mut parser = GoParser::new().unwrap();
     let tree = parser.parse(source).unwrap();
 
-    // Create edit events
+    // Create edit events with correct checksums
     let events = vec![
         EditEvent::new(
-            0x12345678,
+            0x69a25a3ff4512c52,
             "func Add(a, b int) int".to_string(),
             "return a + b".to_string(),
         ),
         EditEvent::new(
-            0x87654321,
+            0x982fdc146e597129,
             "func Multiply(x, y int) int".to_string(),
             "return x * y".to_string(),
         ),
@@ -41,11 +41,11 @@ func Multiply(x, y int) int {
     // Find edits containing our expected content
     let has_add_checksum = edits
         .iter()
-        .any(|e| e.new_text.contains("mantra:checksum:12345678"));
+        .any(|e| e.new_text.contains("mantra:checksum:69a25a3ff4512c52"));
     let has_add_body = edits.iter().any(|e| e.new_text.contains("return a + b"));
     let has_multiply_checksum = edits
         .iter()
-        .any(|e| e.new_text.contains("mantra:checksum:87654321"));
+        .any(|e| e.new_text.contains("mantra:checksum:982fdc146e597129"));
     let has_multiply_body = edits.iter().any(|e| e.new_text.contains("return x * y"));
 
     assert!(has_add_checksum, "Should have Add checksum edit");

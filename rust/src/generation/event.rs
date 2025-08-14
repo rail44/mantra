@@ -33,21 +33,25 @@ pub fn convert_to_lsp_edits(
     tree: &tree_sitter::Tree,
     events: Vec<EditEvent>,
 ) -> Result<Vec<TextEdit>> {
-    use crate::parser::editor::find_function_info;
+    use crate::parser::target_map::TargetMap;
 
     let mut edits = Vec::new();
+    let target_map = TargetMap::build(tree, source)?;
 
     for event in events {
-        // Find function in tree by signature
-        if let Some(func_info) = find_function_info(source, tree, &event.signature) {
-            // We need to replace two parts:
-            // 1. Add/update checksum comment before function
-            // 2. Replace function body
+        // Find function in tree by checksum
+        if let Some((_target, node)) = target_map.get(event.checksum) {
+            // Get function body node
+            let body_node = node.child_by_field_name("body");
+
+            let func_start_byte = node.start_byte();
+            let body_start = body_node.as_ref().map(|n| n.start_byte()).unwrap_or(node.end_byte());
+            let body_end = body_node.as_ref().map(|n| n.end_byte()).unwrap_or(node.end_byte());
 
             // Find the line before the function to add checksum comment
-            let func_start_pos = byte_to_position_single(source, func_info.start_byte);
-            let body_start_pos = byte_to_position_single(source, func_info.body_start);
-            let body_end_pos = byte_to_position_single(source, func_info.body_end);
+            let func_start_pos = byte_to_position_single(source, func_start_byte);
+            let body_start_pos = byte_to_position_single(source, body_start);
+            let body_end_pos = byte_to_position_single(source, body_end);
 
             // Check if there's already a checksum comment
             let lines: Vec<&str> = source.lines().collect();
@@ -122,5 +126,5 @@ fn byte_to_position_single(source: &str, byte_pos: usize) -> Position {
 
 /// Indent code with given prefix
 fn indent_code(code: &str, indent: &str) -> String {
-    crate::incremental_editor::indent_code(code, indent)
+    crate::editor::indent_code(code, indent)
 }

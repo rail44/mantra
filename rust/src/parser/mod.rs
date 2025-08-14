@@ -1,5 +1,4 @@
 pub mod checksum;
-pub mod editor;
 pub mod target;
 pub mod target_map;
 

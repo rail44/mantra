@@ -1,4 +1,4 @@
-use mantra::{config, generator};
+use mantra::{config, document};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -49,7 +49,7 @@ fn main() -> Result<()> {
 }
 
 async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
-    use generator::DocumentManager;
+    use document::DocumentManager;
 
     // Load configuration
     info!("Loading configuration from: {}", config_dir.display());

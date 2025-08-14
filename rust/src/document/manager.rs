@@ -3,9 +3,8 @@ use std::path::Path;
 use tree_sitter::{InputEdit, Point, Tree};
 
 use crate::config::Config;
-use crate::generator::edit_event::EditEvent;
-use crate::generator::target_generator::TargetGenerator;
-use crate::incremental_editor::{indent_code, IncrementalEditor};
+use crate::editor::{indent_code, IncrementalEditor};
+use crate::generation::{EditEvent, TargetGenerator};
 use crate::parser::{target_map::TargetMap, GoParser};
 
 /// Manages document state including Tree-sitter tree and coordinates generation
