@@ -2,7 +2,6 @@ pub mod edit_event;
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tree_sitter::TreeCursor;
 
 use self::edit_event::EditEvent;
 use crate::config::Config;
@@ -10,8 +9,8 @@ use crate::editor::TextEdit;
 use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
 use crate::lsp::{Client as LspClient, Position, TextDocumentIdentifier, TextDocumentItem};
 use crate::parser::{
-    checksum::calculate_checksum,
     target::{get_function_type_positions, Target},
+    target_map::TargetMap,
     GoParser,
 };
 
@@ -34,23 +33,24 @@ impl Generator {
         let mut parser = GoParser::new()?;
         let source = std::fs::read_to_string(file_path)?;
         let tree = parser.parse(&source)?;
-        let file_info = parser.parse_file(file_path)?;
+        
+        // Build target map with single traversal
+        let target_map = TargetMap::build(&tree, &source)?;
 
-        tracing::info!("Found {} targets in file", file_info.targets.len());
-        for target in &file_info.targets {
+        tracing::info!("Found {} targets in file", target_map.len());
+        for target in target_map.targets() {
             tracing::info!("  - {} ({})", target.name, target.instruction);
         }
 
         // Collect edit events for all targets
         let mut events = Vec::new();
 
-        for target in &file_info.targets {
-            // Calculate checksum
-            let checksum = calculate_checksum(target);
+        for checksum in target_map.checksums() {
+            let (target, node) = target_map.get(checksum).unwrap();
 
             // Generate code for this target with type information
             let generated_code = self
-                .generate_target(target, &file_info.package_name, file_path, &source, &tree)
+                .generate_target_with_node(target, target_map.package_name(), file_path, &source, node)
                 .await?;
 
             // Create edit event
@@ -120,14 +120,14 @@ impl Generator {
         result
     }
 
-    /// Generate code for a single target function
-    async fn generate_target(
+    /// Generate code for a single target function with its node
+    async fn generate_target_with_node(
         &self,
         target: &Target,
         package_name: &str,
         file_path: &Path,
         source: &str,
-        tree: &tree_sitter::Tree,
+        node: &tree_sitter::Node<'_>,
     ) -> Result<String> {
         // Check for test mode
         if std::env::var("MANTRA_TEST_MODE").is_ok() {
@@ -143,8 +143,9 @@ impl Generator {
         }
 
         // Collect type information from LSP
+        let type_positions = get_function_type_positions(node);
         let type_info = match self
-            .find_function_node_and_get_type_info(tree, source, target, file_path)
+            .collect_type_info_at_positions(file_path, source, &type_positions)
             .await
         {
             Ok(info) => info,
@@ -200,59 +201,6 @@ impl Generator {
         Ok(cleaned)
     }
 
-    /// Find function node in tree and get type information from LSP
-    async fn find_function_node_and_get_type_info(
-        &self,
-        tree: &tree_sitter::Tree,
-        source: &str,
-        target: &Target,
-        file_path: &Path,
-    ) -> Result<String> {
-        let root_node = tree.root_node();
-        let mut cursor = root_node.walk();
-
-        // Find the matching function node
-        let function_node = Self::find_function_by_name(&mut cursor, source, &target.name)?;
-
-        // Get LSP positions for parameter and return types
-        let type_positions = get_function_type_positions(&function_node);
-
-        // Get type information for all positions
-        self.collect_type_info_at_positions(file_path, source, &type_positions)
-            .await
-    }
-
-    /// Find function node by name in the tree
-    fn find_function_by_name<'a>(
-        cursor: &mut TreeCursor<'a>,
-        source: &str,
-        function_name: &str,
-    ) -> Result<tree_sitter::Node<'a>> {
-        loop {
-            let node = cursor.node();
-            if node.kind() == "function_declaration" || node.kind() == "method_declaration" {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
-                        if name == function_name {
-                            return Ok(node);
-                        }
-                    }
-                }
-            }
-
-            if cursor.goto_first_child() {
-                if let Ok(found) = Self::find_function_by_name(cursor, source, function_name) {
-                    return Ok(found);
-                }
-                cursor.goto_parent();
-            }
-
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-        anyhow::bail!("Function '{}' not found in tree", function_name)
-    }
 
     /// Collect type information at multiple positions using LSP
     async fn collect_type_info_at_positions(
