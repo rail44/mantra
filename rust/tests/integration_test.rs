@@ -3,10 +3,8 @@ use mantra::document::DocumentManager;
 use std::path::Path;
 
 #[tokio::test]
+#[ignore] // Skip in CI since it requires gopls and actual LLM
 async fn test_generate_output() {
-    // Enable test mode
-    std::env::set_var("MANTRA_TEST_MODE", "1");
-
     // Create config
     let config = Config {
         url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
@@ -19,8 +17,8 @@ async fn test_generate_output() {
     // Test with simple file
     let file_path = Path::new("examples/simple_test.go");
 
-    // Create document manager without LSP for testing
-    let mut doc_manager = DocumentManager::new_without_lsp(config, file_path).unwrap();
+    // Create document manager (LSP will be skipped if gopls is not available)
+    let mut doc_manager = DocumentManager::new(config, file_path).await.unwrap();
     let result = doc_manager.generate_all().await.unwrap();
 
     // Check that line count is reasonable (not too many extra lines)

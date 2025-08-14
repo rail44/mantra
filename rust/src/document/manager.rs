@@ -6,6 +6,7 @@ use tree_sitter::{InputEdit, Point, Tree};
 use crate::config::Config;
 use crate::editor::{indent_code, IncrementalEditor};
 use crate::generation::{EditEvent, TargetGenerator};
+use crate::llm::LLMClient;
 use crate::lsp::{
     client::{TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier},
     Client as LspClient, TextDocumentItem,
@@ -14,10 +15,6 @@ use crate::parser::{target_map::TargetMap, GoParser};
 
 /// Manages document state including Tree-sitter tree and coordinates generation
 pub struct DocumentManager {
-    /// Configuration
-    _config: Config,
-    /// Target generator for LLM operations
-    target_generator: TargetGenerator,
     /// Parser instance
     parser: GoParser,
     /// Current parse tree
@@ -28,6 +25,8 @@ pub struct DocumentManager {
     file_path: std::path::PathBuf,
     /// LSP client (optional, for LSP mode)
     lsp_client: Option<LspClient>,
+    /// LLM client (shared across all target generators)
+    llm_client: LLMClient,
     /// Document version for LSP
     document_version: i32,
 }
@@ -92,7 +91,7 @@ impl DocumentManager {
             new_end_position: new_end_point,
         }
     }
-    /// Create a new document manager with LSP support (default)
+    /// Create a new document manager with LSP support
     pub async fn new(config: Config, file_path: &Path) -> Result<Self> {
         let source = std::fs::read_to_string(file_path)?;
         let mut parser = GoParser::new()?;
@@ -149,38 +148,17 @@ impl DocumentManager {
             })
             .await?;
 
-        // Create target generator with shared LSP client
-        let target_generator = TargetGenerator::new_with_lsp(config.clone(), lsp_client.clone())?;
+        // Create LLM client (shared across all target generators)
+        let llm_client = LLMClient::new(config.clone())?;
 
         Ok(Self {
-            _config: config,
-            target_generator,
             parser,
             tree,
             editor,
             file_path: file_path.to_path_buf(),
             lsp_client: Some(lsp_client),
+            llm_client,
             document_version: 1,
-        })
-    }
-
-    /// Create a new document manager without LSP support (for testing)
-    pub fn new_without_lsp(config: Config, file_path: &Path) -> Result<Self> {
-        let target_generator = TargetGenerator::new(config.clone())?;
-        let source = std::fs::read_to_string(file_path)?;
-        let mut parser = GoParser::new()?;
-        let tree = parser.parse(&source)?;
-        let editor = IncrementalEditor::new(source);
-
-        Ok(Self {
-            _config: config,
-            target_generator,
-            parser,
-            tree,
-            editor,
-            file_path: file_path.to_path_buf(),
-            lsp_client: None,
-            document_version: 0,
         })
     }
 
@@ -244,7 +222,8 @@ impl DocumentManager {
 
         let file_path = self.file_path.clone();
         let source = self.editor.source().to_string();
-        let target_generator = &self.target_generator;
+        let llm_client = self.llm_client.clone();
+        let lsp_client = self.lsp_client.clone();
 
         let generation_futures =
             generation_data
@@ -253,12 +232,21 @@ impl DocumentManager {
                     let file_path = file_path.clone();
                     let source = source.clone();
                     let package_name = package_name.clone();
+                    let llm_client = llm_client.clone();
+                    let lsp_client = lsp_client.clone();
 
                     async move {
+                        // Create a new TargetGenerator for this target
+                        let target_generator = TargetGenerator::new(
+                            &target,
+                            &package_name,
+                            &node,
+                            llm_client,
+                            lsp_client,
+                        );
+
                         // Generate code for this target
-                        let generated_code = target_generator
-                            .generate(&target, &package_name, &file_path, &source, &node)
-                            .await?;
+                        let generated_code = target_generator.generate(&file_path, &source).await?;
 
                         Ok::<_, anyhow::Error>(GeneratedEvent {
                             checksum,

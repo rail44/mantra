@@ -5,6 +5,7 @@ use super::types::{CompletionRequest, CompletionResponse};
 use crate::config::Config;
 
 /// LLM API client
+#[derive(Clone)]
 pub struct LLMClient {
     client: Client,
     config: Config,
@@ -43,6 +44,16 @@ impl LLMClient {
             .context("Failed to build HTTP client")?;
 
         Ok(Self { client, config })
+    }
+
+    /// Get the model name
+    pub fn model(&self) -> &str {
+        &self.config.model
+    }
+
+    /// Get OpenRouter configuration if available
+    pub fn openrouter_config(&self) -> Option<&crate::config::OpenRouterConfig> {
+        self.config.openrouter.as_ref()
     }
 
     /// Send a completion request

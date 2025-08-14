@@ -2,67 +2,59 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tree_sitter::Node;
 
-use crate::config::Config;
 use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
 use crate::lsp::{Client as LspClient, Position, TextDocumentIdentifier, TextDocumentItem};
 use crate::parser::target::{get_function_type_positions, Target};
 
 /// Generates code for a single target function
-pub struct TargetGenerator {
-    config: Config,
+pub struct TargetGenerator<'a> {
+    target: &'a Target,
+    package_name: &'a str,
+    // TODO: 本来はLSPクライアントを直接使うのではなく、
+    // ターゲットのシグネチャから型情報を取得する抽象化レイヤーを通すべき。
+    // 現在は一時的にtype_positionsを保持しているが、
+    // 将来的には型情報取得のためのTypeResolverのような仕組みを導入すべき。
+    type_positions: Vec<(u32, u32)>,
     client: LLMClient,
     lsp_client: Option<LspClient>,
 }
 
-impl TargetGenerator {
-    /// Create a new target generator
-    pub fn new(config: Config) -> Result<Self> {
-        let client = LLMClient::new(config.clone())?;
-        Ok(Self {
-            config,
-            client,
-            lsp_client: None,
-        })
-    }
-
-    /// Create a new target generator with LSP client
-    pub fn new_with_lsp(config: Config, lsp_client: LspClient) -> Result<Self> {
-        let client = LLMClient::new(config.clone())?;
-        Ok(Self {
-            config,
-            client,
-            lsp_client: Some(lsp_client),
-        })
-    }
-
-    /// Generate code for a single target with its AST node
-    pub async fn generate(
-        &self,
-        target: &Target,
-        package_name: &str,
-        file_path: &Path,
-        source: &str,
-        node: &Node<'_>,
-    ) -> Result<String> {
-        // Check for test mode
-        if std::env::var("MANTRA_TEST_MODE").is_ok() {
-            return Ok(self.generate_test_response(target));
-        }
-
-        // Collect type information from LSP
+impl<'a> TargetGenerator<'a> {
+    /// Create a new target generator for a specific target
+    pub fn new(
+        target: &'a Target,
+        package_name: &'a str,
+        node: &'a Node<'a>,
+        client: LLMClient,
+        lsp_client: Option<LspClient>,
+    ) -> Self {
+        // Extract type positions from the node
         let type_positions = get_function_type_positions(node);
+
+        Self {
+            target,
+            package_name,
+            type_positions,
+            client,
+            lsp_client,
+        }
+    }
+
+    /// Generate code for this target
+    pub async fn generate(&self, file_path: &Path, source: &str) -> Result<String> {
+        // Collect type information from LSP
         let type_info = self
-            .collect_type_info_at_positions(file_path, source, &type_positions)
+            .collect_type_info_at_positions(file_path, source, &self.type_positions)
             .await
             .unwrap_or_else(|e| {
-                tracing::warn!("Failed to get type info for {}: {}", target.name, e);
+                tracing::warn!("Failed to get type info for {}: {}", self.target.name, e);
                 "No type information available".to_string()
             });
 
         // Build the prompt
-        let prompt = self.build_prompt(target, package_name, &type_info);
+        let prompt = self.build_prompt(&type_info);
 
-        tracing::debug!("Generating for target: {}", target.name);
+        tracing::debug!("Generating for target: {}", self.target.name);
         tracing::debug!("Prompt: {}", prompt);
 
         // Send to LLM
@@ -70,18 +62,6 @@ impl TargetGenerator {
 
         // Clean and return the response
         Ok(self.clean_generated_code(response))
-    }
-
-    /// Generate test mode response
-    fn generate_test_response(&self, target: &Target) -> String {
-        match target.name.as_str() {
-            "Add" => "return a + b",
-            "IsEven" => "return n%2 == 0",
-            "ToUpper" => "return strings.ToUpper(s)",
-            "Multiply" => "return x * y",
-            _ => "panic(\"not implemented\")",
-        }
-        .to_string()
     }
 
     /// Collect type information at specific positions using LSP
@@ -253,13 +233,13 @@ impl TargetGenerator {
     }
 
     /// Build prompt for LLM
-    fn build_prompt(&self, target: &Target, package_name: &str, type_info: &str) -> String {
+    fn build_prompt(&self, type_info: &str) -> String {
         let mut prompt = format!(
             "Generate the Go implementation for this function:\n\n\
              Package: {}\n\
              Function signature: {}\n\
              Instruction: {}",
-            package_name, target.signature, target.instruction
+            self.package_name, self.target.signature, self.target.instruction
         );
 
         if !type_info.is_empty() {
@@ -276,7 +256,7 @@ impl TargetGenerator {
     /// Send request to LLM
     async fn send_to_llm(&self, prompt: String) -> Result<String> {
         let mut request = CompletionRequest {
-            model: self.config.model.clone(),
+            model: self.client.model().to_string(),
             messages: vec![
                 Message::system("You are a Go code generator. Generate only the function body implementation without the curly braces. Do not include the function signature. Do not include any comments or explanations. Do not use markdown code blocks. Return only the Go code that goes inside the function body."),
                 Message::user(prompt),
@@ -287,7 +267,7 @@ impl TargetGenerator {
         };
 
         // Add OpenRouter provider specification if configured
-        if let Some(openrouter_config) = &self.config.openrouter {
+        if let Some(openrouter_config) = self.client.openrouter_config() {
             if !openrouter_config.providers.is_empty() {
                 request.provider = Some(ProviderSpec {
                     only: Some(openrouter_config.providers.clone()),
