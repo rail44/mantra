@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::future::join_all;
 use std::path::Path;
 use tree_sitter::{InputEdit, Point, Tree};
 
@@ -103,81 +104,131 @@ impl DocumentManager {
 
     /// Generate code for all targets in the document
     pub async fn generate_all(&mut self) -> Result<String> {
-        // Collect targets and their information before processing
-        let targets_to_process: Vec<_> = {
-            let target_map = TargetMap::build(&self.tree, self.editor.source())?;
+        // Phase 1: Collect all targets and their information
+        let generation_tasks = self.prepare_generation_tasks()?;
 
-            tracing::info!("Found {} targets in file", target_map.len());
-            for target in target_map.targets() {
-                tracing::info!("  - {} ({})", target.name, target.instruction);
-            }
+        if generation_tasks.is_empty() {
+            return Ok(self.editor.source().to_string());
+        }
 
-            // Collect all necessary information while target_map is valid
-            target_map
-                .checksums()
-                .map(|checksum| {
-                    let (target, node) = target_map.get(checksum).unwrap();
-                    (
-                        checksum,
-                        target.clone(),
-                        target_map.package_name().to_string(),
-                        node.start_byte(),
-                        node.end_byte(),
-                    )
-                })
-                .collect()
-        };
+        // Phase 2: Generate code for all targets in parallel
+        let generated_events = self.generate_all_targets(generation_tasks).await?;
 
-        // Process each target incrementally
-        for (checksum, target, package_name, _start_byte, _end_byte) in targets_to_process {
-            // Re-build target map for current state to get updated node
-            let target_map = TargetMap::build(&self.tree, self.editor.source())?;
-
-            // Find the node for this function by name and extract all needed info
-            let node_data = target_map
-                .targets()
-                .zip(target_map.nodes())
-                .find(|(t, _)| t.name == target.name)
-                .map(|(_, node)| {
-                    let func_start = node.start_byte();
-                    let body_info = node
-                        .child_by_field_name("body")
-                        .map(|b| (b.start_byte(), b.end_byte()));
-                    (node.clone(), func_start, body_info)
-                });
-
-            // Drop target_map before processing
-            drop(target_map);
-
-            if let Some((node, func_start, body_info)) = node_data {
-                // Generate code for this target
-                let generated_code = self
-                    .target_generator
-                    .generate(
-                        &target,
-                        &package_name,
-                        &self.file_path,
-                        self.editor.source(),
-                        &node,
-                    )
-                    .await?;
-
-                // Create EditEvent
-                let event = EditEvent::new(checksum, target.signature.clone(), generated_code);
-
-                // Apply the edit event
-                self.apply_edit_event(event, func_start, body_info)?;
-
-                tracing::debug!(
-                    "Applied edit for {} (checksum: {:x})",
-                    target.name,
-                    checksum
-                );
-            }
+        // Phase 3: Apply all edits sequentially
+        for event in generated_events {
+            self.apply_generated_event(event)?;
         }
 
         // Return the final edited source
         Ok(self.editor.source().to_string())
+    }
+
+    /// Prepare generation tasks by collecting target information
+    fn prepare_generation_tasks(&self) -> Result<Vec<GenerationTask>> {
+        use crate::parser::target::get_function_type_positions;
+
+        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
+
+        tracing::info!("Found {} targets in file", target_map.len());
+        for target in target_map.targets() {
+            tracing::info!("  - {} ({})", target.name, target.instruction);
+        }
+
+        // Collect all necessary information for generation
+        let tasks = target_map
+            .checksums()
+            .map(|checksum| {
+                let (target, node) = target_map.get(checksum).unwrap();
+                let type_positions = get_function_type_positions(node);
+                GenerationTask {
+                    checksum,
+                    target: target.clone(),
+                    package_name: target_map.package_name().to_string(),
+                    type_positions,
+                }
+            })
+            .collect();
+
+        Ok(tasks)
+    }
+
+    /// Generate code for all targets in parallel
+    async fn generate_all_targets(
+        &self,
+        tasks: Vec<GenerationTask>,
+    ) -> Result<Vec<GeneratedEvent>> {
+        let file_path = self.file_path.clone();
+        let source = self.editor.source().to_string();
+        let target_generator = &self.target_generator;
+
+        let generation_futures = tasks.into_iter().map(move |task| {
+            let file_path = file_path.clone();
+            let source = source.clone();
+
+            async move {
+                // Generate code for this target
+                let generated_code = target_generator
+                    .generate_with_positions(
+                        &task.target,
+                        &task.package_name,
+                        &file_path,
+                        &source,
+                        &task.type_positions,
+                    )
+                    .await?;
+
+                Ok::<_, anyhow::Error>(GeneratedEvent {
+                    checksum: task.checksum,
+                    target_name: task.target.name.clone(),
+                    signature: task.target.signature.clone(),
+                    generated_code,
+                })
+            }
+        });
+
+        // Execute all generation tasks in parallel
+        let results = join_all(generation_futures).await;
+
+        // Collect results, propagating any errors
+        results.into_iter().collect::<Result<Vec<_>>>()
+    }
+
+    /// Apply a generated event to the document
+    fn apply_generated_event(&mut self, event: GeneratedEvent) -> Result<()> {
+        // Re-build target map for current state
+        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
+
+        // Find the node for this function by name
+        let node_data = target_map
+            .targets()
+            .zip(target_map.nodes())
+            .find(|(t, _)| t.name == event.target_name)
+            .map(|(_, node)| {
+                let func_start = node.start_byte();
+                let body_info = node
+                    .child_by_field_name("body")
+                    .map(|b| (b.start_byte(), b.end_byte()));
+                (func_start, body_info)
+            });
+
+        // Drop target_map before processing
+        drop(target_map);
+
+        if let Some((func_start, body_info)) = node_data {
+            // Create EditEvent
+            let edit_event = EditEvent::new(event.checksum, event.signature, event.generated_code);
+
+            // Apply the edit event
+            self.apply_edit_event(edit_event, func_start, body_info)?;
+
+            tracing::debug!(
+                "Applied edit for {} (checksum: {:x})",
+                event.target_name,
+                event.checksum
+            );
+        }
+
+        Ok(())
     }
 
     /// Apply an EditEvent to the document
@@ -264,4 +315,20 @@ impl DocumentManager {
 
         Ok(())
     }
+}
+
+/// Task for generating code for a single target
+struct GenerationTask {
+    checksum: u64,
+    target: crate::parser::target::Target,
+    package_name: String,
+    type_positions: Vec<(u32, u32)>,
+}
+
+/// Result of code generation for a single target
+struct GeneratedEvent {
+    checksum: u64,
+    target_name: String,
+    signature: String,
+    generated_code: String,
 }
