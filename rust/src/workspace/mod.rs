@@ -1,12 +1,15 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::document::{DocumentCommand, DocumentManager};
+use crate::generation::TargetGenerator;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
+use crate::parser::target_map::TargetMap;
+use crate::tools::inspect::InspectTool;
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +26,8 @@ pub struct Workspace {
     _root_dir: PathBuf,
     /// Configuration
     config: Config,
+    /// Inspect tool for symbol inspection
+    inspect_tool: InspectTool,
 }
 
 impl Workspace {
@@ -71,6 +76,7 @@ impl Workspace {
             llm_client,
             _root_dir: root_dir,
             config,
+            inspect_tool: InspectTool::new(),
         })
     }
 
@@ -116,6 +122,62 @@ impl Workspace {
     /// Get reference to the LLM client  
     pub fn llm_client(&self) -> &LLMClient {
         &self.llm_client
+    }
+
+    /// Get mutable reference to the inspect tool
+    pub fn inspect_tool_mut(&mut self) -> &mut InspectTool {
+        &mut self.inspect_tool
+    }
+
+    /// Generate code for a document
+    pub async fn generate_for_document(&mut self, file_uri: &str) -> Result<String> {
+        // Get document actor
+        let document = self.get_document(file_uri).await?;
+        
+        // Get source code and tree
+        let (source_tx, source_rx) = oneshot::channel();
+        document.send(DocumentCommand::GetSource { response: source_tx }).await?;
+        let source = source_rx.await??;
+        
+        let (tree_tx, tree_rx) = oneshot::channel();
+        document.send(DocumentCommand::GetTree { response: tree_tx }).await?;
+        let tree = tree_rx.await??;
+        
+        // Build target map
+        let target_map = TargetMap::build(&tree, &source)?;
+        let package_name = target_map.package_name().to_string();
+        
+        tracing::info!("Found {} targets in file", target_map.len());
+        for target in target_map.targets() {
+            tracing::info!("  - {} ({})", target.name, target.instruction);
+        }
+        
+        // Generate for each target
+        let mut generated_results = Vec::new();
+        
+        for (target, node) in target_map.targets().zip(target_map.nodes()) {
+            // Create target generator with file URI
+            let target_generator = TargetGenerator::new(
+                target,
+                &package_name,
+                *node,
+                file_uri.to_string(),
+            );
+            
+            // Generate code using Workspace
+            let generated_code = target_generator.generate(self).await?;
+            
+            generated_results.push((target.clone(), generated_code));
+            
+            tracing::debug!(
+                "Generated code for target: {}",
+                target.name
+            );
+        }
+        
+        // Apply generated code back to document
+        // For now, just return the source (actual application would be done in DocumentManager)
+        Ok(source.clone())
     }
 
     /// Shutdown all Document actors

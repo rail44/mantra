@@ -1,22 +1,17 @@
 use anyhow::{Context, Result};
-use std::path::Path;
 use tree_sitter::Node;
 
-use crate::llm::{CompletionRequest, LLMClient, Message, ProviderSpec};
-use crate::lsp::{Client as LspClient, Position, TextDocumentIdentifier, TextDocumentItem};
+use crate::llm::{CompletionRequest, Message, ProviderSpec};
+use crate::lsp::{Position, TextDocumentIdentifier};
 use crate::parser::target::{get_function_type_positions, Target};
+use crate::workspace::Workspace;
 
 /// Generates code for a single target function
 pub struct TargetGenerator<'a> {
     target: &'a Target,
     package_name: &'a str,
-    // TODO: 本来はLSPクライアントを直接使うのではなく、
-    // ターゲットのシグネチャから型情報を取得する抽象化レイヤーを通すべき。
-    // 現在は一時的にtype_positionsを保持しているが、
-    // 将来的には型情報取得のためのTypeResolverのような仕組みを導入すべき。
-    type_positions: Vec<(u32, u32)>,
-    client: LLMClient,
-    lsp_client: Option<LspClient>,
+    node: Node<'a>,
+    file_uri: String,
 }
 
 impl<'a> TargetGenerator<'a> {
@@ -24,27 +19,22 @@ impl<'a> TargetGenerator<'a> {
     pub fn new(
         target: &'a Target,
         package_name: &'a str,
-        node: &'a Node<'a>,
-        client: LLMClient,
-        lsp_client: Option<LspClient>,
+        node: Node<'a>,
+        file_uri: String,
     ) -> Self {
-        // Extract type positions from the node
-        let type_positions = get_function_type_positions(node);
-
         Self {
             target,
             package_name,
-            type_positions,
-            client,
-            lsp_client,
+            node,
+            file_uri,
         }
     }
 
     /// Generate code for this target
-    pub async fn generate(&self, file_path: &Path, source: &str) -> Result<String> {
-        // Collect type information from LSP
+    pub async fn generate(&self, workspace: &mut Workspace) -> Result<String> {
+        // Collect type information using InspectTool
         let type_info = self
-            .collect_type_info_at_positions(file_path, source, &self.type_positions)
+            .collect_type_info_with_inspect(workspace)
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!("Failed to get type info for {}: {}", self.target.name, e);
@@ -58,50 +48,39 @@ impl<'a> TargetGenerator<'a> {
         tracing::debug!("Prompt: {}", prompt);
 
         // Send to LLM
-        let response = self.send_to_llm(prompt).await?;
+        let response = self.send_to_llm(workspace, prompt).await?;
 
         // Clean and return the response
         Ok(self.clean_generated_code(response))
     }
 
-    /// Collect type information at specific positions using LSP
-    async fn collect_type_info_at_positions(
-        &self,
-        file_path: &Path,
-        source: &str,
-        type_positions: &[(u32, u32)],
-    ) -> Result<String> {
+    /// Collect type information using InspectTool
+    async fn collect_type_info_with_inspect(&self, workspace: &mut Workspace) -> Result<String> {
+        // Extract type positions from the node
+        let type_positions = get_function_type_positions(&self.node);
+        
         if type_positions.is_empty() {
             return Ok("No type positions found".to_string());
         }
 
-        // Use existing LSP client if available, otherwise create a new one
-        let lsp_client = match &self.lsp_client {
-            Some(client) => client,
-            None => {
-                // Fallback: create temporary LSP client for backward compatibility
-                return self
-                    .collect_type_info_with_new_lsp(file_path, source, type_positions)
-                    .await;
-            }
-        };
+        // Create initial scope for the function
+        let start_line = self.node.start_position().row as u32;
+        let end_line = self.node.end_position().row as u32;
+        let _scope_id = workspace
+            .inspect_tool_mut()
+            .create_initial_scope(self.file_uri.clone(), start_line, end_line);
 
-        // LSP client is already initialized, just use it directly
-        let absolute_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::env::current_dir()?.join(file_path)
-        };
-
-        let file_uri = format!("file://{}", absolute_path.to_string_lossy());
-
-        // Collect hover information
+        // Collect type information for each position
         let mut type_infos = Vec::new();
+        
         for (line, character) in type_positions.iter() {
+            // Use LSP hover directly for type information
+            // (InspectTool is mainly for navigating to definitions, not hover info)
+            let lsp_client = workspace.lsp_client();
             match lsp_client
                 .hover(
                     TextDocumentIdentifier {
-                        uri: file_uri.clone(),
+                        uri: self.file_uri.clone(),
                     },
                     Position {
                         line: *line,
@@ -127,110 +106,6 @@ impl<'a> TargetGenerator<'a> {
         Ok(type_infos.join("\n\n"))
     }
 
-    /// Collect type information with a new temporary LSP client (backward compatibility)
-    async fn collect_type_info_with_new_lsp(
-        &self,
-        file_path: &Path,
-        source: &str,
-        type_positions: &[(u32, u32)],
-    ) -> Result<String> {
-        // Start LSP client
-        let lsp_client = LspClient::new("gopls", &[]).await?;
-
-        // Initialize LSP
-        let absolute_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::env::current_dir()?.join(file_path)
-        };
-
-        let workspace_root = absolute_path
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or(".");
-
-        let _init_result = lsp_client
-            .initialize(
-                Some(std::process::id()),
-                Some(format!("file://{}", workspace_root)),
-                serde_json::json!({
-                    "textDocument": {
-                        "hover": {
-                            "contentFormat": ["markdown", "plaintext"]
-                        },
-                        "synchronization": {
-                            "didOpen": true
-                        }
-                    }
-                }),
-                Some(vec![serde_json::json!({
-                    "uri": format!("file://{}", workspace_root),
-                    "name": "workspace"
-                })]),
-            )
-            .await?;
-        lsp_client.initialized().await?;
-
-        // Open the document
-        let file_uri = format!("file://{}", absolute_path.to_string_lossy());
-        lsp_client
-            .did_open(TextDocumentItem {
-                uri: file_uri.clone(),
-                language_id: "go".to_string(),
-                version: 1,
-                text: source.to_string(),
-            })
-            .await?;
-
-        // Wait for diagnostics
-        let timeout = std::time::Duration::from_secs(5);
-        match lsp_client
-            .wait_for_diagnostics_timeout(&file_uri, timeout)
-            .await
-        {
-            Ok(diagnostics) => {
-                tracing::debug!(
-                    "Received {} diagnostics for {}",
-                    diagnostics.diagnostics.len(),
-                    file_uri
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Failed to receive diagnostics: {}. Continuing anyway.", e);
-            }
-        }
-
-        // Collect hover information
-        let mut type_infos = Vec::new();
-        for (line, character) in type_positions.iter() {
-            match lsp_client
-                .hover(
-                    TextDocumentIdentifier {
-                        uri: file_uri.clone(),
-                    },
-                    Position {
-                        line: *line,
-                        character: *character,
-                    },
-                )
-                .await?
-            {
-                Some(hover) => {
-                    let markdown_content = match hover.contents {
-                        crate::lsp::MarkupContent::PlainText(text) => text,
-                        crate::lsp::MarkupContent::Markdown { value, .. } => value,
-                    };
-                    tracing::info!("Type info at {}:{} - {}", line, character, markdown_content);
-                    type_infos.push(markdown_content);
-                }
-                None => {
-                    tracing::warn!("No hover information available at {}:{}", line, character);
-                }
-            }
-        }
-
-        Ok(type_infos.join("\n\n"))
-    }
 
     /// Build prompt for LLM
     fn build_prompt(&self, type_info: &str) -> String {
@@ -254,9 +129,11 @@ impl<'a> TargetGenerator<'a> {
     }
 
     /// Send request to LLM
-    async fn send_to_llm(&self, prompt: String) -> Result<String> {
+    async fn send_to_llm(&self, workspace: &Workspace, prompt: String) -> Result<String> {
+        let llm_client = workspace.llm_client();
+        
         let mut request = CompletionRequest {
-            model: self.client.model().to_string(),
+            model: llm_client.model().to_string(),
             messages: vec![
                 Message::system("You are a Go code generator. Generate only the function body implementation without the curly braces. Do not include the function signature. Do not include any comments or explanations. Do not use markdown code blocks. Return only the Go code that goes inside the function body."),
                 Message::user(prompt),
@@ -267,7 +144,7 @@ impl<'a> TargetGenerator<'a> {
         };
 
         // Add OpenRouter provider specification if configured
-        if let Some(openrouter_config) = self.client.openrouter_config() {
+        if let Some(openrouter_config) = llm_client.openrouter_config() {
             if !openrouter_config.providers.is_empty() {
                 request.provider = Some(ProviderSpec {
                     only: Some(openrouter_config.providers.clone()),
@@ -275,7 +152,7 @@ impl<'a> TargetGenerator<'a> {
             }
         }
 
-        let response = self.client.complete(request).await?;
+        let response = llm_client.complete(request).await?;
 
         response
             .choices

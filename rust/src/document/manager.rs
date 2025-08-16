@@ -1,12 +1,11 @@
 use anyhow::Result;
-use futures::future::join_all;
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 use tree_sitter::{InputEdit, Point, Tree};
 
 use crate::config::Config;
 use crate::editor::{indent_code, IncrementalEditor};
-use crate::generation::{EditEvent, TargetGenerator};
+use crate::generation::EditEvent;
 use crate::llm::LLMClient;
 use crate::lsp::{
     client::{TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier},
@@ -199,22 +198,8 @@ impl DocumentManager {
 
     /// Generate code for all targets in the document
     pub async fn generate_all(&mut self) -> Result<String> {
-        // Phase 1: Collect all targets and their information
-        let generation_tasks = self.prepare_generation_tasks()?;
-
-        if generation_tasks.is_empty() {
-            return Ok(self.editor.source().to_string());
-        }
-
-        // Phase 2: Generate code for all targets in parallel
-        let generated_events = self.generate_all_targets(generation_tasks).await?;
-
-        // Phase 3: Apply all edits sequentially
-        for event in generated_events {
-            self.apply_generated_event(event).await?;
-        }
-
-        // Return the final edited source
+        // TODO: This should be handled at Workspace level with new TargetGenerator
+        // For now, just return the source unchanged
         Ok(self.editor.source().to_string())
     }
 
@@ -236,67 +221,14 @@ impl DocumentManager {
         Ok(tasks)
     }
 
-    /// Generate code for all targets in parallel
+    // TODO: Remove or refactor this method once Workspace-based generation is complete
+    #[allow(dead_code)]
     async fn generate_all_targets(
         &self,
-        tasks: Vec<GenerationTask>,
+        _tasks: Vec<GenerationTask>,
     ) -> Result<Vec<GeneratedEvent>> {
-        // Build target map once for all tasks
-        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
-        let package_name = target_map.package_name().to_string();
-
-        // Extract all necessary data upfront
-        let generation_data: Vec<_> = tasks
-            .into_iter()
-            .filter_map(|task| {
-                target_map
-                    .get(task.checksum)
-                    .map(|(target, node)| (task.checksum, target.clone(), *node))
-            })
-            .collect();
-
-        let file_path = self.file_path.clone();
-        let source = self.editor.source().to_string();
-        let llm_client = self.llm_client.clone();
-        let lsp_client = self.lsp_client.clone();
-
-        let generation_futures =
-            generation_data
-                .into_iter()
-                .map(move |(checksum, target, node)| {
-                    let file_path = file_path.clone();
-                    let source = source.clone();
-                    let package_name = package_name.clone();
-                    let llm_client = llm_client.clone();
-                    let lsp_client = lsp_client.clone();
-
-                    async move {
-                        // Create a new TargetGenerator for this target
-                        let target_generator = TargetGenerator::new(
-                            &target,
-                            &package_name,
-                            &node,
-                            llm_client,
-                            lsp_client,
-                        );
-
-                        // Generate code for this target
-                        let generated_code = target_generator.generate(&file_path, &source).await?;
-
-                        Ok::<_, anyhow::Error>(GeneratedEvent {
-                            checksum,
-                            target_name: target.name.clone(),
-                            signature: target.signature.clone(),
-                            generated_code,
-                        })
-                    }
-                });
-
-        // Execute all generation tasks in parallel
-        let results = join_all(generation_futures).await;
-
-        // Collect results, propagating any errors
-        results.into_iter().collect::<Result<Vec<_>>>()
+        // Placeholder - actual implementation moved to Workspace
+        Ok(vec![])
     }
 
     /// Apply a generated event to the document
