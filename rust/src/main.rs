@@ -49,7 +49,8 @@ fn main() -> Result<()> {
 }
 
 async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
-    use document::DocumentManager;
+    use mantra::workspace::{Workspace, WorkspaceCommand};
+    use tokio::sync::{mpsc, oneshot};
 
     // Load configuration
     info!("Loading configuration from: {}", config_dir.display());
@@ -57,14 +58,32 @@ async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
 
     info!("Generating code for: {}", file.display());
 
-    // Create document manager with LSP support
-    let mut doc_manager = DocumentManager::new(config, &file).await?;
+    // Get workspace root (parent directory of the file)
+    let workspace_root = file
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?
+        .to_path_buf();
 
-    // Generate code
-    let result = doc_manager.generate_all().await?;
+    // Spawn Workspace actor
+    let workspace_tx = Workspace::spawn(workspace_root, config).await?;
+
+    // Send generate command to workspace
+    let (response_tx, response_rx) = oneshot::channel();
+    workspace_tx
+        .send(WorkspaceCommand::GenerateFile {
+            file_path: file.clone(),
+            response: response_tx,
+        })
+        .await?;
+
+    // Wait for result
+    let result = response_rx.await??;
 
     // Output to stdout
     print!("{}", result);
+
+    // Shutdown workspace
+    workspace_tx.send(WorkspaceCommand::Shutdown).await?;
 
     Ok(())
 }

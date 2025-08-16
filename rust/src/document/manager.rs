@@ -43,6 +43,11 @@ pub enum DocumentCommand {
     GenerateAll {
         response: oneshot::Sender<Result<String>>,
     },
+    /// Apply generated code edit
+    ApplyEdit {
+        edit: crate::generation::EditEvent,
+        response: oneshot::Sender<Result<()>>,
+    },
     /// Shutdown the actor
     Shutdown,
 }
@@ -231,12 +236,114 @@ impl DocumentManager {
 
     /// Generate code for all targets in the document
     pub async fn generate_all(&mut self) -> Result<String> {
-        // For now, just return the source unchanged
-        // Real implementation would modify the source with generated code
-        // But that requires passing workspace channel here, which is complex
-        tracing::warn!("generate_all is not yet implemented - returning unchanged source");
+        use crate::generation::TargetGenerator;
+        use crate::parser::target_map::TargetMap;
+        
+        // Get workspace_tx
+        let workspace_tx = self.workspace_tx.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Workspace channel not available"))?
+            .clone();
+        
+        // Collect edits in a scope to ensure target_map is dropped
+        let edits = {
+            // Build target map once
+            let target_map = TargetMap::build(&self.tree, self.editor.source())?;
+            let package_name = target_map.package_name().to_string();
+            
+            tracing::info!("Found {} targets in document", target_map.len());
+            
+            // Process each target sequentially (due to lifetime constraints)
+            let mut edits = Vec::new();
+            
+            for (checksum, (target, node)) in target_map.iter() {
+                tracing::info!("Generating code for target: {}", target.name);
+                
+                // Create target generator
+                let file_uri = format!("file://{}", self.file_path.display());
+                let target_generator = TargetGenerator::new(
+                    target,
+                    &package_name,
+                    *node,
+                    file_uri,
+                );
+                
+                // Generate code
+                match target_generator.generate(workspace_tx.clone()).await {
+                    Ok(generated_code) => {
+                        tracing::info!("Successfully generated code for {}", target.name);
+                        
+                        let edit = crate::generation::EditEvent::new(
+                            *checksum,
+                            target.signature.clone(),
+                            generated_code,
+                        );
+                        edits.push(edit);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to generate code for {}: {}", target.name, e);
+                    }
+                }
+            }
+            
+            edits
+        }; // target_map is dropped here
+        
+        // Apply all edits after generation completes
+        for edit in edits {
+            if let Err(e) = self.apply_edit(edit).await {
+                tracing::error!("Failed to apply edit: {}", e);
+            }
+        }
+        
+        // Return the modified source
         Ok(self.editor.source().to_string())
     }
+
+    /// Apply edit to the document
+    async fn apply_edit(&mut self, edit: crate::generation::EditEvent) -> Result<()> {
+        use crate::generation::convert_to_lsp_edits;
+        
+        // Convert EditEvent to LSP text edits
+        let lsp_edits = convert_to_lsp_edits(self.editor.source(), &self.tree, vec![edit])?;
+        
+        // Apply edits to the document
+        for text_edit in lsp_edits {
+            // Convert editor Position to LSP Position for position_to_byte
+            let start_pos = Position {
+                line: text_edit.range.start.line,
+                character: text_edit.range.start.character,
+            };
+            let end_pos = Position {
+                line: text_edit.range.end.line,
+                character: text_edit.range.end.character,
+            };
+            
+            // Convert LSP range to byte positions
+            let start_byte = self.position_to_byte(start_pos)?;
+            let end_byte = self.position_to_byte(end_pos)?;
+            
+            // Apply edit to the editor
+            self.editor.replace(start_byte, end_byte, text_edit.new_text.clone());
+            
+            // Update parse tree
+            let input_edit = self.create_input_edit_for_replace(
+                start_byte,
+                end_byte,
+                &text_edit.new_text,
+            );
+            self.tree.edit(&input_edit);
+            // Re-parse the entire document
+            self.tree = self.parser.parse(self.editor.source())?;
+        }
+        
+        // Send did_change notification to LSP
+        if self.lsp_client.is_some() {
+            self.send_did_change().await?;
+        }
+        
+        Ok(())
+    }
+    
 
     /// Prepare generation tasks by collecting target information
     fn prepare_generation_tasks(&self) -> Result<Vec<GenerationTask>> {
@@ -472,6 +579,10 @@ impl DocumentManager {
                 }
                 DocumentCommand::GenerateAll { response } => {
                     let result = self.generate_all().await;
+                    let _ = response.send(result);
+                }
+                DocumentCommand::ApplyEdit { edit, response } => {
+                    let result = self.apply_edit(edit).await;
                     let _ = response.send(result);
                 }
                 DocumentCommand::Shutdown => {

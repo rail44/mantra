@@ -43,6 +43,11 @@ pub enum WorkspaceCommand {
         file_uri: String,
         response: oneshot::Sender<Result<String>>,
     },
+    /// Generate code for a file
+    GenerateFile {
+        file_path: PathBuf,
+        response: oneshot::Sender<Result<String>>,
+    },
     /// Shutdown the workspace
     Shutdown,
 }
@@ -246,6 +251,19 @@ impl Workspace {
                 }
                 WorkspaceCommand::GenerateForDocument { file_uri, response } => {
                     // Simply call the existing method
+                    let result = self.generate_for_document(&file_uri).await;
+                    let _ = response.send(result);
+                }
+                WorkspaceCommand::GenerateFile { file_path, response } => {
+                    // Convert file path to URI
+                    let absolute_path = if file_path.is_absolute() {
+                        file_path
+                    } else {
+                        std::env::current_dir()?.join(&file_path)
+                    };
+                    let file_uri = format!("file://{}", absolute_path.display());
+                    
+                    // Call generate_for_document with the URI
                     let result = self.generate_for_document(&file_uri).await;
                     let _ = response.send(result);
                 }
