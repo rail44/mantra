@@ -1,5 +1,6 @@
 pub mod event;
-pub mod target;
+// Temporarily disabled during migration to actix
+// pub mod target;
 
 pub use event::{convert_to_lsp_edits, EditEvent};
-pub use target::TargetGenerator;
+// pub use target::TargetGenerator;

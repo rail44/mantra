@@ -35,6 +35,9 @@ hashbrown = "0.14"
 walkdir = "2"
 jsonrpsee = { version = "0.24", features = ["client", "server", "macros"] }
 
+# Actor framework
+actix = "0.13"
+
 # UI (for later)
 # ratatui = "0.26"
 # crossterm = "0.27"

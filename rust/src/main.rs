@@ -40,17 +40,15 @@ fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // Use tokio runtime for async operations
-    tokio::runtime::Runtime::new()?.block_on(async {
-        match args.command {
-            Commands::Generate { file, config_dir } => generate_command(file, config_dir).await,
-        }
-    })
+    // Use Actix system for all operations
+    match args.command {
+        Commands::Generate { file, config_dir } => generate_command(file, config_dir),
+    }
 }
 
-async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
-    use mantra::workspace::{Workspace, WorkspaceCommand};
-    use tokio::sync::oneshot;
+fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
+    use actix::prelude::*;
+    use mantra::workspace::{GenerateFile, Shutdown, Workspace};
 
     // Load configuration
     info!("Loading configuration from: {}", config_dir.display());
@@ -64,26 +62,27 @@ async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?
         .to_path_buf();
 
-    // Spawn Workspace actor
-    let workspace_tx = Workspace::spawn(workspace_root, config).await?;
+    // Create Actix system
+    let system = System::new();
 
-    // Send generate command to workspace
-    let (response_tx, response_rx) = oneshot::channel();
-    workspace_tx
-        .send(WorkspaceCommand::GenerateFile {
-            file_path: file.clone(),
-            response: response_tx,
-        })
-        .await?;
+    let result = system.block_on(async {
+        // Create and start Workspace actor
+        let addr = Workspace::start_actor(workspace_root, config).await?;
 
-    // Wait for result
-    let result = response_rx.await??;
+        // Send GenerateFile message
+        let result = addr.send(GenerateFile { file_path: file }).await??;
+
+        // Shutdown workspace
+        addr.send(Shutdown).await?;
+
+        // Stop the system
+        System::current().stop();
+
+        Ok::<String, anyhow::Error>(result)
+    })?;
 
     // Output to stdout
     print!("{}", result);
-
-    // Shutdown workspace
-    workspace_tx.send(WorkspaceCommand::Shutdown).await?;
 
     Ok(())
 }
