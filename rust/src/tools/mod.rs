@@ -1,7 +1,5 @@
-// Temporarily disabled during migration to actix
-// pub mod inspect;
-
-// Temporary stub for InspectTool during migration
+// Stub implementation of InspectTool
+// The real implementation needs to be migrated to actix architecture
 pub mod inspect {
     use crate::lsp::Range;
 

@@ -1,3 +1,2 @@
-// Temporarily disabled during migration to actix
-// pub mod manager;
-// pub use manager::{DocumentCommand, DocumentManager};
+// DocumentManager needs to be migrated to actix architecture
+// The functionality is currently implemented in workspace/document.rs as DocumentActor
