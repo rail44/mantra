@@ -4,7 +4,7 @@ pub mod notification;
 pub mod rpc;
 mod transport;
 
-pub use client::Client;
+pub use client::{Client, DocumentSymbol};
 pub use notification::NotificationHandler;
 pub use rpc::{
     Diagnostic, DidOpenTextDocumentParams, Hover, HoverParams, InitializeParams, InitializeResult,

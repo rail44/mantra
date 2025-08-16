@@ -1,31 +1,32 @@
-// Stub implementation of InspectTool
-// The real implementation needs to be migrated to actix architecture
-pub mod inspect {
-    use crate::lsp::Range;
+// Tool actors for code generation support
+pub mod inspect;
 
-    #[derive(Debug, Clone)]
-    pub struct InspectTool;
+// Re-export commonly used types
+pub use inspect::{InspectRequest, InspectResponse, InspectTool};
 
-    impl Default for InspectTool {
-        fn default() -> Self {
-            Self::new()
-        }
+// Tool actor trait for common tool behaviors
+use actix::prelude::*;
+use anyhow::Result;
+
+/// Base trait for all tool actors
+pub trait ToolActor: Actor {
+    /// Get the tool name
+    fn name(&self) -> &str;
+
+    /// Initialize the tool
+    fn initialize(&mut self) -> Result<()> {
+        Ok(())
     }
-
-    impl InspectTool {
-        pub fn new() -> Self {
-            Self
-        }
-        pub fn register_scope(&mut self, _uri: String, _range: Range) -> String {
-            "stub_scope_id".to_string()
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct InspectRequest;
-
-    #[derive(Debug, Clone)]
-    pub struct InspectResponse;
 }
 
-pub use inspect::{InspectRequest, InspectResponse, InspectTool};
+// Common messages for all tools
+
+/// Initialize tool message
+#[derive(Message, Debug)]
+#[rtype(result = "Result<()>")]
+pub struct InitializeTool;
+
+/// Shutdown tool message  
+#[derive(Message, Debug)]
+#[rtype(result = "()")]
+pub struct ShutdownTool;

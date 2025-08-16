@@ -1,2 +1,2 @@
-// DocumentManager needs to be migrated to actix architecture
-// The functionality is currently implemented in workspace/document.rs as DocumentActor
+// This module is deprecated. DocumentActor in workspace module has replaced DocumentManager.
+// Keeping this module temporarily for potential migration of any remaining utilities.

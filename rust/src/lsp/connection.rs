@@ -9,6 +9,7 @@ use crate::lsp::transport::{StdioReceiver, StdioSender};
 use crate::lsp::NotificationHandler;
 
 /// LSP connection that manages the process and RPC client
+#[derive(Debug)]
 pub struct LspConnection {
     pub client: RpcClient,
     pub process: Child,

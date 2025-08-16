@@ -3,13 +3,15 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::core::traits::ToRpcParams;
 use serde::de::Error;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
 use crate::lsp::connection::LspConnection;
 use crate::lsp::PublishDiagnosticsParams;
-use crate::lsp::{Hover, InitializeResult, Position, TextDocumentIdentifier, TextDocumentItem};
+use crate::lsp::{
+    Hover, InitializeResult, Location, Position, Range, TextDocumentIdentifier, TextDocumentItem,
+};
 
 // パラメータ構造体をキャメルケース変換付きで定義
 #[derive(Serialize)]
@@ -77,7 +79,7 @@ impl ToRpcParams for DidOpenParams {
 }
 
 /// LSP client that constructs JSON-RPC requests with proper camelCase conversion
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     connection: Arc<LspConnection>,
 }
@@ -248,6 +250,87 @@ impl Client {
         }
     }
 
+    /// Get document symbols
+    pub async fn document_symbols(
+        &self,
+        text_document: TextDocumentIdentifier,
+    ) -> Result<Vec<DocumentSymbol>> {
+        let params = DocumentSymbolParams { text_document };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/documentSymbol", params)
+            .await?;
+
+        // Handle null response as empty vector
+        if result.is_null() {
+            Ok(Vec::new())
+        } else {
+            // Could be DocumentSymbol[] or SymbolInformation[]
+            if let Ok(symbols) = serde_json::from_value::<Vec<DocumentSymbol>>(result.clone()) {
+                Ok(symbols)
+            } else if let Ok(symbols) = serde_json::from_value::<Vec<SymbolInformation>>(result) {
+                // Convert SymbolInformation to DocumentSymbol
+                Ok(symbols
+                    .into_iter()
+                    .map(|s| DocumentSymbol {
+                        name: s.name,
+                        kind: s.kind,
+                        range: s.location.range.clone(),
+                        selection_range: s.location.range,
+                        children: None,
+                        detail: None,
+                        deprecated: None,
+                    })
+                    .collect())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Go to definition location(s) of a symbol
+    pub async fn goto_definition(
+        &self,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+    ) -> Result<Vec<Location>> {
+        let params = HoverParams {
+            text_document,
+            position,
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/definition", params)
+            .await?;
+
+        // Handle null response as empty vector
+        if result.is_null() {
+            Ok(Vec::new())
+        } else {
+            // Could be Location, Location[], or LocationLink[]
+            if let Ok(location) = serde_json::from_value::<Location>(result.clone()) {
+                Ok(vec![location])
+            } else if let Ok(locations) = serde_json::from_value::<Vec<Location>>(result.clone()) {
+                Ok(locations)
+            } else if let Ok(links) = serde_json::from_value::<Vec<LocationLink>>(result) {
+                // Convert LocationLink to Location
+                Ok(links
+                    .into_iter()
+                    .map(|link| Location {
+                        uri: link.target_uri,
+                        range: link.target_range,
+                    })
+                    .collect())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+
     /// Open a text document notification
     pub async fn did_open(&self, text_document: TextDocumentItem) -> Result<()> {
         let params = DidOpenParams { text_document };
@@ -275,6 +358,54 @@ impl Client {
             .await?;
         Ok(())
     }
+}
+
+// LSP type definitions
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentSymbolParams {
+    text_document: TextDocumentIdentifier,
+}
+
+impl ToRpcParams for DocumentSymbolParams {
+    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
+        let mut params = ObjectParams::new();
+        params
+            .insert("textDocument", self.text_document)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params.to_rpc_params()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DocumentSymbol {
+    pub name: String,
+    pub kind: u32,
+    pub range: Range,
+    #[serde(rename = "selectionRange")]
+    pub selection_range: Range,
+    pub detail: Option<String>,
+    pub children: Option<Vec<DocumentSymbol>>,
+    pub deprecated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SymbolInformation {
+    pub name: String,
+    pub kind: u32,
+    pub location: Location,
+    #[serde(rename = "containerName")]
+    pub container_name: Option<String>,
+    pub deprecated: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationLink {
+    pub origin_selection_range: Option<Range>,
+    pub target_uri: String,
+    pub target_range: Range,
+    pub target_selection_range: Range,
 }
 
 // didChange関連の構造体

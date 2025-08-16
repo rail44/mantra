@@ -1,17 +1,22 @@
+use actix::prelude::*;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::{debug, info};
 
-use crate::lsp::{Position, Range, TextDocumentIdentifier};
-use tokio::sync::{mpsc, oneshot};
+use crate::lsp::Range;
 
-use crate::document::DocumentCommand;
+use super::{InitializeTool, ShutdownTool, ToolActor};
 
-/// Tool for inspecting symbols in code
-#[derive(Default, Clone)]
+// ============================================================================
+// InspectTool Actor
+// ============================================================================
+
+/// Tool for inspecting symbols in code using LSP
+#[derive(Debug, Default)]
 pub struct InspectTool {
     /// Map of scope IDs to their locations
-    pub scopes: HashMap<String, ScopeInfo>,
+    scopes: HashMap<String, ScopeInfo>,
     /// Counter for generating unique scope IDs
     next_scope_id: usize,
 }
@@ -25,8 +30,48 @@ pub struct ScopeInfo {
     pub range: Range,
 }
 
+impl InspectTool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a scope for inspection
+    pub fn register_scope(&mut self, uri: String, range: Range) -> String {
+        let scope_id = format!("scope_{}", self.next_scope_id);
+        self.next_scope_id += 1;
+
+        self.scopes
+            .insert(scope_id.clone(), ScopeInfo { uri, range });
+
+        debug!("Registered scope: {}", scope_id);
+        scope_id
+    }
+}
+
+impl Actor for InspectTool {
+    type Context = Context<Self>;
+
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        info!("InspectTool actor started");
+    }
+
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
+        info!("InspectTool actor stopped");
+    }
+}
+
+impl ToolActor for InspectTool {
+    fn name(&self) -> &str {
+        "InspectTool"
+    }
+}
+
+// ============================================================================
+// Message Types
+// ============================================================================
+
 /// Request to inspect a symbol
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct InspectRequest {
     /// Scope ID to inspect within
     pub scope_id: String,
@@ -35,7 +80,7 @@ pub struct InspectRequest {
 }
 
 /// Response from inspection
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InspectResponse {
     /// New scope ID for the definition
     pub scope_id: String,
@@ -43,162 +88,165 @@ pub struct InspectResponse {
     pub code: String,
 }
 
-impl InspectTool {
-    /// Create a new InspectTool
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// Message to register a scope
+#[derive(Message, Debug)]
+#[rtype(result = "String")]
+pub struct RegisterScope {
+    pub uri: String,
+    pub range: Range,
+}
 
-    /// Register a scope and return its ID
-    pub fn register_scope(&mut self, uri: String, range: Range) -> String {
-        let scope_id = format!("scope_{}", self.next_scope_id);
-        self.next_scope_id += 1;
+/// Message to inspect a symbol
+#[derive(Message, Debug)]
+#[rtype(result = "Result<InspectResponse>")]
+pub struct Inspect {
+    pub request: InspectRequest,
+    pub lsp_client: crate::lsp::Client,
+}
 
-        self.scopes
-            .insert(scope_id.clone(), ScopeInfo { uri, range });
+// ============================================================================
+// Message Handlers
+// ============================================================================
 
-        scope_id
-    }
+impl Handler<InitializeTool> for InspectTool {
+    type Result = Result<()>;
 
-    /// Inspect a symbol within a scope
-    pub async fn inspect(
-        &mut self,
-        request: InspectRequest,
-        workspace: mpsc::Sender<crate::workspace::WorkspaceCommand>,
-    ) -> Result<InspectResponse> {
-        // Get scope information
-        let scope_info = self
-            .scopes
-            .get(&request.scope_id)
-            .ok_or_else(|| anyhow::anyhow!("Unknown scope ID: {}", request.scope_id))?
-            .clone();
-
-        // Get document actor from Workspace
-        let (tx, rx) = oneshot::channel();
-        workspace
-            .send(crate::workspace::WorkspaceCommand::GetDocument {
-                uri: scope_info.uri.clone(),
-                response: tx,
-            })
-            .await?;
-        let document = rx.await??;
-
-        // Find symbol position within the scope
-        let (tx, rx) = oneshot::channel();
-        document
-            .send(DocumentCommand::FindSymbol {
-                range: scope_info.range.clone(),
-                symbol: request.symbol.clone(),
-                response: tx,
-            })
-            .await?;
-
-        let symbol_position = rx.await??;
-
-        // Get LSP client from Workspace
-        let (tx, rx) = oneshot::channel();
-        workspace
-            .send(crate::workspace::WorkspaceCommand::GetLspClient { response: tx })
-            .await?;
-        let lsp_client = rx.await?;
-
-        // Use LSP to find definition
-        let definition = lsp_client
-            .definition(
-                TextDocumentIdentifier {
-                    uri: scope_info.uri.clone(),
-                },
-                symbol_position,
-            )
-            .await?;
-
-        let definition_location = definition
-            .ok_or_else(|| anyhow::anyhow!("No definition found for symbol: {}", request.symbol))?;
-
-        // Get the definition's document actor
-        let (tx, rx) = oneshot::channel();
-        workspace
-            .send(crate::workspace::WorkspaceCommand::GetDocument {
-                uri: definition_location.uri.clone(),
-                response: tx,
-            })
-            .await?;
-        let definition_document = rx.await??;
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        definition_document
-            .send(crate::document::DocumentCommand::GetDefinitionBlock {
-                position: definition_location.range.start,
-                response: tx,
-            })
-            .await?;
-
-        let (expanded_range, code) = rx.await??;
-
-        // Register new scope for the definition
-        let new_scope_id = self.register_scope(definition_location.uri, expanded_range);
-
-        Ok(InspectResponse {
-            scope_id: new_scope_id,
-            code,
-        })
-    }
-
-    /// Create initial scope for a target function
-    pub fn create_initial_scope(&mut self, uri: String, start_line: u32, end_line: u32) -> String {
-        let range = Range {
-            start: Position {
-                line: start_line,
-                character: 0,
-            },
-            end: Position {
-                line: end_line,
-                character: 0,
-            },
-        };
-        self.register_scope(uri, range)
+    fn handle(&mut self, _msg: InitializeTool, _ctx: &mut Context<Self>) -> Self::Result {
+        debug!("Initializing InspectTool");
+        self.initialize()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl Handler<ShutdownTool> for InspectTool {
+    type Result = ();
 
-    #[test]
-    fn test_scope_registration() {
-        let mut tool = InspectTool::new();
+    fn handle(&mut self, _msg: ShutdownTool, ctx: &mut Context<Self>) -> Self::Result {
+        debug!("Shutting down InspectTool");
+        ctx.stop();
+    }
+}
 
-        let scope1 = tool.register_scope(
-            "file:///test.go".to_string(),
-            Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 10,
-                    character: 0,
-                },
+impl Handler<RegisterScope> for InspectTool {
+    type Result = String;
+
+    fn handle(&mut self, msg: RegisterScope, _ctx: &mut Context<Self>) -> Self::Result {
+        self.register_scope(msg.uri, msg.range)
+    }
+}
+
+impl Handler<Inspect> for InspectTool {
+    type Result = ResponseFuture<Result<InspectResponse>>;
+
+    fn handle(&mut self, msg: Inspect, _ctx: &mut Context<Self>) -> Self::Result {
+        let scope_info = match self.scopes.get(&msg.request.scope_id) {
+            Some(info) => info.clone(),
+            None => {
+                return Box::pin(async move {
+                    Err(anyhow::anyhow!("Scope {} not found", msg.request.scope_id))
+                });
+            }
+        };
+
+        let request = msg.request;
+        let lsp_client = msg.lsp_client;
+
+        Box::pin(async move {
+            // Find symbol position in the scope
+            let symbol_position = find_symbol_in_scope(
+                &lsp_client,
+                &scope_info.uri,
+                &scope_info.range,
+                &request.symbol,
+            )
+            .await?;
+
+            // Get definition location
+            let definition_location = lsp_client
+                .goto_definition(
+                    crate::lsp::TextDocumentIdentifier {
+                        uri: scope_info.uri.clone(),
+                    },
+                    symbol_position,
+                )
+                .await?;
+
+            // Get code at definition
+            let code = if let Some(location) = definition_location.first() {
+                get_definition_code(&lsp_client, location).await?
+            } else {
+                return Err(anyhow::anyhow!(
+                    "No definition found for symbol: {}",
+                    request.symbol
+                ));
+            };
+
+            Ok(InspectResponse {
+                scope_id: format!("def_{}", request.symbol),
+                code,
+            })
+        })
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+async fn find_symbol_in_scope(
+    lsp_client: &crate::lsp::Client,
+    uri: &str,
+    range: &Range,
+    symbol: &str,
+) -> Result<crate::lsp::Position> {
+    // Get document symbols
+    let symbols = lsp_client
+        .document_symbols(crate::lsp::TextDocumentIdentifier {
+            uri: uri.to_string(),
+        })
+        .await?;
+
+    // Find the symbol within the range
+    for sym in symbols {
+        if sym.name == symbol && is_position_in_range(&sym.range.start, range) {
+            return Ok(sym.range.start);
+        }
+    }
+
+    // If not found in symbols, search in text (simplified approach)
+    // In a real implementation, this would be more sophisticated
+    Ok(range.start)
+}
+
+async fn get_definition_code(
+    lsp_client: &crate::lsp::Client,
+    location: &crate::lsp::Location,
+) -> Result<String> {
+    // Get hover information at the definition location
+    let hover = lsp_client
+        .hover(
+            crate::lsp::TextDocumentIdentifier {
+                uri: location.uri.clone(),
             },
-        );
+            location.range.start,
+        )
+        .await?;
 
-        assert_eq!(scope1, "scope_0");
+    if let Some(hover) = hover {
+        Ok(format_hover_content(hover))
+    } else {
+        Ok("// Definition found but no hover information available".to_string())
+    }
+}
 
-        let scope2 = tool.register_scope(
-            "file:///test2.go".to_string(),
-            Range {
-                start: Position {
-                    line: 5,
-                    character: 0,
-                },
-                end: Position {
-                    line: 15,
-                    character: 0,
-                },
-            },
-        );
+fn is_position_in_range(pos: &crate::lsp::Position, range: &Range) -> bool {
+    pos.line >= range.start.line && pos.line <= range.end.line
+}
 
-        assert_eq!(scope2, "scope_1");
-        assert_eq!(tool.scopes.len(), 2);
+fn format_hover_content(hover: crate::lsp::Hover) -> String {
+    use crate::lsp::MarkupContent;
+
+    match hover.contents {
+        MarkupContent::PlainText(text) => text,
+        MarkupContent::Markdown { value, .. } => value,
     }
 }

@@ -10,6 +10,14 @@ pub struct NotificationHandler {
     diagnostics_rx: Arc<Mutex<broadcast::Receiver<PublishDiagnosticsParams>>>,
 }
 
+impl std::fmt::Debug for NotificationHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificationHandler")
+            .field("has_diagnostics_channel", &true)
+            .finish()
+    }
+}
+
 impl Default for NotificationHandler {
     fn default() -> Self {
         let (tx, rx) = broadcast::channel(100);
