@@ -63,9 +63,9 @@ func GetUser(id string) *User {
     let test_file = "target/test_inspect.go";
     std::fs::write(test_file, test_content)?;
 
-    // Create workspace
+    // Create and spawn workspace
     let config = create_test_config();
-    let mut workspace = Workspace::new(PathBuf::from("."), config).await?;
+    let workspace_tx = Workspace::spawn(PathBuf::from("."), config).await?;
 
     // Create InspectTool
     let mut tool = InspectTool::new();
@@ -83,16 +83,6 @@ func GetUser(id string) *User {
         symbol: "User".to_string(),
     };
 
-    // Create channels for workspace actor
-    let (workspace_tx, workspace_rx) = tokio::sync::mpsc::channel(32);
-
-    // Clone for the spawned task
-    let workspace_tx_clone = workspace_tx.clone();
-
-    // Spawn workspace actor
-    let workspace_handle =
-        tokio::spawn(async move { workspace.run_actor(workspace_tx_clone, workspace_rx).await });
-
     let response = tool.inspect(request, workspace_tx.clone()).await?;
 
     // Check response
@@ -104,9 +94,6 @@ func GetUser(id string) *User {
     workspace_tx
         .send(mantra::workspace::WorkspaceCommand::Shutdown)
         .await?;
-
-    // Wait for workspace to shutdown
-    let _ = workspace_handle.await;
 
     std::fs::remove_file(test_file).ok();
 

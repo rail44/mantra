@@ -57,18 +57,8 @@ func main() {
         openrouter: None,
     };
 
-    let mut workspace = Workspace::new(PathBuf::from("."), config).await?;
+    let workspace_tx = Workspace::spawn(PathBuf::from("."), config).await?;
     println!("Workspace initialized");
-
-    // Create channels for workspace actor
-    let (workspace_tx, workspace_rx) = tokio::sync::mpsc::channel(32);
-
-    // Clone workspace_tx for later use
-    let workspace_tx_clone = workspace_tx.clone();
-
-    // Spawn workspace actor
-    let workspace_handle =
-        tokio::spawn(async move { workspace.run_actor(workspace_tx_clone, workspace_rx).await });
 
     // Get document actor
     let file_uri = format!(
@@ -208,9 +198,6 @@ func main() {
     workspace_tx
         .send(mantra::workspace::WorkspaceCommand::Shutdown)
         .await?;
-
-    // Wait for workspace to shutdown
-    let _ = workspace_handle.await;
 
     std::fs::remove_file(test_file).ok();
     println!("\nDemo completed!");

@@ -63,6 +63,8 @@ pub struct DocumentManager {
     llm_client: LLMClient,
     /// Document version for LSP
     document_version: i32,
+    /// Workspace channel for sending commands
+    workspace_tx: Option<mpsc::Sender<crate::workspace::WorkspaceCommand>>,
 }
 
 impl DocumentManager {
@@ -125,8 +127,19 @@ impl DocumentManager {
             new_end_position: new_end_point,
         }
     }
-    /// Create a new document manager with LSP support
+    /// Create a new document manager with LSP support  
     pub async fn new(config: Config, file_path: &Path) -> Result<Self> {
+        // Create a dummy workspace_tx for standalone usage
+        let (workspace_tx, _) = mpsc::channel(32);
+        Self::new_with_workspace(config, file_path, workspace_tx).await
+    }
+
+    /// Create a new document manager with LSP support (internal constructor)
+    async fn new_with_workspace(
+        config: Config,
+        file_path: &Path,
+        workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
+    ) -> Result<Self> {
         let source = std::fs::read_to_string(file_path)?;
         let mut parser = GoParser::new()?;
         let tree = parser.parse(&source)?;
@@ -193,13 +206,35 @@ impl DocumentManager {
             lsp_client: Some(lsp_client),
             llm_client,
             document_version: 1,
+            workspace_tx: Some(workspace_tx),
         })
+    }
+
+    /// Spawn a new DocumentManager actor and return the sender for commands
+    pub async fn spawn(
+        config: Config,
+        file_path: &Path,
+        workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
+    ) -> Result<mpsc::Sender<DocumentCommand>> {
+        let (tx, rx) = mpsc::channel(32);
+
+        let mut manager = Self::new_with_workspace(config, file_path, workspace_tx.clone()).await?;
+
+        tokio::spawn(async move {
+            if let Err(e) = manager.run_actor(workspace_tx, rx).await {
+                tracing::error!("DocumentManager actor failed: {}", e);
+            }
+        });
+
+        Ok(tx)
     }
 
     /// Generate code for all targets in the document
     pub async fn generate_all(&mut self) -> Result<String> {
-        // TODO: This should be handled at Workspace level with new TargetGenerator
         // For now, just return the source unchanged
+        // Real implementation would modify the source with generated code
+        // But that requires passing workspace channel here, which is complex
+        tracing::warn!("generate_all is not yet implemented - returning unchanged source");
         Ok(self.editor.source().to_string())
     }
 
@@ -404,8 +439,14 @@ impl DocumentManager {
         Ok(())
     }
 
-    /// Run the actor's event loop
-    pub async fn run_actor(&mut self, mut rx: mpsc::Receiver<DocumentCommand>) -> Result<()> {
+    /// Run the actor's event loop (internal)
+    async fn run_actor(
+        &mut self,
+        _workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        mut rx: mpsc::Receiver<DocumentCommand>,
+    ) -> Result<()> {
+        // Workspace channel is already set in constructor
+
         while let Some(command) = rx.recv().await {
             match command {
                 DocumentCommand::FindSymbol {

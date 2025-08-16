@@ -5,10 +5,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::document::{DocumentCommand, DocumentManager};
-use crate::generation::TargetGenerator;
 use crate::llm::LLMClient;
 use crate::lsp::{Client as LspClient, Range};
-use crate::parser::target_map::TargetMap;
 use crate::tools::inspect::{InspectRequest, InspectResponse, InspectTool};
 
 #[cfg(test)]
@@ -63,11 +61,17 @@ pub struct Workspace {
     config: Config,
     /// Inspect tool for symbol inspection
     inspect_tool: InspectTool,
+    /// Self sender for workspace commands
+    self_tx: mpsc::Sender<WorkspaceCommand>,
 }
 
 impl Workspace {
-    /// Create a new workspace
-    pub async fn new(root_dir: PathBuf, config: Config) -> Result<Self> {
+    /// Create a new workspace (internal constructor)
+    async fn new(
+        root_dir: PathBuf,
+        config: Config,
+        self_tx: mpsc::Sender<WorkspaceCommand>,
+    ) -> Result<Self> {
         // Initialize LSP client
         let lsp_client = LspClient::new("gopls", &[]).await?;
 
@@ -112,7 +116,28 @@ impl Workspace {
             _root_dir: root_dir,
             config,
             inspect_tool: InspectTool::new(),
+            self_tx,
         })
+    }
+
+    /// Spawn a new workspace actor and return the sender for commands
+    pub async fn spawn(
+        root_dir: PathBuf,
+        config: Config,
+    ) -> Result<mpsc::Sender<WorkspaceCommand>> {
+        let (tx, rx) = mpsc::channel(32);
+        let self_tx = tx.clone();
+        let actor_tx = tx.clone();
+
+        let mut workspace = Self::new(root_dir, config, self_tx).await?;
+
+        tokio::spawn(async move {
+            if let Err(e) = workspace.run_actor(actor_tx, rx).await {
+                tracing::error!("Workspace actor failed: {}", e);
+            }
+        });
+
+        Ok(tx)
     }
 
     /// Get or create a Document actor for the given URI
@@ -126,9 +151,6 @@ impl Workspace {
             self.documents.remove(uri);
         }
 
-        // Create new Document actor
-        let (tx, rx) = mpsc::channel(32);
-
         // Parse file path from URI
         let file_path = if let Some(stripped) = uri.strip_prefix("file://") {
             PathBuf::from(stripped)
@@ -136,12 +158,10 @@ impl Workspace {
             PathBuf::from(uri)
         };
 
-        // Spawn Document actor
+        // Spawn Document actor using the new spawn method
         let config = self.config.clone();
-        tokio::spawn(async move {
-            let mut manager = DocumentManager::new(config, &file_path).await?;
-            manager.run_actor(rx).await
-        });
+        let workspace_tx = self.self_tx.clone();
+        let tx = DocumentManager::spawn(config, &file_path, workspace_tx).await?;
 
         // Store sender
         self.documents.insert(uri.to_string(), tx.clone());
@@ -166,53 +186,17 @@ impl Workspace {
 
     /// Generate code for a document
     pub async fn generate_for_document(&mut self, file_uri: &str) -> Result<String> {
-        // Get document actor
+        // DocumentManager should handle generation
         let document = self.get_document(file_uri).await?;
 
-        // Get source code and tree
-        let (source_tx, source_rx) = oneshot::channel();
+        let (response_tx, response_rx) = oneshot::channel();
         document
-            .send(DocumentCommand::GetSource {
-                response: source_tx,
+            .send(DocumentCommand::GenerateAll {
+                response: response_tx,
             })
             .await?;
-        let source = source_rx.await??;
 
-        let (tree_tx, tree_rx) = oneshot::channel();
-        document
-            .send(DocumentCommand::GetTree { response: tree_tx })
-            .await?;
-        let tree = tree_rx.await??;
-
-        // Build target map
-        let target_map = TargetMap::build(&tree, &source)?;
-        let package_name = target_map.package_name().to_string();
-
-        tracing::info!("Found {} targets in file", target_map.len());
-        for target in target_map.targets() {
-            tracing::info!("  - {} ({})", target.name, target.instruction);
-        }
-
-        // Generate for each target
-        let mut generated_results = Vec::new();
-
-        for (target, node) in target_map.targets().zip(target_map.nodes()) {
-            // Create target generator with file URI
-            let _target_generator =
-                TargetGenerator::new(target, &package_name, *node, file_uri.to_string());
-
-            // Generate code using Workspace (need tx here)
-            // This method should not be called directly, but through WorkspaceCommand
-            let generated_code = String::new(); // Placeholder
-
-            generated_results.push((target.clone(), generated_code));
-
-            tracing::debug!("Generated code for target: {}", target.name);
-        }
-
-        // Apply generated code back to document
-        // For now, just return the source (actual application would be done in DocumentManager)
-        Ok(source.clone())
+        response_rx.await?
     }
 
     /// Shutdown all Document actors
@@ -223,8 +207,8 @@ impl Workspace {
         }
     }
 
-    /// Run the actor's event loop
-    pub async fn run_actor(
+    /// Run the actor's event loop (internal)
+    async fn run_actor(
         &mut self,
         tx: mpsc::Sender<WorkspaceCommand>,
         mut rx: mpsc::Receiver<WorkspaceCommand>,
@@ -260,20 +244,10 @@ impl Workspace {
                         let _ = response.send(result);
                     });
                 }
-                WorkspaceCommand::GenerateForDocument {
-                    file_uri: _,
-                    response,
-                } => {
-                    // Clone necessary data for the task
-                    let _workspace_tx = tx.clone();
-
-                    // Spawn generation as a separate task
-                    tokio::spawn(async move {
-                        // Use workspace_tx to communicate with Workspace
-                        // For now, return placeholder
-                        let result = Ok("Generation not yet implemented".to_string());
-                        let _ = response.send(result);
-                    });
+                WorkspaceCommand::GenerateForDocument { file_uri, response } => {
+                    // Simply call the existing method
+                    let result = self.generate_for_document(&file_uri).await;
+                    let _ = response.send(result);
                 }
                 WorkspaceCommand::Shutdown => {
                     self.shutdown().await;
