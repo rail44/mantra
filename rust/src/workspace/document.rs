@@ -82,7 +82,7 @@ impl Handler<GenerateAll> for DocumentActor {
 
         // Build target map
         let source = self.editor.source();
-        let target_map = match TargetMap::build(&self.tree, &source) {
+        let target_map = match TargetMap::build(&self.tree, source) {
             Ok(map) => map,
             Err(e) => {
                 error!("Failed to build target map: {}", e);
@@ -160,7 +160,7 @@ impl Handler<GetTargetInfo> for DocumentActor {
 
     fn handle(&mut self, msg: GetTargetInfo, _ctx: &mut Context<Self>) -> Self::Result {
         let source = self.editor.source();
-        let target_map = TargetMap::build(&self.tree, &source)?;
+        let target_map = TargetMap::build(&self.tree, source)?;
 
         if let Some((target, node)) = target_map.get(msg.checksum) {
             let start_line = node.start_position().row as u32;
@@ -269,7 +269,7 @@ impl DocumentActor {
 
         // Get the node and body range, then drop target_map
         let (body_start, body_end) = {
-            let target_map = TargetMap::build(&self.tree, &source)?;
+            let target_map = TargetMap::build(&self.tree, source)?;
 
             if let Some((_target, node)) = target_map.get(checksum) {
                 // Get the function body node
@@ -322,7 +322,7 @@ impl DocumentActor {
         let new_source = self.editor.source();
         self.tree = self
             .parser
-            .parse_incremental(&new_source, Some(&self.tree))
+            .parse_incremental(new_source, Some(&self.tree))
             .with_context(|| "Failed to reparse after edit")?;
 
         // Increment document version
@@ -404,7 +404,7 @@ fn clean_generated_code(code: String) -> String {
     let mut result = String::new();
     for line in lines {
         if !line.is_empty() {
-            result.push_str("\t");
+            result.push('\t');
             result.push_str(line);
         }
         result.push('\n');
