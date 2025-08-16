@@ -8,6 +8,12 @@ pub mod inspect {
     #[derive(Debug, Clone)]
     pub struct InspectTool;
 
+    impl Default for InspectTool {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl InspectTool {
         pub fn new() -> Self {
             Self

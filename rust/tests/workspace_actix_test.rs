@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use mantra::config::Config;
-use mantra::workspace::workspace_actix::{
-    GenerateFile, GetLlmClient, GetLspClient, RegisterScope, Shutdown, WorkspaceActor,
+use mantra::workspace::{
+    GenerateFile, GetLlmClient, GetLspClient, RegisterScope, Shutdown, Workspace,
 };
 
 /// テスト用の最小限の設定を作成
@@ -43,9 +43,8 @@ fn test_workspace_actor_lifecycle() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let root_dir = temp_dir.path().to_path_buf();
 
-        // WorkspaceActorを作成して起動
-        let workspace = WorkspaceActor::new(root_dir.clone(), test_config()).await?;
-        let addr = workspace.start();
+        // Workspaceアクターを作成して起動
+        let addr = Workspace::start_actor(root_dir.clone(), test_config()).await?;
 
         // GetLspClientメッセージをテスト
         let _lsp_client = addr.send(GetLspClient).await?;
@@ -96,9 +95,8 @@ fn test_generate_file_placeholder() -> Result<()> {
         let root_dir = temp_dir.path().to_path_buf();
         let test_file = create_test_go_file(&temp_dir).await?;
 
-        // WorkspaceActorを作成して起動
-        let workspace = WorkspaceActor::new(root_dir.clone(), test_config()).await?;
-        let addr = workspace.start();
+        // Workspaceアクターを作成して起動
+        let addr = Workspace::start_actor(root_dir.clone(), test_config()).await?;
 
         // GenerateFileメッセージをテスト（現在はプレースホルダー実装）
         let result = addr
@@ -139,15 +137,12 @@ fn test_multiple_workspace_actors() -> Result<()> {
     let system = System::new();
 
     system.block_on(async {
-        // 複数のWorkspaceActorを作成
+        // 複数のWorkspaceアクターを作成
         let temp_dir1 = TempDir::new()?;
         let temp_dir2 = TempDir::new()?;
 
-        let workspace1 = WorkspaceActor::new(temp_dir1.path().to_path_buf(), test_config()).await?;
-        let workspace2 = WorkspaceActor::new(temp_dir2.path().to_path_buf(), test_config()).await?;
-
-        let addr1 = workspace1.start();
-        let addr2 = workspace2.start();
+        let addr1 = Workspace::start_actor(temp_dir1.path().to_path_buf(), test_config()).await?;
+        let addr2 = Workspace::start_actor(temp_dir2.path().to_path_buf(), test_config()).await?;
 
         // 両方のアクターが独立して動作することを確認
         let _lsp1 = addr1.send(GetLspClient).await?;
