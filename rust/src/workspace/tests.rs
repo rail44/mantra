@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod workspace_tests {
     use super::super::*;
     use crate::config::Config;
     use crate::document::DocumentCommand;
@@ -20,9 +20,12 @@ mod tests {
     async fn test_workspace_creation() {
         let root_dir = PathBuf::from(".");
         let config = create_test_config().await;
-        
+
         let workspace = Workspace::new(root_dir, config).await;
-        assert!(workspace.is_ok(), "Workspace should be created successfully");
+        assert!(
+            workspace.is_ok(),
+            "Workspace should be created successfully"
+        );
     }
 
     #[tokio::test]
@@ -37,7 +40,10 @@ mod tests {
         std::fs::write(test_file, test_content).unwrap();
 
         // Get document actor
-        let uri = format!("file://{}", std::env::current_dir().unwrap().join(test_file).display());
+        let uri = format!(
+            "file://{}",
+            std::env::current_dir().unwrap().join(test_file).display()
+        );
         let document_sender = workspace.get_document(&uri).await.unwrap();
 
         // Test getting source
@@ -56,7 +62,7 @@ mod tests {
         std::fs::remove_file(test_file).ok();
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_document_actor_reuse() {
         let root_dir = PathBuf::from(".");
         let config = create_test_config().await;
@@ -66,12 +72,15 @@ mod tests {
         let test_file = "target/test_workspace_reuse.go";
         std::fs::write(test_file, "package main").unwrap();
 
-        let uri = format!("file://{}", std::env::current_dir().unwrap().join(test_file).display());
-        
+        let uri = format!(
+            "file://{}",
+            std::env::current_dir().unwrap().join(test_file).display()
+        );
+
         // Get document actor twice - should reuse the same actor
         let _sender1 = workspace.get_document(&uri).await.unwrap();
         let sender2 = workspace.get_document(&uri).await.unwrap();
-        
+
         // Both senders should work
         let (tx, rx) = oneshot::channel();
         sender2

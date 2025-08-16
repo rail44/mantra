@@ -35,6 +35,11 @@ pub enum DocumentCommand {
     GetTree {
         response: oneshot::Sender<Result<Tree>>,
     },
+    /// Get definition block at a position
+    GetDefinitionBlock {
+        position: Position,
+        response: oneshot::Sender<Result<(Range, String)>>,
+    },
     /// Generate code for all targets
     GenerateAll {
         response: oneshot::Sender<Result<String>>,
@@ -489,6 +494,9 @@ impl DocumentManager {
                     let tree = self.parser.parse(self.editor.source());
                     let _ = response.send(tree);
                 }
+                DocumentCommand::GetDefinitionBlock { position, response } => {
+                    let _ = response.send(self.get_definition_block(position));
+                }
                 DocumentCommand::GenerateAll { response } => {
                     let result = self.generate_all().await;
                     let _ = response.send(result);
@@ -529,8 +537,8 @@ impl DocumentManager {
             return None;
         }
 
-        // Check if this node is an identifier with matching text
-        if node.kind() == "identifier" {
+        // Check if this node is an identifier or type_identifier with matching text
+        if node.kind() == "identifier" || node.kind() == "type_identifier" {
             if let Ok(text) = node.utf8_text(self.editor.source().as_bytes()) {
                 if text == symbol {
                     let point = node.start_position();
@@ -570,6 +578,79 @@ impl DocumentManager {
     fn position_to_byte(&self, position: Position) -> Result<usize> {
         let (line, col) = (position.line as usize, position.character as usize);
         Ok(self.editor.line_col_to_byte(line, col))
+    }
+
+    /// Get the complete definition block at a position
+    fn get_definition_block(&self, position: Position) -> Result<(Range, String)> {
+        let byte_offset = self.position_to_byte(position)?;
+
+        // Find the definition node containing this position
+        let root = self.tree.root_node();
+        let definition_node = Self::find_definition_node(&root, byte_offset)
+            .ok_or_else(|| anyhow::anyhow!("No definition found at position"))?;
+
+        // Convert node bounds to Range
+        let start_point = definition_node.start_position();
+        let end_point = definition_node.end_position();
+
+        let range = Range {
+            start: Position {
+                line: start_point.row as u32,
+                character: start_point.column as u32,
+            },
+            end: Position {
+                line: end_point.row as u32,
+                character: end_point.column as u32,
+            },
+        };
+
+        // Extract the text
+        let text = definition_node
+            .utf8_text(self.editor.source().as_bytes())?
+            .to_string();
+
+        Ok((range, text))
+    }
+
+    /// Find the definition node (struct, function, etc.) containing the given byte
+    fn find_definition_node<'a>(
+        node: &tree_sitter::Node<'a>,
+        byte_offset: usize,
+    ) -> Option<tree_sitter::Node<'a>> {
+        // Check if this node contains the byte offset
+        if node.start_byte() > byte_offset || node.end_byte() < byte_offset {
+            return None;
+        }
+
+        // Check if this is a definition node type
+        let is_definition = matches!(
+            node.kind(),
+            "type_declaration"
+                | "type_spec"
+                | "struct_type"
+                | "function_declaration"
+                | "method_declaration"
+                | "interface_type"
+                | "const_declaration"
+                | "var_declaration"
+        );
+
+        // Try to find a more specific child node
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.start_byte() <= byte_offset && child.end_byte() >= byte_offset {
+                if let Some(def_node) = Self::find_definition_node(&child, byte_offset) {
+                    return Some(def_node);
+                }
+            }
+        }
+
+        // If this is a definition node, return it
+        if is_definition {
+            return Some(*node);
+        }
+
+        None
     }
 }
 

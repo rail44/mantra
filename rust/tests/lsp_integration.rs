@@ -7,7 +7,7 @@ use mantra::lsp::{Client as LspClient, Position, TextDocumentIdentifier, TextDoc
 #[ignore] // Run with --ignored flag when gopls is available
 async fn test_lsp_basic_operations() -> Result<()> {
     let client = LspClient::new("gopls", &[]).await?;
-    
+
     // Initialize
     let _init_result = client
         .initialize(
@@ -23,10 +23,10 @@ async fn test_lsp_basic_operations() -> Result<()> {
             None,
         )
         .await?;
-    
+
     // InitializeResult is returned successfully
     client.initialized().await?;
-    
+
     // Open a document
     let test_content = r#"package main
 
@@ -35,7 +35,7 @@ import "fmt"
 func main() {
     fmt.Println("Hello, World!")
 }"#;
-    
+
     client
         .did_open(TextDocumentItem {
             uri: "file:///tmp/test.go".to_string(),
@@ -44,22 +44,25 @@ func main() {
             text: test_content.to_string(),
         })
         .await?;
-    
+
     // Test hover
     let hover_result = client
         .hover(
             TextDocumentIdentifier {
                 uri: "file:///tmp/test.go".to_string(),
             },
-            Position { line: 5, character: 8 }, // Position on "Println"
+            Position {
+                line: 5,
+                character: 8,
+            }, // Position on "Println"
         )
         .await?;
-    
+
     assert!(hover_result.is_some(), "Hover should return information");
-    
+
     // Shutdown
     client.shutdown().await?;
-    
+
     Ok(())
 }
 
@@ -68,7 +71,7 @@ func main() {
 #[ignore] // Run with --ignored flag when gopls is available
 async fn test_lsp_definition() -> Result<()> {
     let client = LspClient::new("gopls", &[]).await?;
-    
+
     // Initialize with definition capability
     client
         .initialize(
@@ -85,7 +88,7 @@ async fn test_lsp_definition() -> Result<()> {
         )
         .await?;
     client.initialized().await?;
-    
+
     // Open a document with a function call
     let test_content = r#"package main
 
@@ -97,7 +100,7 @@ func main() {
     result := helper()
     println(result)
 }"#;
-    
+
     client
         .did_open(TextDocumentItem {
             uri: "file:///tmp/test_def.go".to_string(),
@@ -106,23 +109,29 @@ func main() {
             text: test_content.to_string(),
         })
         .await?;
-    
+
     // Test definition - should find the helper function
     let definition = client
         .definition(
             TextDocumentIdentifier {
                 uri: "file:///tmp/test_def.go".to_string(),
             },
-            Position { line: 7, character: 14 }, // Position on "helper" call
+            Position {
+                line: 7,
+                character: 14,
+            }, // Position on "helper" call
         )
         .await?;
-    
+
     if let Some(loc) = definition {
-        assert_eq!(loc.range.start.line, 2, "Should find function definition at line 2");
+        assert_eq!(
+            loc.range.start.line, 2,
+            "Should find function definition at line 2"
+        );
     }
-    
+
     // Shutdown
     client.shutdown().await?;
-    
+
     Ok(())
 }
