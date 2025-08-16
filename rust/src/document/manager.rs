@@ -622,20 +622,30 @@ impl DocumentManager {
             return None;
         }
 
-        // Check if this is a definition node type
-        let is_definition = matches!(
+        // Check if this is a complete definition node type
+        let is_complete_definition = matches!(
             node.kind(),
-            "type_declaration"
-                | "type_spec"
-                | "struct_type"
-                | "function_declaration"
-                | "method_declaration"
-                | "interface_type"
-                | "const_declaration"
-                | "var_declaration"
+            "type_declaration"  // Complete: type User struct { ... }
+                | "function_declaration"  // Complete: func Foo() { ... }
+                | "method_declaration"  // Complete: func (r Receiver) Method() { ... }
+                | "const_declaration"  // Complete: const FOO = ...
+                | "var_declaration" // Complete: var foo = ...
         );
 
-        // Try to find a more specific child node
+        // If this is a complete definition, return it immediately
+        if is_complete_definition {
+            return Some(*node);
+        }
+
+        // Check if this is a partial definition that needs parent
+        let needs_parent = matches!(
+            node.kind(),
+            "type_spec"  // Part of type_declaration
+                | "struct_type"  // Just the struct body
+                | "interface_type" // Just the interface body
+        );
+
+        // Try to find a more specific child node first
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.start_byte() <= byte_offset && child.end_byte() >= byte_offset {
@@ -645,9 +655,10 @@ impl DocumentManager {
             }
         }
 
-        // If this is a definition node, return it
-        if is_definition {
-            return Some(*node);
+        // If this is a partial definition that needs parent context,
+        // we'll return None here and let the parent be found
+        if needs_parent {
+            return None;
         }
 
         None
