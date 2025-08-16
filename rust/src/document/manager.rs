@@ -1,6 +1,7 @@
 use anyhow::Result;
 use futures::future::join_all;
 use std::path::Path;
+use tokio::sync::{mpsc, oneshot};
 use tree_sitter::{InputEdit, Point, Tree};
 
 use crate::config::Config;
@@ -9,9 +10,38 @@ use crate::generation::{EditEvent, TargetGenerator};
 use crate::llm::LLMClient;
 use crate::lsp::{
     client::{TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier},
-    Client as LspClient, TextDocumentItem,
+    Client as LspClient, Position, Range, TextDocumentItem,
 };
 use crate::parser::{target_map::TargetMap, GoParser};
+
+/// Commands that can be sent to a DocumentManager actor
+pub enum DocumentCommand {
+    /// Find a symbol within a range and return its position
+    FindSymbol {
+        range: Range,
+        symbol: String,
+        response: oneshot::Sender<Result<Position>>,
+    },
+    /// Get text within a range
+    GetText {
+        range: Range,
+        response: oneshot::Sender<Result<String>>,
+    },
+    /// Get the full source text
+    GetSource {
+        response: oneshot::Sender<Result<String>>,
+    },
+    /// Get a copy of the parse tree
+    GetTree {
+        response: oneshot::Sender<Result<Tree>>,
+    },
+    /// Generate code for all targets
+    GenerateAll {
+        response: oneshot::Sender<Result<String>>,
+    },
+    /// Shutdown the actor
+    Shutdown,
+}
 
 /// Manages document state including Tree-sitter tree and coordinates generation
 pub struct DocumentManager {
@@ -435,6 +465,111 @@ impl DocumentManager {
         }
 
         Ok(())
+    }
+
+    /// Run the actor's event loop
+    pub async fn run_actor(&mut self, mut rx: mpsc::Receiver<DocumentCommand>) -> Result<()> {
+        while let Some(command) = rx.recv().await {
+            match command {
+                DocumentCommand::FindSymbol {
+                    range,
+                    symbol,
+                    response,
+                } => {
+                    let _ = response.send(self.find_symbol(range, symbol));
+                }
+                DocumentCommand::GetText { range, response } => {
+                    let _ = response.send(self.get_text(range));
+                }
+                DocumentCommand::GetSource { response } => {
+                    let _ = response.send(Ok(self.editor.source().to_string()));
+                }
+                DocumentCommand::GetTree { response } => {
+                    // Parse a fresh copy since Tree doesn't implement Clone
+                    let tree = self.parser.parse(self.editor.source());
+                    let _ = response.send(tree);
+                }
+                DocumentCommand::GenerateAll { response } => {
+                    let result = self.generate_all().await;
+                    let _ = response.send(result);
+                }
+                DocumentCommand::Shutdown => {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Find a symbol within a range
+    fn find_symbol(&self, range: Range, symbol: String) -> Result<Position> {
+        // Convert LSP range to byte offsets
+        let start_byte = self.position_to_byte(range.start)?;
+        let end_byte = self.position_to_byte(range.end)?;
+
+        // Find the symbol in the tree within the range
+        let root = self.tree.root_node();
+        if let Some(position) = self.find_symbol_in_node(&root, &symbol, start_byte, end_byte) {
+            Ok(position)
+        } else {
+            anyhow::bail!("Symbol '{}' not found in range", symbol)
+        }
+    }
+
+    /// Find symbol in node recursively
+    fn find_symbol_in_node(
+        &self,
+        node: &tree_sitter::Node,
+        symbol: &str,
+        start_byte: usize,
+        end_byte: usize,
+    ) -> Option<Position> {
+        // Check if node is within range
+        if node.end_byte() < start_byte || node.start_byte() > end_byte {
+            return None;
+        }
+
+        // Check if this node is an identifier with matching text
+        if node.kind() == "identifier" {
+            if let Ok(text) = node.utf8_text(self.editor.source().as_bytes()) {
+                if text == symbol {
+                    let point = node.start_position();
+                    return Some(Position {
+                        line: point.row as u32,
+                        character: point.column as u32,
+                    });
+                }
+            }
+        }
+
+        // Recursively search children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(pos) = self.find_symbol_in_node(&child, symbol, start_byte, end_byte) {
+                return Some(pos);
+            }
+        }
+
+        None
+    }
+
+    /// Get text within a range
+    fn get_text(&self, range: Range) -> Result<String> {
+        let start_byte = self.position_to_byte(range.start)?;
+        let end_byte = self.position_to_byte(range.end)?;
+
+        let source = self.editor.source();
+        if start_byte > source.len() || end_byte > source.len() {
+            anyhow::bail!("Range out of bounds");
+        }
+
+        Ok(source[start_byte..end_byte].to_string())
+    }
+
+    /// Convert LSP Position to byte offset
+    fn position_to_byte(&self, position: Position) -> Result<usize> {
+        let (line, col) = (position.line as usize, position.character as usize);
+        Ok(self.editor.line_col_to_byte(line, col))
     }
 }
 

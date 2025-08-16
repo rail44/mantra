@@ -1,3 +1,3 @@
 pub mod manager;
 
-pub use manager::DocumentManager;
+pub use manager::{DocumentCommand, DocumentManager};

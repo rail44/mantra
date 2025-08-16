@@ -8,6 +8,6 @@ pub use client::Client;
 pub use notification::NotificationHandler;
 pub use rpc::{
     Diagnostic, DidOpenTextDocumentParams, Hover, HoverParams, InitializeParams, InitializeResult,
-    LspRpcClient, MarkupContent, Position, PublishDiagnosticsParams, Range, ServerCapabilities,
-    ServerInfo, TextDocumentIdentifier, TextDocumentItem,
+    Location, LspRpcClient, MarkupContent, Position, PublishDiagnosticsParams, Range,
+    ServerCapabilities, ServerInfo, TextDocumentIdentifier, TextDocumentItem,
 };

@@ -180,6 +180,74 @@ impl Client {
         }
     }
 
+    /// Get definition location(s) of a symbol
+    pub async fn definition(
+        &self,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+    ) -> Result<Option<crate::lsp::Location>> {
+        let params = HoverParams {
+            text_document,
+            position,
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/definition", params)
+            .await?;
+
+        // Handle null response as None
+        if result.is_null() {
+            Ok(None)
+        } else {
+            // Could be Location or Location[]
+            if let Ok(location) = serde_json::from_value::<crate::lsp::Location>(result.clone()) {
+                Ok(Some(location))
+            } else if let Ok(locations) =
+                serde_json::from_value::<Vec<crate::lsp::Location>>(result)
+            {
+                Ok(locations.into_iter().next())
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    /// Get type definition location(s) of a symbol
+    pub async fn type_definition(
+        &self,
+        text_document: TextDocumentIdentifier,
+        position: Position,
+    ) -> Result<Option<crate::lsp::Location>> {
+        let params = HoverParams {
+            text_document,
+            position,
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/typeDefinition", params)
+            .await?;
+
+        // Handle null response as None
+        if result.is_null() {
+            Ok(None)
+        } else {
+            // Could be Location or Location[]
+            if let Ok(location) = serde_json::from_value::<crate::lsp::Location>(result.clone()) {
+                Ok(Some(location))
+            } else if let Ok(locations) =
+                serde_json::from_value::<Vec<crate::lsp::Location>>(result)
+            {
+                Ok(locations.into_iter().next())
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
     /// Open a text document notification
     pub async fn did_open(&self, text_document: TextDocumentItem) -> Result<()> {
         let params = DidOpenParams { text_document };
