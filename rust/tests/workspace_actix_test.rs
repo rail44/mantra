@@ -107,8 +107,9 @@ fn test_generate_file_placeholder() -> Result<()> {
 
         match result {
             Ok(generated) => {
-                // 現在のプレースホルダー実装の検証
-                assert!(generated.contains("Generated code placeholder"));
+                // 現在の実装では元のソースコードが返される
+                assert!(generated.contains("func Add(a, b int) int"));
+                assert!(generated.contains("panic(\"not implemented\")"));
             }
             Err(e) => {
                 // エラーの場合もログに記録

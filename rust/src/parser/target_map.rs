@@ -118,6 +118,14 @@ impl<'a> TargetMap<'a> {
     pub fn package_name(&self) -> &str {
         &self.package_name
     }
+
+    /// Get all targets with checksum and node
+    pub fn all_targets(&self) -> Vec<(u64, Target, Node<'a>)> {
+        self.map
+            .iter()
+            .map(|(checksum, (target, node))| (*checksum, target.clone(), *node))
+            .collect()
+    }
 }
 
 /// Extract package name from package clause node
