@@ -3,24 +3,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::lsp::{Position, Range, TextDocumentIdentifier};
-use crate::workspace::Workspace;
+use tokio::sync::{mpsc, oneshot};
+
+use crate::document::DocumentCommand;
 
 /// Tool for inspecting symbols in code
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct InspectTool {
     /// Map of scope IDs to their locations
-    scopes: HashMap<String, ScopeInfo>,
+    pub scopes: HashMap<String, ScopeInfo>,
     /// Counter for generating unique scope IDs
     next_scope_id: usize,
 }
 
 /// Information about a scope
 #[derive(Debug, Clone)]
-struct ScopeInfo {
+pub struct ScopeInfo {
     /// File URI
-    uri: String,
+    pub uri: String,
     /// Range in the file
-    range: Range,
+    pub range: Range,
 }
 
 /// Request to inspect a symbol
@@ -62,7 +64,7 @@ impl InspectTool {
     pub async fn inspect(
         &mut self,
         request: InspectRequest,
-        workspace: &mut Workspace,
+        workspace: mpsc::Sender<crate::workspace::WorkspaceCommand>,
     ) -> Result<InspectResponse> {
         // Get scope information
         let scope_info = self
@@ -71,13 +73,20 @@ impl InspectTool {
             .ok_or_else(|| anyhow::anyhow!("Unknown scope ID: {}", request.scope_id))?
             .clone();
 
-        // Get document actor
-        let document = workspace.get_document(&scope_info.uri).await?;
+        // Get document actor from Workspace
+        let (tx, rx) = oneshot::channel();
+        workspace
+            .send(crate::workspace::WorkspaceCommand::GetDocument {
+                uri: scope_info.uri.clone(),
+                response: tx,
+            })
+            .await?;
+        let document = rx.await??;
 
         // Find symbol position within the scope
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         document
-            .send(crate::document::DocumentCommand::FindSymbol {
+            .send(DocumentCommand::FindSymbol {
                 range: scope_info.range.clone(),
                 symbol: request.symbol.clone(),
                 response: tx,
@@ -86,8 +95,14 @@ impl InspectTool {
 
         let symbol_position = rx.await??;
 
+        // Get LSP client from Workspace
+        let (tx, rx) = oneshot::channel();
+        workspace
+            .send(crate::workspace::WorkspaceCommand::GetLspClient { response: tx })
+            .await?;
+        let lsp_client = rx.await?;
+
         // Use LSP to find definition
-        let lsp_client = workspace.lsp_client();
         let definition = lsp_client
             .definition(
                 TextDocumentIdentifier {
@@ -100,8 +115,15 @@ impl InspectTool {
         let definition_location = definition
             .ok_or_else(|| anyhow::anyhow!("No definition found for symbol: {}", request.symbol))?;
 
-        // Get the definition's complete block
-        let definition_document = workspace.get_document(&definition_location.uri).await?;
+        // Get the definition's document actor
+        let (tx, rx) = oneshot::channel();
+        workspace
+            .send(crate::workspace::WorkspaceCommand::GetDocument {
+                uri: definition_location.uri.clone(),
+                response: tx,
+            })
+            .await?;
+        let definition_document = rx.await??;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         definition_document

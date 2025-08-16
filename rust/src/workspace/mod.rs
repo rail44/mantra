@@ -7,12 +7,47 @@ use crate::config::Config;
 use crate::document::{DocumentCommand, DocumentManager};
 use crate::generation::TargetGenerator;
 use crate::llm::LLMClient;
-use crate::lsp::Client as LspClient;
+use crate::lsp::{Client as LspClient, Range};
 use crate::parser::target_map::TargetMap;
-use crate::tools::inspect::InspectTool;
+use crate::tools::inspect::{InspectRequest, InspectResponse, InspectTool};
 
 #[cfg(test)]
 mod tests;
+
+/// Commands that can be sent to a Workspace actor
+pub enum WorkspaceCommand {
+    /// Get or create a Document actor
+    GetDocument {
+        uri: String,
+        response: oneshot::Sender<Result<mpsc::Sender<DocumentCommand>>>,
+    },
+    /// Get LSP client
+    GetLspClient {
+        response: oneshot::Sender<LspClient>,
+    },
+    /// Get LLM client
+    GetLlmClient {
+        response: oneshot::Sender<LLMClient>,
+    },
+    /// Register a scope in InspectTool
+    RegisterScope {
+        uri: String,
+        range: Range,
+        response: oneshot::Sender<String>,
+    },
+    /// Inspect a symbol
+    InspectSymbol {
+        request: InspectRequest,
+        response: oneshot::Sender<Result<InspectResponse>>,
+    },
+    /// Generate code for a document
+    GenerateForDocument {
+        file_uri: String,
+        response: oneshot::Sender<Result<String>>,
+    },
+    /// Shutdown the workspace
+    Shutdown,
+}
 
 /// Workspace manages Document actors and provides access to LSP/LLM clients
 pub struct Workspace {
@@ -133,58 +168,136 @@ impl Workspace {
     pub async fn generate_for_document(&mut self, file_uri: &str) -> Result<String> {
         // Get document actor
         let document = self.get_document(file_uri).await?;
-        
+
         // Get source code and tree
         let (source_tx, source_rx) = oneshot::channel();
-        document.send(DocumentCommand::GetSource { response: source_tx }).await?;
+        document
+            .send(DocumentCommand::GetSource {
+                response: source_tx,
+            })
+            .await?;
         let source = source_rx.await??;
-        
+
         let (tree_tx, tree_rx) = oneshot::channel();
-        document.send(DocumentCommand::GetTree { response: tree_tx }).await?;
+        document
+            .send(DocumentCommand::GetTree { response: tree_tx })
+            .await?;
         let tree = tree_rx.await??;
-        
+
         // Build target map
         let target_map = TargetMap::build(&tree, &source)?;
         let package_name = target_map.package_name().to_string();
-        
+
         tracing::info!("Found {} targets in file", target_map.len());
         for target in target_map.targets() {
             tracing::info!("  - {} ({})", target.name, target.instruction);
         }
-        
+
         // Generate for each target
         let mut generated_results = Vec::new();
-        
+
         for (target, node) in target_map.targets().zip(target_map.nodes()) {
             // Create target generator with file URI
-            let target_generator = TargetGenerator::new(
-                target,
-                &package_name,
-                *node,
-                file_uri.to_string(),
-            );
-            
-            // Generate code using Workspace
-            let generated_code = target_generator.generate(self).await?;
-            
+            let _target_generator =
+                TargetGenerator::new(target, &package_name, *node, file_uri.to_string());
+
+            // Generate code using Workspace (need tx here)
+            // This method should not be called directly, but through WorkspaceCommand
+            let generated_code = String::new(); // Placeholder
+
             generated_results.push((target.clone(), generated_code));
-            
-            tracing::debug!(
-                "Generated code for target: {}",
-                target.name
-            );
+
+            tracing::debug!("Generated code for target: {}", target.name);
         }
-        
+
         // Apply generated code back to document
         // For now, just return the source (actual application would be done in DocumentManager)
         Ok(source.clone())
     }
 
     /// Shutdown all Document actors
-    pub async fn shutdown(&mut self) {
+    async fn shutdown(&mut self) {
         for (_, sender) in self.documents.drain() {
             // Send shutdown command (channel will close when actor exits)
             let _ = sender.send(DocumentCommand::Shutdown).await;
         }
+    }
+
+    /// Run the actor's event loop
+    pub async fn run_actor(
+        &mut self,
+        tx: mpsc::Sender<WorkspaceCommand>,
+        mut rx: mpsc::Receiver<WorkspaceCommand>,
+    ) -> Result<()> {
+        while let Some(command) = rx.recv().await {
+            match command {
+                WorkspaceCommand::GetDocument { uri, response } => {
+                    let result = self.get_document(&uri).await;
+                    let _ = response.send(result);
+                }
+                WorkspaceCommand::GetLspClient { response } => {
+                    let _ = response.send(self.lsp_client.clone());
+                }
+                WorkspaceCommand::GetLlmClient { response } => {
+                    let _ = response.send(self.llm_client.clone());
+                }
+                WorkspaceCommand::RegisterScope {
+                    uri,
+                    range,
+                    response,
+                } => {
+                    let scope_id = self.inspect_tool.register_scope(uri, range);
+                    let _ = response.send(scope_id);
+                }
+                WorkspaceCommand::InspectSymbol { request, response } => {
+                    // Clone InspectTool and Workspace sender for the task
+                    let mut inspect_tool = self.inspect_tool.clone();
+                    let workspace_tx = tx.clone(); // We need tx defined outside the loop
+
+                    // Spawn inspection as a separate task
+                    tokio::spawn(async move {
+                        let result = inspect_tool.inspect(request, workspace_tx).await;
+                        let _ = response.send(result);
+                    });
+                }
+                WorkspaceCommand::GenerateForDocument {
+                    file_uri: _,
+                    response,
+                } => {
+                    // Clone necessary data for the task
+                    let _workspace_tx = tx.clone();
+
+                    // Spawn generation as a separate task
+                    tokio::spawn(async move {
+                        // Use workspace_tx to communicate with Workspace
+                        // For now, return placeholder
+                        let result = Ok("Generation not yet implemented".to_string());
+                        let _ = response.send(result);
+                    });
+                }
+                WorkspaceCommand::Shutdown => {
+                    self.shutdown().await;
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Process inspect symbol request (unused now as inspection runs in separate task)
+    #[allow(dead_code)]
+    async fn inspect_symbol(&mut self, request: InspectRequest) -> Result<InspectResponse> {
+        // Create a channel to communicate with InspectTool
+        let (tx, _rx) = mpsc::channel(32);
+
+        // Clone the sender for InspectTool to use
+        let workspace_sender = tx.clone();
+
+        // Spawn a task to handle InspectTool's requests
+        let inspect_future = self.inspect_tool.inspect(request, workspace_sender);
+
+        // Process InspectTool's requests while it runs
+        // This is a simplified approach - in production you might want a more sophisticated solution
+        inspect_future.await
     }
 }

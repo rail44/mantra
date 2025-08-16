@@ -83,14 +83,31 @@ func GetUser(id string) *User {
         symbol: "User".to_string(),
     };
 
-    let response = tool.inspect(request, &mut workspace).await?;
+    // Create channels for workspace actor
+    let (workspace_tx, workspace_rx) = tokio::sync::mpsc::channel(32);
+
+    // Clone for the spawned task
+    let workspace_tx_clone = workspace_tx.clone();
+
+    // Spawn workspace actor
+    let workspace_handle =
+        tokio::spawn(async move { workspace.run_actor(workspace_tx_clone, workspace_rx).await });
+
+    let response = tool.inspect(request, workspace_tx.clone()).await?;
 
     // Check response
     assert!(response.code.contains("struct"));
     assert!(response.code.contains("Name string"));
 
     // Clean up
-    workspace.shutdown().await;
+    // Send shutdown command
+    workspace_tx
+        .send(mantra::workspace::WorkspaceCommand::Shutdown)
+        .await?;
+
+    // Wait for workspace to shutdown
+    let _ = workspace_handle.await;
+
     std::fs::remove_file(test_file).ok();
 
     Ok(())

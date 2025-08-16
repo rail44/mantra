@@ -60,12 +60,30 @@ func main() {
     let mut workspace = Workspace::new(PathBuf::from("."), config).await?;
     println!("Workspace initialized");
 
+    // Create channels for workspace actor
+    let (workspace_tx, workspace_rx) = tokio::sync::mpsc::channel(32);
+
+    // Clone workspace_tx for later use
+    let workspace_tx_clone = workspace_tx.clone();
+
+    // Spawn workspace actor
+    let workspace_handle =
+        tokio::spawn(async move { workspace.run_actor(workspace_tx_clone, workspace_rx).await });
+
     // Get document actor
     let file_uri = format!(
         "file://{}",
         std::env::current_dir()?.join(test_file).display()
     );
-    let document = workspace.get_document(&file_uri).await?;
+
+    let (tx, rx) = oneshot::channel();
+    workspace_tx
+        .send(mantra::workspace::WorkspaceCommand::GetDocument {
+            uri: file_uri.clone(),
+            response: tx,
+        })
+        .await?;
+    let document = rx.await??;
     println!("Document actor created for: {}", file_uri);
 
     // Test 1: Get source to verify document is loaded
@@ -127,7 +145,14 @@ func main() {
 
     // First, let's check what LSP returns directly
     println!("\n--- Debug: LSP definition check ---");
-    let lsp_client = workspace.lsp_client();
+
+    // Get LSP client through message passing
+    let (tx, rx) = oneshot::channel();
+    workspace_tx
+        .send(mantra::workspace::WorkspaceCommand::GetLspClient { response: tx })
+        .await?;
+    let lsp_client = rx.await?;
+
     let symbol_pos = Position {
         line: 10,
         character: 26,
@@ -167,7 +192,7 @@ func main() {
     }
     println!("--- End debug ---\n");
 
-    match inspect_tool.inspect(request, &mut workspace).await {
+    match inspect_tool.inspect(request, workspace_tx.clone()).await {
         Ok(response) => {
             println!("Success! New scope: {}", response.scope_id);
             println!("Definition code:\n{}", response.code);
@@ -179,7 +204,14 @@ func main() {
     }
 
     // Cleanup
-    workspace.shutdown().await;
+    // Send shutdown command
+    workspace_tx
+        .send(mantra::workspace::WorkspaceCommand::Shutdown)
+        .await?;
+
+    // Wait for workspace to shutdown
+    let _ = workspace_handle.await;
+
     std::fs::remove_file(test_file).ok();
     println!("\nDemo completed!");
 

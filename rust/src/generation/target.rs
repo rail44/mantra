@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use tree_sitter::Node;
 
 use crate::llm::{CompletionRequest, Message, ProviderSpec};
-use crate::lsp::{Position, TextDocumentIdentifier};
-use crate::parser::target::{get_function_type_positions, Target};
-use crate::workspace::Workspace;
+use crate::parser::target::Target;
 
 /// Generates code for a single target function
 pub struct TargetGenerator<'a> {
@@ -31,10 +30,13 @@ impl<'a> TargetGenerator<'a> {
     }
 
     /// Generate code for this target
-    pub async fn generate(&self, workspace: &mut Workspace) -> Result<String> {
+    pub async fn generate(
+        &self,
+        workspace: tokio::sync::mpsc::Sender<crate::workspace::WorkspaceCommand>,
+    ) -> Result<String> {
         // Collect type information using InspectTool
         let type_info = self
-            .collect_type_info_with_inspect(workspace)
+            .collect_type_info_with_inspect(workspace.clone())
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!("Failed to get type info for {}: {}", self.target.name, e);
@@ -55,57 +57,159 @@ impl<'a> TargetGenerator<'a> {
     }
 
     /// Collect type information using InspectTool
-    async fn collect_type_info_with_inspect(&self, workspace: &mut Workspace) -> Result<String> {
-        // Extract type positions from the node
-        let type_positions = get_function_type_positions(&self.node);
-        
-        if type_positions.is_empty() {
-            return Ok("No type positions found".to_string());
+    async fn collect_type_info_with_inspect(
+        &self,
+        workspace: tokio::sync::mpsc::Sender<crate::workspace::WorkspaceCommand>,
+    ) -> Result<String> {
+        // Extract type names from the function signature
+        let type_names = self.extract_type_names_from_signature();
+
+        if type_names.is_empty() {
+            return Ok("No custom types found in signature".to_string());
         }
 
         // Create initial scope for the function
         let start_line = self.node.start_position().row as u32;
         let end_line = self.node.end_position().row as u32;
-        let _scope_id = workspace
-            .inspect_tool_mut()
-            .create_initial_scope(self.file_uri.clone(), start_line, end_line);
 
-        // Collect type information for each position
-        let mut type_infos = Vec::new();
-        
-        for (line, character) in type_positions.iter() {
-            // Use LSP hover directly for type information
-            // (InspectTool is mainly for navigating to definitions, not hover info)
-            let lsp_client = workspace.lsp_client();
-            match lsp_client
-                .hover(
-                    TextDocumentIdentifier {
-                        uri: self.file_uri.clone(),
+        // Register scope via Workspace
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        workspace
+            .send(crate::workspace::WorkspaceCommand::RegisterScope {
+                uri: self.file_uri.clone(),
+                range: crate::lsp::Range {
+                    start: crate::lsp::Position {
+                        line: start_line,
+                        character: 0,
                     },
-                    Position {
-                        line: *line,
-                        character: *character,
+                    end: crate::lsp::Position {
+                        line: end_line,
+                        character: 0,
                     },
-                )
-                .await?
+                },
+                response: tx,
+            })
+            .await?;
+        let scope_id = rx.await?;
+
+        // Collect type definitions using InspectTool
+        let mut type_definitions = Vec::new();
+        let mut visited_types = HashSet::new();
+
+        for type_name in type_names {
+            if visited_types.contains(&type_name) {
+                continue;
+            }
+            visited_types.insert(type_name.clone());
+
+            tracing::debug!("Inspecting type: {}", type_name);
+
+            // Try to inspect the type definition
+            let inspect_request = crate::tools::inspect::InspectRequest {
+                scope_id: scope_id.clone(),
+                symbol: type_name.clone(),
+            };
+
+            // Send inspect request via Workspace
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            match workspace
+                .send(crate::workspace::WorkspaceCommand::InspectSymbol {
+                    request: inspect_request,
+                    response: tx,
+                })
+                .await
             {
-                Some(hover) => {
-                    let markdown_content = match hover.contents {
-                        crate::lsp::MarkupContent::PlainText(text) => text,
-                        crate::lsp::MarkupContent::Markdown { value, .. } => value,
-                    };
-                    tracing::info!("Type info at {}:{} - {}", line, character, markdown_content);
-                    type_infos.push(markdown_content);
+                Ok(_) => {
+                    // Wait for the response
+                    match rx.await? {
+                        Ok(response) => {
+                            tracing::info!(
+                                "Found definition for type {}: {}",
+                                type_name,
+                                response.code
+                            );
+                            type_definitions
+                                .push(format!("// Definition of {}\n{}", type_name, response.code));
+                        }
+                        Err(e) => {
+                            tracing::debug!("Could not find definition for {}: {}", type_name, e);
+                            // Skip hover fallback for now
+                        }
+                    }
                 }
-                None => {
-                    tracing::warn!("No hover information available at {}:{}", line, character);
+                Err(e) => {
+                    tracing::debug!("Could not send inspect command for {}: {}", type_name, e);
+                    // Skip this type
                 }
             }
         }
 
-        Ok(type_infos.join("\n\n"))
+        if type_definitions.is_empty() {
+            Ok("No type definitions found".to_string())
+        } else {
+            Ok(type_definitions.join("\n\n"))
+        }
     }
 
+    /// Extract type names from the function signature
+    fn extract_type_names_from_signature(&self) -> Vec<String> {
+        let mut type_names = Vec::new();
+        let signature = &self.target.signature;
+
+        // Simple regex-like extraction of type names
+        // This is a simplified version - in production you'd want proper parsing
+        let words: Vec<&str> = signature
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .collect();
+
+        for word in words {
+            if word.is_empty() {
+                continue;
+            }
+
+            // Skip Go built-in types and keywords
+            let is_builtin = matches!(
+                word,
+                "func"
+                    | "struct"
+                    | "interface"
+                    | "map"
+                    | "chan"
+                    | "slice"
+                    | "string"
+                    | "int"
+                    | "int8"
+                    | "int16"
+                    | "int32"
+                    | "int64"
+                    | "uint"
+                    | "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "float32"
+                    | "float64"
+                    | "bool"
+                    | "byte"
+                    | "rune"
+                    | "error"
+                    | "any"
+                    | "comparable"
+                    | "context"
+                    | "Context"
+            );
+
+            if !is_builtin && word.chars().next().is_some_and(|c| c.is_uppercase()) {
+                type_names.push(word.to_string());
+            }
+        }
+
+        // Remove duplicates while preserving order
+        let mut seen = HashSet::new();
+        type_names.retain(|name| seen.insert(name.clone()));
+
+        type_names
+    }
 
     /// Build prompt for LLM
     fn build_prompt(&self, type_info: &str) -> String {
@@ -129,9 +233,18 @@ impl<'a> TargetGenerator<'a> {
     }
 
     /// Send request to LLM
-    async fn send_to_llm(&self, workspace: &Workspace, prompt: String) -> Result<String> {
-        let llm_client = workspace.llm_client();
-        
+    async fn send_to_llm(
+        &self,
+        workspace: tokio::sync::mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        prompt: String,
+    ) -> Result<String> {
+        // Get LLM client via Workspace
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        workspace
+            .send(crate::workspace::WorkspaceCommand::GetLlmClient { response: tx })
+            .await?;
+        let llm_client = rx.await?;
+
         let mut request = CompletionRequest {
             model: llm_client.model().to_string(),
             messages: vec![
