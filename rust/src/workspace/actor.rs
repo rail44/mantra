@@ -102,11 +102,6 @@ impl Actor for Workspace {
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("Workspace actor stopped");
-        // Clean up LSP client connection
-        let lsp_client = self.lsp_client.clone();
-        if let Err(e) = futures::executor::block_on(lsp_client.shutdown()) {
-            error!("Failed to shutdown LSP client: {}", e);
-        }
     }
 }
 
@@ -322,9 +317,9 @@ impl Handler<GenerateFile> for Workspace {
 }
 
 impl Handler<Shutdown> for Workspace {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, _msg: Shutdown, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, _msg: Shutdown, _ctx: &mut Context<Self>) -> Self::Result {
         info!("Shutting down Workspace actor");
 
         // Send shutdown to all document actors
@@ -333,7 +328,23 @@ impl Handler<Shutdown> for Workspace {
             addr.do_send(DocumentShutdown);
         }
 
-        // Stop self
-        ctx.stop();
+        // Clone LSP client for shutdown
+        let lsp_client = self.lsp_client.clone();
+
+        Box::pin(
+            async move {
+                // Small delay to ensure document actors have released their references
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                if let Err(e) = lsp_client.shutdown().await {
+                    error!("Failed to shutdown LSP client: {}", e);
+                }
+            }
+            .into_actor(self)
+            .map(|_, _act, ctx| {
+                // Stop self after LSP shutdown
+                ctx.stop();
+            }),
+        )
     }
 }

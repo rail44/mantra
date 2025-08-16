@@ -264,71 +264,131 @@ impl DocumentActor {
         let checksum = edit.checksum;
         let content = edit.new_body;
 
-        // Find the target by checksum
-        let source = self.editor.source();
+        // Find the target by checksum - extract all needed data and drop target_map
+        let source = self.editor.source().to_string();
+        let (target_name, func_start_byte, func_end_byte, body_start_byte, body_text) = {
+            let target_map = TargetMap::build(&self.tree, &source)?;
 
-        // Get the node and body range, then drop target_map
-        let (body_start, body_end) = {
-            let target_map = TargetMap::build(&self.tree, source)?;
+            if let Some((target, node)) = target_map.get(checksum) {
+                let target_name = target.name.clone();
+                let func_start = node.start_byte();
+                let func_end = node.end_byte();
 
-            if let Some((_target, node)) = target_map.get(checksum) {
                 // Get the function body node
                 let body_node = node
                     .child_by_field_name("body")
                     .with_context(|| "Function has no body")?;
 
-                // Find the opening and closing braces
-                let mut cursor = body_node.walk();
-                let mut body_start = body_node.start_byte() + 1; // Skip opening brace
-                let mut body_end = body_node.end_byte() - 1; // Skip closing brace
+                let body_start = body_node.start_byte();
+                let body_text = body_node.utf8_text(source.as_bytes())?.to_string();
 
-                // Find exact positions of braces
-                for child in body_node.children(&mut cursor) {
-                    if child.kind() == "{" {
-                        body_start = child.end_byte();
-                    } else if child.kind() == "}" {
-                        body_end = child.start_byte();
-                    }
-                }
-
-                // If we couldn't find braces, use simplified approach
-                if body_start >= body_end {
-                    let body_text = body_node.utf8_text(source.as_bytes())?;
-                    if let Some(open_pos) = body_text.find('{') {
-                        body_start = body_node.start_byte() + open_pos + 1;
-                    }
-                    if let Some(close_pos) = body_text.rfind('}') {
-                        body_end = body_node.start_byte() + close_pos;
-                    }
-                }
-
-                (body_start, body_end)
+                (
+                    Some(target_name),
+                    func_start,
+                    func_end,
+                    body_start,
+                    body_text,
+                )
             } else {
-                error!("Target not found for checksum {:x}", checksum);
-                return Ok(());
+                (None, 0, 0, 0, String::new())
             }
-        }; // Drop target_map here
+        }; // target_map is dropped here
 
-        // Create input edit for tree-sitter
-        let input_edit = self.create_input_edit_for_replace(body_start, body_end, &content);
+        if let Some(target_name) = target_name {
+            // Find body boundaries (inside the braces)
+            let open_brace_offset = body_text.find('{').unwrap_or(0);
+            let close_brace_offset = body_text.rfind('}').unwrap_or(body_text.len());
 
-        // Apply edit to the tree
-        self.tree.edit(&input_edit);
+            let body_content_start = body_start_byte + open_brace_offset + 1;
+            let body_content_end = body_start_byte + close_brace_offset;
 
-        // Apply edit to the editor
-        self.editor.replace(body_start, body_end, content);
+            // Check if we need to add checksum comment
+            let (func_line, _) = self.editor.byte_to_line_col(func_start_byte);
 
-        // Reparse the tree
-        let new_source = self.editor.source();
-        self.tree = self
-            .parser
-            .parse_incremental(new_source, Some(&self.tree))
-            .with_context(|| "Failed to reparse after edit")?;
+            // Create a combined edit: replace function with checksum comment + signature + new body
+            let func_signature = &source[func_start_byte..body_start_byte];
 
-        // Increment document version
-        self.document_version += 1;
+            if func_line > 0 {
+                // Check if checksum comment already exists
+                let lines: Vec<&str> = source.lines().collect();
+                let has_checksum = lines
+                    .get(func_line.saturating_sub(1))
+                    .map(|line| line.contains("// mantra:checksum:"))
+                    .unwrap_or(false);
 
-        debug!("Applied edit for checksum {:x}", checksum);
+                if has_checksum {
+                    // Update existing checksum: replace from checksum line to end of function
+                    let checksum_line_start = source
+                        .lines()
+                        .take(func_line - 1)
+                        .map(|l| l.len() + 1)
+                        .sum::<usize>();
+
+                    let replacement = format!(
+                        "// mantra:checksum:{:x}\n{} {{\n{}}}",
+                        checksum,
+                        func_signature.trim_end(),
+                        content
+                    );
+
+                    let input_edit = self.create_input_edit_for_replace(
+                        checksum_line_start,
+                        func_end_byte,
+                        &replacement,
+                    );
+
+                    self.tree.edit(&input_edit);
+                    self.editor
+                        .replace(checksum_line_start, func_end_byte, replacement);
+                } else {
+                    // Add new checksum: replace entire function
+                    let replacement = format!(
+                        "// mantra:checksum:{:x}\n{} {{\n{}}}",
+                        checksum,
+                        func_signature.trim_end(),
+                        content
+                    );
+
+                    let input_edit = self.create_input_edit_for_replace(
+                        func_start_byte,
+                        func_end_byte,
+                        &replacement,
+                    );
+
+                    self.tree.edit(&input_edit);
+                    self.editor
+                        .replace(func_start_byte, func_end_byte, replacement);
+                }
+            } else {
+                // First line of file - just replace body
+                let input_edit = self.create_input_edit_for_replace(
+                    body_content_start,
+                    body_content_end,
+                    &content,
+                );
+
+                self.tree.edit(&input_edit);
+                self.editor
+                    .replace(body_content_start, body_content_end, content);
+            }
+
+            // Reparse the tree
+            let new_source = self.editor.source();
+            self.tree = self
+                .parser
+                .parse_incremental(new_source, Some(&self.tree))
+                .with_context(|| "Failed to reparse after edit")?;
+
+            // Increment document version
+            self.document_version += 1;
+
+            debug!(
+                "Applied edit for checksum {:x} to {}",
+                checksum, target_name
+            );
+        } else {
+            error!("Target not found for checksum {:x}", checksum);
+        }
 
         Ok(())
     }
