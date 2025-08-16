@@ -8,6 +8,9 @@ use crate::document::{DocumentCommand, DocumentManager};
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 
+#[cfg(test)]
+mod tests;
+
 /// Workspace manages Document actors and provides access to LSP/LLM clients
 pub struct Workspace {
     /// Document actors by file URI
