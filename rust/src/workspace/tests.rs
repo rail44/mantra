@@ -21,18 +21,23 @@ mod workspace_tests {
         let root_dir = PathBuf::from(".");
         let config = create_test_config().await;
 
-        let workspace = Workspace::new(root_dir, config).await;
+        let workspace_tx = Workspace::spawn(root_dir, config).await;
         assert!(
-            workspace.is_ok(),
+            workspace_tx.is_ok(),
             "Workspace should be created successfully"
         );
+
+        // Shutdown
+        if let Ok(tx) = workspace_tx {
+            let _ = tx.send(WorkspaceCommand::Shutdown).await;
+        }
     }
 
     #[tokio::test]
     async fn test_document_actor_lifecycle() {
         let root_dir = PathBuf::from(".");
         let config = create_test_config().await;
-        let mut workspace = Workspace::new(root_dir, config).await.unwrap();
+        let workspace_tx = Workspace::spawn(root_dir, config).await.unwrap();
 
         // Create a test file
         let test_content = "package main\n\nfunc main() {}\n";
@@ -44,7 +49,16 @@ mod workspace_tests {
             "file://{}",
             std::env::current_dir().unwrap().join(test_file).display()
         );
-        let document_sender = workspace.get_document(&uri).await.unwrap();
+
+        let (tx, rx) = oneshot::channel();
+        workspace_tx
+            .send(WorkspaceCommand::GetDocument {
+                uri: uri.clone(),
+                response: tx,
+            })
+            .await
+            .unwrap();
+        let document_sender = rx.await.unwrap().unwrap();
 
         // Test getting source
         let (tx, rx) = oneshot::channel();
@@ -58,7 +72,7 @@ mod workspace_tests {
         assert_eq!(result.unwrap(), test_content);
 
         // Clean up
-        workspace.shutdown().await;
+        workspace_tx.send(WorkspaceCommand::Shutdown).await.ok();
         std::fs::remove_file(test_file).ok();
     }
 
@@ -66,7 +80,7 @@ mod workspace_tests {
     async fn test_document_actor_reuse() {
         let root_dir = PathBuf::from(".");
         let config = create_test_config().await;
-        let mut workspace = Workspace::new(root_dir, config).await.unwrap();
+        let workspace_tx = Workspace::spawn(root_dir, config).await.unwrap();
 
         // Create a test file
         let test_file = "target/test_workspace_reuse.go";
@@ -78,8 +92,25 @@ mod workspace_tests {
         );
 
         // Get document actor twice - should reuse the same actor
-        let _sender1 = workspace.get_document(&uri).await.unwrap();
-        let sender2 = workspace.get_document(&uri).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        workspace_tx
+            .send(WorkspaceCommand::GetDocument {
+                uri: uri.clone(),
+                response: tx,
+            })
+            .await
+            .unwrap();
+        let _sender1 = rx.await.unwrap().unwrap();
+
+        let (tx, rx) = oneshot::channel();
+        workspace_tx
+            .send(WorkspaceCommand::GetDocument {
+                uri: uri.clone(),
+                response: tx,
+            })
+            .await
+            .unwrap();
+        let sender2 = rx.await.unwrap().unwrap();
 
         // Both senders should work
         let (tx, rx) = oneshot::channel();
@@ -90,7 +121,7 @@ mod workspace_tests {
         assert!(rx.await.unwrap().is_ok());
 
         // Clean up
-        workspace.shutdown().await;
+        workspace_tx.send(WorkspaceCommand::Shutdown).await.ok();
         std::fs::remove_file(test_file).ok();
     }
 }

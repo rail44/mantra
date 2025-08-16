@@ -171,6 +171,17 @@ impl Workspace {
         // Store sender
         self.documents.insert(uri.to_string(), tx.clone());
 
+        // Open the document in LSP
+        let source = std::fs::read_to_string(&file_path)?;
+        self.lsp_client
+            .did_open(crate::lsp::TextDocumentItem {
+                uri: uri.to_string(),
+                language_id: "go".to_string(),
+                version: 1,
+                text: source,
+            })
+            .await?;
+
         Ok(tx)
     }
 
@@ -187,21 +198,6 @@ impl Workspace {
     /// Get mutable reference to the inspect tool
     pub fn inspect_tool_mut(&mut self) -> &mut InspectTool {
         &mut self.inspect_tool
-    }
-
-    /// Generate code for a document
-    pub async fn generate_for_document(&mut self, file_uri: &str) -> Result<String> {
-        // DocumentManager should handle generation
-        let document = self.get_document(file_uri).await?;
-
-        let (response_tx, response_rx) = oneshot::channel();
-        document
-            .send(DocumentCommand::GenerateAll {
-                response: response_tx,
-            })
-            .await?;
-
-        response_rx.await?
     }
 
     /// Shutdown all Document actors
@@ -250,11 +246,36 @@ impl Workspace {
                     });
                 }
                 WorkspaceCommand::GenerateForDocument { file_uri, response } => {
-                    // Simply call the existing method
-                    let result = self.generate_for_document(&file_uri).await;
-                    let _ = response.send(result);
+                    // Get the document
+                    let document = match self.get_document(&file_uri).await {
+                        Ok(doc) => doc,
+                        Err(e) => {
+                            let _ = response.send(Err(e));
+                            continue;
+                        }
+                    };
+
+                    // Spawn generation task to avoid blocking the actor loop
+                    tokio::spawn(async move {
+                        let (gen_tx, gen_rx) = oneshot::channel();
+                        let send_result = document
+                            .send(DocumentCommand::GenerateAll { response: gen_tx })
+                            .await;
+
+                        let result = match send_result {
+                            Ok(_) => gen_rx.await.unwrap_or_else(|e| {
+                                Err(anyhow::anyhow!("Failed to receive response: {}", e))
+                            }),
+                            Err(e) => Err(anyhow::anyhow!("Failed to send command: {}", e)),
+                        };
+
+                        let _ = response.send(result);
+                    });
                 }
-                WorkspaceCommand::GenerateFile { file_path, response } => {
+                WorkspaceCommand::GenerateFile {
+                    file_path,
+                    response,
+                } => {
                     // Convert file path to URI
                     let absolute_path = if file_path.is_absolute() {
                         file_path
@@ -262,10 +283,32 @@ impl Workspace {
                         std::env::current_dir()?.join(&file_path)
                     };
                     let file_uri = format!("file://{}", absolute_path.display());
-                    
-                    // Call generate_for_document with the URI
-                    let result = self.generate_for_document(&file_uri).await;
-                    let _ = response.send(result);
+
+                    // Get the document
+                    let document = match self.get_document(&file_uri).await {
+                        Ok(doc) => doc,
+                        Err(e) => {
+                            let _ = response.send(Err(e));
+                            continue;
+                        }
+                    };
+
+                    // Spawn generation task to avoid blocking the actor loop
+                    tokio::spawn(async move {
+                        let (gen_tx, gen_rx) = oneshot::channel();
+                        let send_result = document
+                            .send(DocumentCommand::GenerateAll { response: gen_tx })
+                            .await;
+
+                        let result = match send_result {
+                            Ok(_) => gen_rx.await.unwrap_or_else(|e| {
+                                Err(anyhow::anyhow!("Failed to receive response: {}", e))
+                            }),
+                            Err(e) => Err(anyhow::anyhow!("Failed to send command: {}", e)),
+                        };
+
+                        let _ = response.send(result);
+                    });
                 }
                 WorkspaceCommand::Shutdown => {
                     self.shutdown().await;

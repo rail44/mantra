@@ -1,4 +1,4 @@
-use mantra::{config, document};
+use mantra::config;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
 
 async fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
     use mantra::workspace::{Workspace, WorkspaceCommand};
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::oneshot;
 
     // Load configuration
     info!("Loading configuration from: {}", config_dir.display());

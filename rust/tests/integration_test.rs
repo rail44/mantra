@@ -1,6 +1,7 @@
 use mantra::config::Config;
-use mantra::document::DocumentManager;
-use std::path::Path;
+use mantra::workspace::{Workspace, WorkspaceCommand};
+use std::path::{Path, PathBuf};
+use tokio::sync::oneshot;
 
 #[tokio::test]
 #[ignore] // Skip in CI since it requires gopls and actual LLM
@@ -17,9 +18,21 @@ async fn test_generate_output() {
     // Test with simple file
     let file_path = Path::new("examples/simple_test.go");
 
-    // Create document manager (LSP will be skipped if gopls is not available)
-    let mut doc_manager = DocumentManager::new(config, file_path).await.unwrap();
-    let result = doc_manager.generate_all().await.unwrap();
+    // Create workspace and generate
+    let workspace_tx = Workspace::spawn(PathBuf::from("examples"), config)
+        .await
+        .unwrap();
+
+    let (tx, rx) = oneshot::channel();
+    workspace_tx
+        .send(WorkspaceCommand::GenerateFile {
+            file_path: file_path.to_path_buf(),
+            response: tx,
+        })
+        .await
+        .unwrap();
+
+    let result = rx.await.unwrap().unwrap();
 
     // Check that line count is reasonable (not too many extra lines)
     let line_count = result.lines().count();
@@ -48,4 +61,7 @@ async fn test_generate_output() {
 
     // Original file has 16 lines, allow some extra
     assert!(line_count <= 25, "Too many lines in output: {}", line_count);
+
+    // Shutdown workspace
+    workspace_tx.send(WorkspaceCommand::Shutdown).await.unwrap();
 }

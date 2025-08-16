@@ -93,7 +93,7 @@ impl<'a> TargetMap<'a> {
     pub fn nodes(&self) -> impl Iterator<Item = &Node<'a>> + '_ {
         self.map.values().map(|(_, node)| node)
     }
-    
+
     /// Iterate over all entries (checksum, target, node)
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &(Target, Node<'a>))> + '_ {
         self.map.iter()

@@ -1,6 +1,8 @@
 use mantra::config::Config;
-use mantra::document::DocumentManager;
-use std::path::Path;
+use mantra::document::DocumentCommand;
+use mantra::workspace::{Workspace, WorkspaceCommand};
+use std::path::{Path, PathBuf};
+use tokio::sync::oneshot;
 
 fn create_test_config() -> Config {
     Config {
@@ -32,9 +34,19 @@ func Add(a, b int) int {
     // Mock LLM response for testing
     std::env::set_var("MOCK_LLM_RESPONSE", "return a + b");
 
-    // Create document manager
-    let mut doc_manager = DocumentManager::new(config, Path::new(test_file)).await?;
-    let result = doc_manager.generate_all().await?;
+    // Create workspace and get document
+    let workspace_tx = Workspace::spawn(PathBuf::from("target"), config).await?;
+
+    let file_path = Path::new(test_file);
+    let (tx, rx) = oneshot::channel();
+    workspace_tx
+        .send(WorkspaceCommand::GenerateFile {
+            file_path: file_path.to_path_buf(),
+            response: tx,
+        })
+        .await?;
+
+    let result = rx.await??;
 
     // Check that checksum was added
     assert!(
@@ -46,6 +58,9 @@ func Add(a, b int) int {
         "Generated code should be present"
     );
 
+    // Shutdown workspace
+    workspace_tx.send(WorkspaceCommand::Shutdown).await?;
+
     // Clean up
     std::fs::remove_file(test_file).ok();
 
@@ -54,9 +69,6 @@ func Add(a, b int) int {
 
 #[tokio::test]
 async fn test_document_manager_actor_commands() -> Result<(), Box<dyn std::error::Error>> {
-    use mantra::document::DocumentCommand;
-    use tokio::sync::{mpsc, oneshot};
-
     // Create test file
     let test_content = "package main\n\nfunc main() {}\n";
     let test_file = "target/test_document_actor.go";
@@ -64,27 +76,36 @@ async fn test_document_manager_actor_commands() -> Result<(), Box<dyn std::error
 
     let config = create_test_config();
 
-    // Create document manager and run as actor
-    let mut doc_manager = DocumentManager::new(config, Path::new(test_file)).await?;
+    // Create workspace and get document
+    let workspace_tx = Workspace::spawn(PathBuf::from("target"), config).await?;
 
-    let (tx, rx) = mpsc::channel(32);
+    let file_uri = format!(
+        "file://{}",
+        std::env::current_dir()?.join(test_file).display()
+    );
+    let (tx, rx) = oneshot::channel();
+    workspace_tx
+        .send(WorkspaceCommand::GetDocument {
+            uri: file_uri,
+            response: tx,
+        })
+        .await?;
 
-    // Spawn actor
-    let actor_handle = tokio::spawn(async move { doc_manager.run_actor(rx).await });
+    let document_tx = rx.await??;
 
     // Test GetSource command
     let (response_tx, response_rx) = oneshot::channel();
-    tx.send(DocumentCommand::GetSource {
-        response: response_tx,
-    })
-    .await?;
+    document_tx
+        .send(DocumentCommand::GetSource {
+            response: response_tx,
+        })
+        .await?;
 
     let source = response_rx.await??;
     assert_eq!(source, test_content);
 
-    // Shutdown actor
-    tx.send(DocumentCommand::Shutdown).await?;
-    actor_handle.await??;
+    // Shutdown workspace
+    workspace_tx.send(WorkspaceCommand::Shutdown).await?;
 
     // Clean up
     std::fs::remove_file(test_file).ok();

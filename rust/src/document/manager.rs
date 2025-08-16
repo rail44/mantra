@@ -4,14 +4,9 @@ use tokio::sync::{mpsc, oneshot};
 use tree_sitter::{InputEdit, Point, Tree};
 
 use crate::config::Config;
-use crate::editor::{indent_code, IncrementalEditor};
-use crate::generation::EditEvent;
-use crate::llm::LLMClient;
-use crate::lsp::{
-    client::{TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier},
-    Client as LspClient, Position, Range, TextDocumentItem,
-};
-use crate::parser::{target_map::TargetMap, GoParser};
+use crate::editor::IncrementalEditor;
+use crate::lsp::{Position, Range};
+use crate::parser::GoParser;
 
 /// Commands that can be sent to a DocumentManager actor
 pub enum DocumentCommand {
@@ -48,6 +43,15 @@ pub enum DocumentCommand {
         edit: crate::generation::EditEvent,
         response: oneshot::Sender<Result<()>>,
     },
+    /// Get target information by checksum
+    GetTargetInfo {
+        checksum: u64,
+        response: oneshot::Sender<Result<(crate::parser::target::Target, String, u32, u32)>>,
+    },
+    /// Get file URI
+    GetFileUri {
+        response: oneshot::Sender<Result<String>>,
+    },
     /// Shutdown the actor
     Shutdown,
 }
@@ -62,46 +66,15 @@ pub struct DocumentManager {
     editor: IncrementalEditor,
     /// File path
     file_path: std::path::PathBuf,
-    /// LSP client (optional, for LSP mode)
-    lsp_client: Option<LspClient>,
-    /// LLM client (shared across all target generators)
-    llm_client: LLMClient,
     /// Document version for LSP
     document_version: i32,
     /// Workspace channel for sending commands
-    workspace_tx: Option<mpsc::Sender<crate::workspace::WorkspaceCommand>>,
+    workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
+    /// Self channel for TargetGenerators
+    self_tx: mpsc::Sender<DocumentCommand>,
 }
 
 impl DocumentManager {
-    /// Create InputEdit for an insert operation
-    fn create_input_edit_for_insert(&self, position: usize, text: &str) -> InputEdit {
-        let (start_line, start_col) = self.editor.byte_to_line_col(position);
-        let start_point = Point::new(start_line, start_col);
-
-        // Calculate new end position
-        let new_end_byte = position + text.len();
-        let lines: Vec<&str> = text.lines().collect();
-        let new_end_point = if lines.len() > 1 {
-            // Multi-line insert
-            Point::new(
-                start_line + lines.len() - 1,
-                lines.last().map(|s| s.len()).unwrap_or(0),
-            )
-        } else {
-            // Single line insert
-            Point::new(start_line, start_col + text.len())
-        };
-
-        InputEdit {
-            start_byte: position,
-            old_end_byte: position,
-            new_end_byte,
-            start_position: start_point,
-            old_end_position: start_point,
-            new_end_position: new_end_point,
-        }
-    }
-
     /// Create InputEdit for a replace operation
     fn create_input_edit_for_replace(&self, start: usize, end: usize, text: &str) -> InputEdit {
         let (start_line, start_col) = self.editor.byte_to_line_col(start);
@@ -132,86 +105,26 @@ impl DocumentManager {
             new_end_position: new_end_point,
         }
     }
-    /// Create a new document manager with LSP support  
-    pub async fn new(config: Config, file_path: &Path) -> Result<Self> {
-        // Create a dummy workspace_tx for standalone usage
-        let (workspace_tx, _) = mpsc::channel(32);
-        Self::new_with_workspace(config, file_path, workspace_tx).await
-    }
-
-    /// Create a new document manager with LSP support (internal constructor)
-    async fn new_with_workspace(
-        config: Config,
+    /// Create a new document manager (internal constructor)
+    async fn new_internal(
+        _config: Config,
         file_path: &Path,
         workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        self_tx: mpsc::Sender<DocumentCommand>,
     ) -> Result<Self> {
         let source = std::fs::read_to_string(file_path)?;
         let mut parser = GoParser::new()?;
         let tree = parser.parse(&source)?;
         let editor = IncrementalEditor::new(source.clone());
 
-        // Initialize LSP client
-        let lsp_client = LspClient::new("gopls", &[]).await?;
-
-        // Get absolute path for LSP
-        let absolute_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::env::current_dir()?.join(file_path)
-        };
-
-        let workspace_root = absolute_path
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or(".");
-
-        // Initialize LSP
-        let _init_result = lsp_client
-            .initialize(
-                Some(std::process::id()),
-                Some(format!("file://{}", workspace_root)),
-                serde_json::json!({
-                    "textDocument": {
-                        "hover": {
-                            "contentFormat": ["markdown", "plaintext"]
-                        },
-                        "synchronization": {
-                            "didOpen": true,
-                            "didChange": true
-                        }
-                    }
-                }),
-                Some(vec![serde_json::json!({
-                    "uri": format!("file://{}", workspace_root),
-                    "name": "workspace"
-                })]),
-            )
-            .await?;
-        lsp_client.initialized().await?;
-
-        // Open the document
-        let file_uri = format!("file://{}", absolute_path.to_string_lossy());
-        lsp_client
-            .did_open(TextDocumentItem {
-                uri: file_uri,
-                language_id: "go".to_string(),
-                version: 1,
-                text: source.clone(),
-            })
-            .await?;
-
-        // Create LLM client (shared across all target generators)
-        let llm_client = LLMClient::new(config.clone())?;
-
         Ok(Self {
             parser,
             tree,
             editor,
             file_path: file_path.to_path_buf(),
-            lsp_client: Some(lsp_client),
-            llm_client,
             document_version: 1,
-            workspace_tx: Some(workspace_tx),
+            workspace_tx,
+            self_tx,
         })
     }
 
@@ -222,11 +135,13 @@ impl DocumentManager {
         workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
     ) -> Result<mpsc::Sender<DocumentCommand>> {
         let (tx, rx) = mpsc::channel(32);
+        let self_tx = tx.clone();
 
-        let mut manager = Self::new_with_workspace(config, file_path, workspace_tx.clone()).await?;
+        let mut manager =
+            Self::new_internal(config, file_path, workspace_tx.clone(), self_tx).await?;
 
         tokio::spawn(async move {
-            if let Err(e) = manager.run_actor(workspace_tx, rx).await {
+            if let Err(e) = manager.run_actor(rx).await {
                 tracing::error!("DocumentManager actor failed: {}", e);
             }
         });
@@ -234,78 +149,13 @@ impl DocumentManager {
         Ok(tx)
     }
 
-    /// Generate code for all targets in the document
-    pub async fn generate_all(&mut self) -> Result<String> {
-        use crate::generation::TargetGenerator;
-        use crate::parser::target_map::TargetMap;
-        
-        // Get workspace_tx
-        let workspace_tx = self.workspace_tx.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Workspace channel not available"))?
-            .clone();
-        
-        // Collect edits in a scope to ensure target_map is dropped
-        let edits = {
-            // Build target map once
-            let target_map = TargetMap::build(&self.tree, self.editor.source())?;
-            let package_name = target_map.package_name().to_string();
-            
-            tracing::info!("Found {} targets in document", target_map.len());
-            
-            // Process each target sequentially (due to lifetime constraints)
-            let mut edits = Vec::new();
-            
-            for (checksum, (target, node)) in target_map.iter() {
-                tracing::info!("Generating code for target: {}", target.name);
-                
-                // Create target generator
-                let file_uri = format!("file://{}", self.file_path.display());
-                let target_generator = TargetGenerator::new(
-                    target,
-                    &package_name,
-                    *node,
-                    file_uri,
-                );
-                
-                // Generate code
-                match target_generator.generate(workspace_tx.clone()).await {
-                    Ok(generated_code) => {
-                        tracing::info!("Successfully generated code for {}", target.name);
-                        
-                        let edit = crate::generation::EditEvent::new(
-                            *checksum,
-                            target.signature.clone(),
-                            generated_code,
-                        );
-                        edits.push(edit);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to generate code for {}: {}", target.name, e);
-                    }
-                }
-            }
-            
-            edits
-        }; // target_map is dropped here
-        
-        // Apply all edits after generation completes
-        for edit in edits {
-            if let Err(e) = self.apply_edit(edit).await {
-                tracing::error!("Failed to apply edit: {}", e);
-            }
-        }
-        
-        // Return the modified source
-        Ok(self.editor.source().to_string())
-    }
-
     /// Apply edit to the document
     async fn apply_edit(&mut self, edit: crate::generation::EditEvent) -> Result<()> {
         use crate::generation::convert_to_lsp_edits;
-        
+
         // Convert EditEvent to LSP text edits
         let lsp_edits = convert_to_lsp_edits(self.editor.source(), &self.tree, vec![edit])?;
-        
+
         // Apply edits to the document
         for text_edit in lsp_edits {
             // Convert editor Position to LSP Position for position_to_byte
@@ -317,243 +167,76 @@ impl DocumentManager {
                 line: text_edit.range.end.line,
                 character: text_edit.range.end.character,
             };
-            
+
             // Convert LSP range to byte positions
             let start_byte = self.position_to_byte(start_pos)?;
             let end_byte = self.position_to_byte(end_pos)?;
-            
+
             // Apply edit to the editor
-            self.editor.replace(start_byte, end_byte, text_edit.new_text.clone());
-            
+            self.editor
+                .replace(start_byte, end_byte, text_edit.new_text.clone());
+
             // Update parse tree
-            let input_edit = self.create_input_edit_for_replace(
-                start_byte,
-                end_byte,
-                &text_edit.new_text,
-            );
+            let input_edit =
+                self.create_input_edit_for_replace(start_byte, end_byte, &text_edit.new_text);
             self.tree.edit(&input_edit);
             // Re-parse the entire document
             self.tree = self.parser.parse(self.editor.source())?;
         }
-        
-        // Send did_change notification to LSP
-        if self.lsp_client.is_some() {
-            self.send_did_change().await?;
-        }
-        
-        Ok(())
-    }
-    
 
-    /// Prepare generation tasks by collecting target information
-    fn prepare_generation_tasks(&self) -> Result<Vec<GenerationTask>> {
-        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
-
-        tracing::info!("Found {} targets in file", target_map.len());
-        for target in target_map.targets() {
-            tracing::info!("  - {} ({})", target.name, target.instruction);
-        }
-
-        // Collect checksums for parallel generation
-        let tasks = target_map
-            .checksums()
-            .map(|checksum| GenerationTask { checksum })
-            .collect();
-
-        Ok(tasks)
-    }
-
-    // TODO: Remove or refactor this method once Workspace-based generation is complete
-    #[allow(dead_code)]
-    async fn generate_all_targets(
-        &self,
-        _tasks: Vec<GenerationTask>,
-    ) -> Result<Vec<GeneratedEvent>> {
-        // Placeholder - actual implementation moved to Workspace
-        Ok(vec![])
-    }
-
-    /// Apply a generated event to the document
-    async fn apply_generated_event(&mut self, event: GeneratedEvent) -> Result<()> {
-        // Re-build target map for current state
-        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
-
-        // Find the node for this function by name
-        let node_data = target_map
-            .targets()
-            .zip(target_map.nodes())
-            .find(|(t, _)| t.name == event.target_name)
-            .map(|(_, node)| {
-                let func_start = node.start_byte();
-                let body_info = node
-                    .child_by_field_name("body")
-                    .map(|b| (b.start_byte(), b.end_byte()));
-                (func_start, body_info)
-            });
-
-        // Drop target_map before processing
-        drop(target_map);
-
-        if let Some((func_start, body_info)) = node_data {
-            // Create EditEvent
-            let edit_event = EditEvent::new(event.checksum, event.signature, event.generated_code);
-
-            // Apply the edit event
-            self.apply_edit_event(edit_event, func_start, body_info)
-                .await?;
-
-            tracing::debug!(
-                "Applied edit for {} (checksum: {:x})",
-                event.target_name,
-                event.checksum
-            );
-        }
+        // Update version (LSP notifications are handled by Workspace)
+        self.send_did_change().await?;
 
         Ok(())
     }
 
-    /// Send LSP didChange notification
+    /// Send LSP didChange notification via Workspace
     async fn send_did_change(&mut self) -> Result<()> {
-        if let Some(lsp_client) = &self.lsp_client {
-            // Increment version
-            self.document_version += 1;
+        // Increment version
+        self.document_version += 1;
 
-            // Get file URI
-            let absolute_path = if self.file_path.is_absolute() {
-                self.file_path.clone()
-            } else {
-                std::env::current_dir()?.join(&self.file_path)
-            };
-            let file_uri = format!("file://{}", absolute_path.to_string_lossy());
+        // Get file URI
+        let absolute_path = if self.file_path.is_absolute() {
+            self.file_path.clone()
+        } else {
+            std::env::current_dir()?.join(&self.file_path)
+        };
+        let file_uri = format!("file://{}", absolute_path.to_string_lossy());
 
-            // Send full document content as change
-            let content_change = TextDocumentContentChangeEvent {
-                text: self.editor.source().to_string(),
-            };
+        // Get LSP client from Workspace
+        let (tx, rx) = oneshot::channel();
+        self.workspace_tx
+            .send(crate::workspace::WorkspaceCommand::GetLspClient { response: tx })
+            .await?;
+        let lsp_client = rx.await?;
 
-            lsp_client
-                .did_change(
-                    VersionedTextDocumentIdentifier {
-                        uri: file_uri,
-                        version: self.document_version,
-                    },
-                    vec![content_change],
-                )
-                .await?;
+        // Send didChange notification
+        use crate::lsp::client::{TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier};
 
-            tracing::debug!(
-                "Sent didChange notification (version: {})",
-                self.document_version
-            );
-        }
-        Ok(())
-    }
+        let content_change = TextDocumentContentChangeEvent {
+            text: self.editor.source().to_string(),
+        };
 
-    /// Apply an EditEvent to the document
-    async fn apply_edit_event(
-        &mut self,
-        event: EditEvent,
-        func_start_byte: usize,
-        body_info: Option<(usize, usize)>,
-    ) -> Result<()> {
-        // Check if there's already a checksum comment
-        let lines: Vec<&str> = self.editor.source().lines().collect();
-        let (func_line, _) = self.editor.byte_to_line_col(func_start_byte);
-        let has_checksum = func_line > 0
-            && lines
-                .get(func_line - 1)
-                .map(|line| line.contains("// mantra:checksum:"))
-                .unwrap_or(false);
+        lsp_client
+            .did_change(
+                VersionedTextDocumentIdentifier {
+                    uri: file_uri,
+                    version: self.document_version,
+                },
+                vec![content_change],
+            )
+            .await?;
 
-        // Track if any changes were made
-        let mut changes_made = false;
-
-        // Add checksum comment if not present
-        if !has_checksum && func_line > 0 {
-            let line_start_byte = self.editor.line_col_to_byte(func_line, 0);
-            let checksum_comment = format!("// mantra:checksum:{:x}\n", event.checksum);
-
-            // Create InputEdit for incremental parsing
-            let input_edit = self.create_input_edit_for_insert(line_start_byte, &checksum_comment);
-
-            // Apply edit to source
-            self.editor.insert(line_start_byte, checksum_comment);
-
-            // Update tree incrementally
-            self.tree.edit(&input_edit);
-            self.tree = self
-                .parser
-                .parse_incremental(self.editor.source(), Some(&self.tree))?;
-
-            changes_made = true;
-        }
-
-        // Replace the function body if it exists
-        if let Some((_body_start, _body_end)) = body_info {
-            // Re-calculate positions after potential checksum insertion
-            let (new_body_start, new_body_end) = {
-                let target_map = TargetMap::build(&self.tree, self.editor.source())?;
-
-                // Find the updated body position
-                let body_pos = target_map
-                    .targets()
-                    .zip(target_map.nodes())
-                    .find(|(t, _)| t.signature == event.signature)
-                    .and_then(|(_, node)| {
-                        node.child_by_field_name("body")
-                            .map(|body| (body.start_byte(), body.end_byte()))
-                    });
-
-                body_pos
-            }
-            .unwrap_or((0, 0));
-
-            if new_body_start > 0 {
-                // Format the new body with proper indentation
-                let formatted_body = if event.new_body.trim().is_empty() {
-                    "{\n\tpanic(\"not implemented\")\n}".to_string()
-                } else {
-                    let indented = indent_code(&event.new_body, "\t");
-                    format!("{{\n{}\n}}", indented)
-                };
-
-                // Create InputEdit for incremental parsing
-                let input_edit = self.create_input_edit_for_replace(
-                    new_body_start,
-                    new_body_end,
-                    &formatted_body,
-                );
-
-                // Apply edit to source
-                self.editor
-                    .replace(new_body_start, new_body_end, formatted_body);
-
-                // Update tree incrementally
-                self.tree.edit(&input_edit);
-                self.tree = self
-                    .parser
-                    .parse_incremental(self.editor.source(), Some(&self.tree))?;
-
-                changes_made = true;
-            }
-        }
-
-        // Send didChange notification if LSP is active and changes were made
-        if changes_made {
-            self.send_did_change().await?;
-        }
+        tracing::debug!(
+            "Sent didChange notification (version: {})",
+            self.document_version
+        );
 
         Ok(())
     }
 
     /// Run the actor's event loop (internal)
-    async fn run_actor(
-        &mut self,
-        _workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
-        mut rx: mpsc::Receiver<DocumentCommand>,
-    ) -> Result<()> {
-        // Workspace channel is already set in constructor
-
+    async fn run_actor(&mut self, mut rx: mpsc::Receiver<DocumentCommand>) -> Result<()> {
         while let Some(command) = rx.recv().await {
             match command {
                 DocumentCommand::FindSymbol {
@@ -578,12 +261,36 @@ impl DocumentManager {
                     let _ = response.send(self.get_definition_block(position));
                 }
                 DocumentCommand::GenerateAll { response } => {
-                    let result = self.generate_all().await;
-                    let _ = response.send(result);
+                    tracing::info!("Received GenerateAll command");
+                    // Spawn generation as a separate task to not block the actor
+                    let workspace_tx = self.workspace_tx.clone();
+                    let self_tx = self.self_tx.clone();
+                    let source = self.editor.source().to_string();
+                    let tree = self.parser.parse(&source)?;
+
+                    tracing::info!("Spawning generate_all_async task");
+                    tokio::spawn(async move {
+                        tracing::info!("Started generate_all_async task");
+                        let result =
+                            Self::generate_all_async(source, tree, workspace_tx, self_tx).await;
+                        tracing::info!("Completed generate_all_async task");
+                        let _ = response.send(result);
+                    });
+                    tracing::info!("GenerateAll handler completed, actor loop continues");
                 }
                 DocumentCommand::ApplyEdit { edit, response } => {
                     let result = self.apply_edit(edit).await;
                     let _ = response.send(result);
+                }
+                DocumentCommand::GetTargetInfo { checksum, response } => {
+                    tracing::debug!("Received GetTargetInfo command for checksum {:x}", checksum);
+                    let result = self.get_target_info(checksum);
+                    let _ = response.send(result);
+                    tracing::debug!("Sent GetTargetInfo response for checksum {:x}", checksum);
+                }
+                DocumentCommand::GetFileUri { response } => {
+                    let file_uri = format!("file://{}", self.file_path.display());
+                    let _ = response.send(Ok(file_uri));
                 }
                 DocumentCommand::Shutdown => {
                     break;
@@ -696,6 +403,110 @@ impl DocumentManager {
         Ok((range, text))
     }
 
+    /// Get target information by checksum
+    fn get_target_info(
+        &self,
+        checksum: u64,
+    ) -> Result<(crate::parser::target::Target, String, u32, u32)> {
+        use crate::parser::target_map::TargetMap;
+
+        let target_map = TargetMap::build(&self.tree, self.editor.source())?;
+
+        if let Some((target, node)) = target_map.get(checksum) {
+            let start_line = node.start_position().row as u32;
+            let end_line = node.end_position().row as u32;
+            let package_name = target_map.package_name().to_string();
+
+            Ok((target.clone(), package_name, start_line, end_line))
+        } else {
+            anyhow::bail!("Target with checksum {:x} not found", checksum)
+        }
+    }
+
+    /// Generate code for all targets asynchronously
+    async fn generate_all_async(
+        source: String,
+        tree: Tree,
+        workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        self_tx: mpsc::Sender<DocumentCommand>,
+    ) -> Result<String> {
+        use crate::generation::TargetGenerator;
+        use crate::parser::target_map::TargetMap;
+
+        tracing::info!("generate_all_async started");
+
+        // Build target map
+        let target_map = TargetMap::build(&tree, &source)?;
+        tracing::info!("Found {} targets in document", target_map.len());
+
+        // Collect generation tasks
+        let mut generation_tasks = Vec::new();
+        for (checksum, (target, _node)) in target_map.iter() {
+            generation_tasks.push((*checksum, target.signature.clone()));
+        }
+
+        tracing::info!("Creating futures for {} targets", generation_tasks.len());
+
+        // Create futures for parallel generation
+        let mut futures = Vec::new();
+        for (checksum, signature) in generation_tasks {
+            let workspace_tx = workspace_tx.clone();
+            let document_tx = self_tx.clone();
+
+            let future = async move {
+                tracing::info!("Starting generation for checksum {:x}", checksum);
+                let target_generator = TargetGenerator::new(checksum, document_tx);
+
+                match target_generator.generate(workspace_tx).await {
+                    Ok(generated_code) => {
+                        tracing::info!("Successfully generated code for checksum {:x}", checksum);
+                        Some(crate::generation::EditEvent::new(
+                            checksum,
+                            signature,
+                            generated_code,
+                        ))
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to generate code for checksum {:x}: {}",
+                            checksum,
+                            e
+                        );
+                        None
+                    }
+                }
+            };
+
+            futures.push(future);
+        }
+
+        // Execute futures sequentially for now (to avoid deadlock)
+        // TODO: Implement proper parallel execution
+        let mut edits = Vec::new();
+        for future in futures {
+            if let Some(edit) = future.await {
+                edits.push(edit);
+            }
+        }
+
+        // Apply all edits sequentially
+        // We need to send ApplyEdit commands back to the DocumentManager
+        for edit in edits {
+            let (tx, rx) = oneshot::channel();
+            self_tx
+                .send(DocumentCommand::ApplyEdit { edit, response: tx })
+                .await?;
+            rx.await??;
+        }
+
+        // Get the final source
+        let (tx, rx) = oneshot::channel();
+        self_tx
+            .send(DocumentCommand::GetSource { response: tx })
+            .await?;
+        rx.await?
+    }
+
     /// Find the definition node (struct, function, etc.) containing the given byte
     fn find_definition_node<'a>(
         node: &tree_sitter::Node<'a>,
@@ -747,17 +558,4 @@ impl DocumentManager {
 
         None
     }
-}
-
-/// Task for generating code for a single target  
-struct GenerationTask {
-    checksum: u64,
-}
-
-/// Result of code generation for a single target
-struct GeneratedEvent {
-    checksum: u64,
-    target_name: String,
-    signature: String,
-    generated_code: String,
 }

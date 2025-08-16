@@ -1,82 +1,133 @@
 use anyhow::{Context, Result};
 use std::collections::HashSet;
-use tree_sitter::Node;
+use tokio::sync::{mpsc, oneshot};
 
+use crate::document::DocumentCommand;
 use crate::llm::{CompletionRequest, Message, ProviderSpec};
 use crate::parser::target::Target;
 
 /// Generates code for a single target function
-pub struct TargetGenerator<'a> {
-    target: &'a Target,
-    package_name: &'a str,
-    node: Node<'a>,
-    file_uri: String,
+pub struct TargetGenerator {
+    checksum: u64,
+    document_tx: mpsc::Sender<DocumentCommand>,
 }
 
-impl<'a> TargetGenerator<'a> {
-    /// Create a new target generator for a specific target
-    pub fn new(
-        target: &'a Target,
-        package_name: &'a str,
-        node: Node<'a>,
-        file_uri: String,
-    ) -> Self {
+impl TargetGenerator {
+    /// Create a new target generator with checksum and document channel
+    pub fn new(checksum: u64, document_tx: mpsc::Sender<DocumentCommand>) -> Self {
         Self {
-            target,
-            package_name,
-            node,
-            file_uri,
+            checksum,
+            document_tx,
         }
     }
 
     /// Generate code for this target
     pub async fn generate(
-        &self,
-        workspace: tokio::sync::mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        self,
+        workspace_tx: mpsc::Sender<crate::workspace::WorkspaceCommand>,
     ) -> Result<String> {
+        tracing::debug!("Starting generate for checksum {:x}", self.checksum);
+
+        // Get target info from DocumentManager
+        let (target, package_name, start_line, end_line) = self.get_target_info().await?;
+
+        tracing::debug!("Got target info for {}", target.name);
+
         // Collect type information using InspectTool
         let type_info = self
-            .collect_type_info_with_inspect(workspace.clone())
+            .collect_type_info_with_inspect(
+                &target,
+                &package_name,
+                start_line,
+                end_line,
+                workspace_tx.clone(),
+            )
             .await
             .unwrap_or_else(|e| {
-                tracing::warn!("Failed to get type info for {}: {}", self.target.name, e);
+                tracing::warn!("Failed to get type info for {}: {}", target.name, e);
                 "No type information available".to_string()
             });
 
         // Build the prompt
-        let prompt = self.build_prompt(&type_info);
+        let prompt = self.build_prompt(&target, &type_info);
 
-        tracing::debug!("Generating for target: {}", self.target.name);
+        tracing::debug!("Generating for target: {}", target.name);
         tracing::debug!("Prompt: {}", prompt);
 
         // Send to LLM
-        let response = self.send_to_llm(workspace, prompt).await?;
+        let response = self.send_to_llm(workspace_tx, prompt).await?;
 
         // Clean and return the response
         Ok(self.clean_generated_code(response))
     }
 
+    /// Get target information from DocumentManager
+    async fn get_target_info(&self) -> Result<(Target, String, u32, u32)> {
+        tracing::debug!("Sending GetTargetInfo for checksum {:x}", self.checksum);
+        let (tx, rx) = oneshot::channel();
+        self.document_tx
+            .send(DocumentCommand::GetTargetInfo {
+                checksum: self.checksum,
+                response: tx,
+            })
+            .await?;
+        tracing::debug!(
+            "Waiting for GetTargetInfo response for checksum {:x}",
+            self.checksum
+        );
+        let result = rx.await?;
+        tracing::debug!(
+            "Received GetTargetInfo response for checksum {:x}",
+            self.checksum
+        );
+        result
+    }
+
+    /// Get file URI from DocumentManager
+    async fn get_file_uri(&self) -> Result<String> {
+        tracing::debug!("Sending GetFileUri");
+        let (tx, rx) = oneshot::channel();
+        self.document_tx
+            .send(DocumentCommand::GetFileUri { response: tx })
+            .await?;
+        tracing::debug!("Waiting for GetFileUri response");
+        let result = rx.await?;
+        tracing::debug!("Received GetFileUri response");
+        result
+    }
+
     /// Collect type information using InspectTool
     async fn collect_type_info_with_inspect(
         &self,
-        workspace: tokio::sync::mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        target: &Target,
+        _package_name: &str,
+        start_line: u32,
+        end_line: u32,
+        workspace: mpsc::Sender<crate::workspace::WorkspaceCommand>,
     ) -> Result<String> {
+        tracing::debug!("collect_type_info_with_inspect for {}", target.name);
+
         // Extract type names from the function signature
-        let type_names = self.extract_type_names_from_signature();
+        let type_names = self.extract_type_names_from_signature(&target.signature);
 
         if type_names.is_empty() {
+            tracing::debug!("No custom types found in signature");
             return Ok("No custom types found in signature".to_string());
         }
 
-        // Create initial scope for the function
-        let start_line = self.node.start_position().row as u32;
-        let end_line = self.node.end_position().row as u32;
+        tracing::debug!("Found {} type names in signature", type_names.len());
+
+        // Get file URI from DocumentManager
+        let file_uri = self.get_file_uri().await?;
+
+        tracing::debug!("Got file URI: {}", file_uri);
 
         // Register scope via Workspace
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        tracing::debug!("Registering scope for lines {}-{}", start_line, end_line);
+        let (tx, rx) = oneshot::channel();
         workspace
             .send(crate::workspace::WorkspaceCommand::RegisterScope {
-                uri: self.file_uri.clone(),
+                uri: file_uri.clone(),
                 range: crate::lsp::Range {
                     start: crate::lsp::Position {
                         line: start_line,
@@ -90,7 +141,9 @@ impl<'a> TargetGenerator<'a> {
                 response: tx,
             })
             .await?;
+        tracing::debug!("Waiting for RegisterScope response");
         let scope_id = rx.await?;
+        tracing::debug!("Got scope_id: {}", scope_id);
 
         // Collect type definitions using InspectTool
         let mut type_definitions = Vec::new();
@@ -152,9 +205,8 @@ impl<'a> TargetGenerator<'a> {
     }
 
     /// Extract type names from the function signature
-    fn extract_type_names_from_signature(&self) -> Vec<String> {
+    fn extract_type_names_from_signature(&self, signature: &str) -> Vec<String> {
         let mut type_names = Vec::new();
-        let signature = &self.target.signature;
 
         // Simple regex-like extraction of type names
         // This is a simplified version - in production you'd want proper parsing
@@ -212,13 +264,12 @@ impl<'a> TargetGenerator<'a> {
     }
 
     /// Build prompt for LLM
-    fn build_prompt(&self, type_info: &str) -> String {
+    fn build_prompt(&self, target: &Target, type_info: &str) -> String {
         let mut prompt = format!(
             "Generate the Go implementation for this function:\n\n\
-             Package: {}\n\
              Function signature: {}\n\
              Instruction: {}",
-            self.package_name, self.target.signature, self.target.instruction
+            target.signature, target.instruction
         );
 
         if !type_info.is_empty() {
@@ -235,7 +286,7 @@ impl<'a> TargetGenerator<'a> {
     /// Send request to LLM
     async fn send_to_llm(
         &self,
-        workspace: tokio::sync::mpsc::Sender<crate::workspace::WorkspaceCommand>,
+        workspace: mpsc::Sender<crate::workspace::WorkspaceCommand>,
         prompt: String,
     ) -> Result<String> {
         // Get LLM client via Workspace
