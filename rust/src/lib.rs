@@ -1,5 +1,5 @@
 pub mod config;
-pub mod document;
+pub mod core;
 pub mod editor;
 pub mod generation;
 pub mod language;

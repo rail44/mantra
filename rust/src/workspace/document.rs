@@ -19,22 +19,17 @@ use tree_sitter::{InputEdit, Point, Tree};
 
 /// Document actor managing a single document
 pub struct DocumentActor {
-    #[allow(dead_code)]
-    config: Config,
-    #[allow(dead_code)]
-    file_path: PathBuf,
     uri: String,
     workspace: Addr<Workspace>,
     parser: GoParser,
     tree: Tree,
     editor: IncrementalEditor,
-    #[allow(dead_code)]
     document_version: i32,
 }
 
 impl DocumentActor {
     pub async fn new(
-        config: Config,
+        _config: Config,
         file_path: PathBuf,
         uri: String,
         workspace: Addr<Workspace>,
@@ -54,8 +49,6 @@ impl DocumentActor {
         let editor = IncrementalEditor::new(content);
 
         Ok(Self {
-            config,
-            file_path,
             uri,
             workspace,
             parser,

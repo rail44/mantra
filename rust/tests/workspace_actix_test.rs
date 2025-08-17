@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use mantra::config::Config;
+use mantra::core::types::{Position, Range};
 use mantra::workspace::{
     GenerateFile, GetLlmClient, GetLspClient, RegisterScope, Shutdown, Workspace,
 };
@@ -58,12 +59,12 @@ fn test_workspace_actor_lifecycle() -> Result<()> {
         let scope_id = addr
             .send(RegisterScope {
                 uri: "file:///test.go".to_string(),
-                range: mantra::lsp::Range {
-                    start: mantra::lsp::Position {
+                range: Range {
+                    start: Position {
                         line: 0,
                         character: 0,
                     },
-                    end: mantra::lsp::Position {
+                    end: Position {
                         line: 10,
                         character: 0,
                     },

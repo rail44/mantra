@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use crate::lsp::Range;
+use crate::core::types::Range;
 
 use super::{InitializeTool, ShutdownTool, ToolActor};
 
@@ -163,7 +163,7 @@ impl Handler<Inspect> for InspectTool {
             // Get definition location
             let definition_location = lsp_client
                 .goto_definition(
-                    crate::lsp::TextDocumentIdentifier {
+                    crate::core::types::TextDocumentIdentifier {
                         uri: scope_info.uri.clone(),
                     },
                     symbol_position,
@@ -197,10 +197,10 @@ async fn find_symbol_in_scope(
     uri: &str,
     range: &Range,
     symbol: &str,
-) -> Result<crate::lsp::Position> {
+) -> Result<crate::core::types::Position> {
     // Get document symbols
     let symbols = lsp_client
-        .document_symbols(crate::lsp::TextDocumentIdentifier {
+        .document_symbols(crate::core::types::TextDocumentIdentifier {
             uri: uri.to_string(),
         })
         .await?;
@@ -224,7 +224,7 @@ async fn get_definition_code(
     // Get hover information at the definition location
     let hover = lsp_client
         .hover(
-            crate::lsp::TextDocumentIdentifier {
+            crate::core::types::TextDocumentIdentifier {
                 uri: location.uri.clone(),
             },
             location.range.start,
@@ -238,7 +238,7 @@ async fn get_definition_code(
     }
 }
 
-fn is_position_in_range(pos: &crate::lsp::Position, range: &Range) -> bool {
+fn is_position_in_range(pos: &crate::core::types::Position, range: &Range) -> bool {
     pos.line >= range.start.line && pos.line <= range.end.line
 }
 

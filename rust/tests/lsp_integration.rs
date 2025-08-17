@@ -1,5 +1,6 @@
 use anyhow::Result;
-use mantra::lsp::{Client as LspClient, Position, TextDocumentIdentifier, TextDocumentItem};
+use mantra::core::types::{Position, TextDocumentIdentifier};
+use mantra::lsp::{Client as LspClient, TextDocumentItem};
 
 /// Test basic LSP client functionality
 /// Requires gopls to be installed

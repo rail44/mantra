@@ -7,11 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
+use crate::core::types::{Location, Position, Range, TextDocumentIdentifier};
 use crate::lsp::connection::LspConnection;
 use crate::lsp::PublishDiagnosticsParams;
-use crate::lsp::{
-    Hover, InitializeResult, Location, Position, Range, TextDocumentIdentifier, TextDocumentItem,
-};
+use crate::lsp::{Hover, InitializeResult, TextDocumentItem};
 
 // パラメータ構造体をキャメルケース変換付きで定義
 #[derive(Serialize)]

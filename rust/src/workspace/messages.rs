@@ -2,6 +2,7 @@ use actix::prelude::*;
 use anyhow::Result;
 use std::path::PathBuf;
 
+use crate::core::types::Range;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::tools::inspect::{InspectRequest, InspectResponse};
@@ -34,7 +35,7 @@ pub struct GetLlmClient;
 #[rtype(result = "String")]
 pub struct RegisterScope {
     pub uri: String,
-    pub range: crate::lsp::Range,
+    pub range: Range,
 }
 
 /// Inspect a symbol

@@ -2,16 +2,8 @@ use jsonrpsee::proc_macros::rpc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct Position {
-    pub line: u32,
-    pub character: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextDocumentIdentifier {
-    pub uri: String,
-}
+// Import common types from core module
+pub use crate::core::types::{Location, Position, Range, TextDocumentIdentifier};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HoverParams {
@@ -84,12 +76,6 @@ pub enum MarkupContent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Range {
-    pub start: Position,
-    pub end: Position,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub range: Range,
     pub severity: Option<u32>,
@@ -111,12 +97,6 @@ pub enum DiagnosticCode {
 pub struct DiagnosticRelatedInformation {
     pub location: Location,
     pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Location {
-    pub uri: String,
-    pub range: Range,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
