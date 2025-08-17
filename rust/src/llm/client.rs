@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::core::{MantraError, Result};
 use reqwest::{header, Client};
 
 use super::types::{CompletionRequest, CompletionResponse};
@@ -25,7 +25,7 @@ impl LLMClient {
             headers.insert(
                 header::AUTHORIZATION,
                 header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .context("Invalid API key format")?,
+                    .map_err(|e| MantraError::config(format!("Invalid API key format: {}", e)))?,
             );
         }
 
@@ -41,7 +41,7 @@ impl LLMClient {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .context("Failed to build HTTP client")?;
+            .map_err(|e| MantraError::llm(format!("Failed to build HTTP client: {}", e)))?;
 
         Ok(Self { client, config })
     }
@@ -66,7 +66,7 @@ impl LLMClient {
             .json(&request)
             .send()
             .await
-            .context("Failed to send request")?;
+            .map_err(|e| MantraError::llm(format!("Failed to send request: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -74,13 +74,16 @@ impl LLMClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            anyhow::bail!("API request failed with status {}: {}", status, error_text);
+            return Err(MantraError::llm(format!(
+                "API request failed with status {}: {}",
+                status, error_text
+            )));
         }
 
         let completion = response
             .json::<CompletionResponse>()
             .await
-            .context("Failed to parse response")?;
+            .map_err(|e| MantraError::llm(format!("Failed to parse response: {}", e)))?;
 
         Ok(completion)
     }

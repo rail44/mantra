@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+pub mod error;
+
+use crate::core::{MantraError, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -35,16 +37,21 @@ impl Config {
     /// Load configuration from mantra.toml
     pub fn load(target_path: impl AsRef<Path>) -> Result<Self> {
         // Find config file starting from target directory
-        let config_path =
-            find_config_file(target_path.as_ref()).context("Failed to find mantra.toml")?;
+        let config_path = find_config_file(target_path.as_ref())
+            .ok_or_else(|| MantraError::config("Failed to find mantra.toml"))?;
 
         // Read config file
-        let config_data = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+        let config_data = fs::read_to_string(&config_path).map_err(|e| {
+            MantraError::config(format!(
+                "Failed to read config file {}: {}",
+                config_path.display(),
+                e
+            ))
+        })?;
 
         // Parse TOML
-        let mut config: Config =
-            toml::from_str(&config_data).context("Failed to parse mantra.toml")?;
+        let mut config: Config = toml::from_str(&config_data)
+            .map_err(|e| MantraError::config(format!("Failed to parse mantra.toml: {}", e)))?;
 
         // Warn about hardcoded API keys
         if let Some(api_key) = &config.api_key {
@@ -65,10 +72,10 @@ impl Config {
     /// Validate that required fields are present
     fn validate(&self) -> Result<()> {
         if self.model.is_empty() {
-            anyhow::bail!("'model' is required in mantra.toml");
+            return Err(MantraError::config("'model' is required in mantra.toml"));
         }
         if self.url.is_empty() {
-            anyhow::bail!("'url' is required in mantra.toml");
+            return Err(MantraError::config("'url' is required in mantra.toml"));
         }
         Ok(())
     }
@@ -87,24 +94,20 @@ impl Config {
 }
 
 /// Find mantra.toml by searching upward from the given path
-fn find_config_file(start_path: &Path) -> Result<PathBuf> {
+fn find_config_file(start_path: &Path) -> Option<PathBuf> {
     let current_dir = if start_path.is_file() {
-        start_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?
+        start_path.parent()?
     } else {
         start_path
     };
 
     // Convert to absolute path
-    let mut current_dir = current_dir
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve path: {}", current_dir.display()))?;
+    let mut current_dir = current_dir.canonicalize().ok()?;
 
     loop {
         let config_path = current_dir.join("mantra.toml");
         if config_path.exists() {
-            return Ok(config_path);
+            return Some(config_path);
         }
 
         // Move to parent directory
@@ -114,10 +117,7 @@ fn find_config_file(start_path: &Path) -> Result<PathBuf> {
         }
     }
 
-    anyhow::bail!(
-        "Could not find mantra.toml in {} or any parent directory",
-        start_path.display()
-    )
+    None
 }
 
 /// Expand environment variable in the format ${VAR_NAME}
@@ -177,13 +177,15 @@ mod tests {
         )?;
 
         // Should find config in same directory
-        let found = find_config_file(temp_dir.path())?;
+        let found = find_config_file(temp_dir.path())
+            .ok_or_else(|| MantraError::not_found("Config file not found"))?;
         assert_eq!(found.canonicalize()?, config_path.canonicalize()?);
 
         // Should find config from subdirectory
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir)?;
-        let found = find_config_file(&sub_dir)?;
+        let found = find_config_file(&sub_dir)
+            .ok_or_else(|| MantraError::not_found("Config file not found"))?;
         assert_eq!(found.canonicalize()?, config_path.canonicalize()?);
 
         Ok(())

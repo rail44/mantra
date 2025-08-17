@@ -1,8 +1,9 @@
 pub mod checksum;
+pub mod error;
 pub mod target;
 pub mod target_map;
 
-use anyhow::{Context, Result};
+use crate::core::{MantraError, Result};
 use std::path::Path;
 use tree_sitter::{Parser, Tree};
 
@@ -17,7 +18,7 @@ impl GoParser {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_go::language())
-            .context("Failed to set Go language for parser")?;
+            .map_err(|e| MantraError::tree_sitter(format!("Failed to set Go language: {}", e)))?;
         Ok(Self { parser })
     }
 
@@ -25,20 +26,21 @@ impl GoParser {
     pub fn parse(&mut self, source: &str) -> Result<Tree> {
         self.parser
             .parse(source, None)
-            .context("Failed to parse Go source code")
+            .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
     }
 
     /// Parse Go source code with optional old tree for incremental parsing
     pub fn parse_incremental(&mut self, source: &str, old_tree: Option<&Tree>) -> Result<Tree> {
         self.parser
             .parse(source, old_tree)
-            .context("Failed to parse Go source code")
+            .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
     }
 
     /// Parse a Go file and extract targets
     pub fn parse_file(&mut self, path: &Path) -> Result<target::FileInfo> {
-        let source = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            MantraError::parse(format!("Failed to read file {}: {}", path.display(), e))
+        })?;
 
         let tree = self.parse(&source)?;
 
