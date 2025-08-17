@@ -20,10 +20,6 @@ enum Commands {
     Generate {
         /// Go file to process
         file: PathBuf,
-
-        /// Config directory (contains mantra.toml)
-        #[arg(long, short = 'c', default_value = ".")]
-        config_dir: PathBuf,
     },
 }
 
@@ -42,17 +38,17 @@ fn main() -> Result<()> {
 
     // Use Actix system for all operations
     match args.command {
-        Commands::Generate { file, config_dir } => generate_command(file, config_dir),
+        Commands::Generate { file } => generate_command(file),
     }
 }
 
-fn generate_command(file: PathBuf, config_dir: PathBuf) -> Result<()> {
+fn generate_command(file: PathBuf) -> Result<()> {
     use actix::prelude::*;
     use mantra::workspace::{GenerateFile, Shutdown, Workspace};
 
-    // Load configuration
-    info!("Loading configuration from: {}", config_dir.display());
-    let config = config::Config::load(&config_dir)?;
+    // Load configuration by searching from the file's directory upward
+    let config = config::Config::load(&file)?;
+    info!("Configuration loaded successfully");
 
     info!("Generating code for: {}", file.display());
 

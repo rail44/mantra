@@ -37,8 +37,14 @@ impl Config {
     /// Load configuration from mantra.toml
     pub fn load(target_path: impl AsRef<Path>) -> Result<Self> {
         // Find config file starting from target directory
-        let config_path = find_config_file(target_path.as_ref())
-            .ok_or_else(|| MantraError::config("Failed to find mantra.toml"))?;
+        let config_path = find_config_file(target_path.as_ref()).ok_or_else(|| {
+            MantraError::config(format!(
+                "Failed to find mantra.toml in {} or any parent directory",
+                target_path.as_ref().display()
+            ))
+        })?;
+
+        tracing::info!("Found configuration at: {}", config_path.display());
 
         // Read config file
         let config_data = fs::read_to_string(&config_path).map_err(|e| {
@@ -141,11 +147,27 @@ mod tests {
     fn test_expand_env_var() {
         env::set_var("TEST_VAR", "test_value");
 
+        // Test ${VAR} format
         assert_eq!(
             expand_env_var("${TEST_VAR}"),
             Some("test_value".to_string())
         );
+
+        // Test $VAR format
+        assert_eq!(expand_env_var("$TEST_VAR"), Some("test_value".to_string()));
+
+        // Test env:VAR format
+        assert_eq!(
+            expand_env_var("env:TEST_VAR"),
+            Some("test_value".to_string())
+        );
+
+        // Test non-existent variable
         assert_eq!(expand_env_var("${NONEXISTENT}"), None);
+        assert_eq!(expand_env_var("$NONEXISTENT"), None);
+        assert_eq!(expand_env_var("env:NONEXISTENT"), None);
+
+        // Test non-variable string
         assert_eq!(expand_env_var("not_a_var"), None);
 
         env::remove_var("TEST_VAR");

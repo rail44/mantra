@@ -105,8 +105,8 @@ impl Handler<GenerateAll> for DocumentActor {
                 for (checksum, signature) in targets {
                     debug!("Starting generation for checksum {:x}", checksum);
 
-                    // Create a bridge for TargetGenerator to communicate with DocumentActor
-                    let target_gen = TargetGeneratorBridge::new(checksum, document_addr.clone());
+                    // Create a target generator for this checksum
+                    let target_gen = TargetGenerator::new(checksum, document_addr.clone());
 
                     match target_gen.generate(workspace.clone()).await {
                         Ok(generated_code) => {
@@ -199,13 +199,13 @@ impl Handler<DocumentShutdown> for DocumentActor {
 // TargetGenerator Bridge
 // ============================================================================
 
-/// Bridge between TargetGenerator and DocumentActor
-struct TargetGeneratorBridge {
+/// Target generator that coordinates with DocumentActor for code generation
+struct TargetGenerator {
     checksum: u64,
     document_addr: Addr<DocumentActor>,
 }
 
-impl TargetGeneratorBridge {
+impl TargetGenerator {
     fn new(checksum: u64, document_addr: Addr<DocumentActor>) -> Self {
         Self {
             checksum,
@@ -224,8 +224,8 @@ impl TargetGeneratorBridge {
 
         debug!("Got target info for {}", target.name);
 
-        // Build prompt (simplified for now - InspectTool integration will come later)
-        let prompt = build_prompt(&target);
+        // Build prompt using generation module
+        let prompt = crate::generation::build_prompt(&target);
 
         // Get LLM client and generate code
         let llm_client = workspace.send(super::messages::GetLlmClient).await?;
@@ -240,7 +240,9 @@ impl TargetGeneratorBridge {
         let response = llm_client.complete(request).await?;
 
         if let Some(choice) = response.choices.first() {
-            Ok(clean_generated_code(choice.message.content.clone()))
+            Ok(crate::generation::clean_generated_code(
+                choice.message.content.clone(),
+            ))
         } else {
             Err(anyhow::anyhow!("No response from LLM"))
         }
@@ -421,47 +423,3 @@ impl DocumentActor {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/// Build a prompt for code generation
-fn build_prompt(target: &crate::parser::target::Target) -> String {
-    format!(
-        "Generate the Go implementation for this function:\n\n\
-         Function signature: {}\n\
-         Instruction: {}\n\n\
-         Return only the code that goes inside the function body (without the curly braces).\n\
-         For example, if the function should add two numbers, just return: return a + b",
-        target.signature, target.instruction
-    )
-}
-
-/// Clean generated code from LLM response
-fn clean_generated_code(code: String) -> String {
-    let mut cleaned = code.trim().to_string();
-
-    // Remove markdown code blocks if present
-    if cleaned.starts_with("```") {
-        if let Some(start) = cleaned.find('\n') {
-            cleaned = cleaned[start + 1..].to_string();
-        }
-    }
-    if cleaned.ends_with("```") {
-        if let Some(end) = cleaned.rfind("\n```") {
-            cleaned = cleaned[..end].to_string();
-        } else {
-            cleaned = cleaned[..cleaned.len() - 3].to_string();
-        }
-    }
-
-    // Ensure proper indentation
-    let lines: Vec<&str> = cleaned.lines().collect();
-    let mut result = String::new();
-    for line in lines {
-        if !line.is_empty() {
-            result.push('\t');
-            result.push_str(line);
-        }
-        result.push('\n');
-    }
-
-    result
-}
