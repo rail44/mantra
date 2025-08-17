@@ -93,6 +93,7 @@ impl LLMClient {
 mod tests {
     use super::*;
     use crate::config::OpenRouterConfig;
+    use crate::llm::Message;
 
     #[test]
     fn test_client_creation() {
@@ -122,5 +123,74 @@ mod tests {
 
         let client = LLMClient::new(config);
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_client_without_api_key() {
+        let config = Config {
+            model: "local-model".to_string(),
+            url: "http://localhost:8080".to_string(),
+            api_key: None,
+            log_level: None,
+            openrouter: None,
+        };
+
+        let client = LLMClient::new(config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_client_invalid_api_key() {
+        let config = Config {
+            model: "test".to_string(),
+            url: "https://api.test.com".to_string(),
+            api_key: Some("\0invalid\0key".to_string()), // Invalid header value
+            log_level: None,
+            openrouter: None,
+        };
+
+        let client = LLMClient::new(config);
+        assert!(client.is_err());
+        if let Err(err) = client {
+            assert!(err.to_string().contains("Invalid API key format"));
+        }
+    }
+
+    #[test]
+    fn test_model_getter() {
+        let config = Config {
+            model: "claude-3-sonnet".to_string(),
+            url: "https://api.anthropic.com".to_string(),
+            api_key: Some("test-key".to_string()),
+            log_level: None,
+            openrouter: None,
+        };
+
+        let client = LLMClient::new(config).unwrap();
+        assert_eq!(client.model(), "claude-3-sonnet");
+    }
+
+    #[test]
+    fn test_request_building() {
+        // This test would require mocking the HTTP client
+        // For now, we just test that request building doesn't panic
+        let messages = vec![
+            Message::system("You are a helpful assistant"),
+            Message::user("Write a function that adds two numbers"),
+        ];
+
+        let request = CompletionRequest {
+            model: "gpt-3.5-turbo".to_string(),
+            provider: None,
+            messages,
+            max_tokens: Some(150),
+            temperature: 0.7,
+        };
+
+        // Verify fields are set correctly
+        assert_eq!(request.model, "gpt-3.5-turbo");
+        assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.max_tokens, Some(150));
+        assert_eq!(request.temperature, 0.7);
     }
 }

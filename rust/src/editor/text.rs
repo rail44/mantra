@@ -139,4 +139,69 @@ mod tests {
         assert_eq!(editor.line_col_to_byte(1, 0), 6); // Start of line2
         assert_eq!(editor.line_col_to_byte(2, 0), 12); // Start of line3
     }
+
+    #[test]
+    fn test_utf8_handling() {
+        let mut editor = IncrementalEditor::new("こんにちは".to_string());
+
+        // Japanese characters are 3 bytes each
+        assert_eq!(editor.byte_to_line_col(0), (0, 0));
+        assert_eq!(editor.byte_to_line_col(3), (0, 3));
+        assert_eq!(editor.byte_to_line_col(6), (0, 6));
+
+        // Replace middle character
+        editor.replace(6, 9, "🦀".to_string()); // Rust crab emoji
+        assert_eq!(editor.source(), "こん🦀ちは");
+    }
+
+    #[test]
+    fn test_multiline_edit() {
+        let mut editor = IncrementalEditor::new("func foo() {\n    // TODO\n}".to_string());
+
+        // Replace TODO comment with actual code
+        editor.replace(17, 25, "return 42".to_string());
+        assert_eq!(editor.source(), "func foo() {\n    return 42}");
+    }
+
+    #[test]
+    fn test_edge_cases() {
+        let mut editor = IncrementalEditor::new("".to_string());
+
+        // Insert into empty string
+        editor.insert(0, "Hello".to_string());
+        assert_eq!(editor.source(), "Hello");
+
+        // Replace entire content
+        editor.replace(0, 5, "Goodbye".to_string());
+        assert_eq!(editor.source(), "Goodbye");
+
+        // Position conversion on empty lines
+        let editor = IncrementalEditor::new("\n\n\n".to_string());
+        assert_eq!(editor.byte_to_line_col(0), (0, 0));
+        assert_eq!(editor.byte_to_line_col(1), (1, 0));
+        assert_eq!(editor.byte_to_line_col(2), (2, 0));
+    }
+
+    #[test]
+    fn test_indent_code() {
+        // Test basic indentation
+        let code = "line1\nline2\nline3";
+        let indented = indent_code(code, "    ");
+        assert_eq!(indented, "    line1\n    line2\n    line3");
+
+        // Test with braces
+        let code = "{\n    return true\n}";
+        let indented = indent_code(code, "  ");
+        assert_eq!(indented, "\n  return true");
+
+        // Test with empty lines
+        let code = "line1\n\nline2";
+        let indented = indent_code(code, "\t");
+        assert_eq!(indented, "\tline1\n\n\tline2");
+
+        // Test with already indented code
+        let code = "  already\n    indented";
+        let indented = indent_code(code, ">>>");
+        assert_eq!(indented, ">>>already\n>>>indented");
+    }
 }

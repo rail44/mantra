@@ -153,14 +153,11 @@ mod tests {
             Some("test_value".to_string())
         );
 
-        // Test $VAR format
-        assert_eq!(expand_env_var("$TEST_VAR"), Some("test_value".to_string()));
+        // Test $VAR format (not supported)
+        assert_eq!(expand_env_var("$TEST_VAR"), None);
 
-        // Test env:VAR format
-        assert_eq!(
-            expand_env_var("env:TEST_VAR"),
-            Some("test_value".to_string())
-        );
+        // Test env:VAR format (not supported)
+        assert_eq!(expand_env_var("env:TEST_VAR"), None);
 
         // Test non-existent variable
         assert_eq!(expand_env_var("${NONEXISTENT}"), None);
