@@ -58,6 +58,7 @@ impl LLMClient {
 
     /// Send a completion request
     pub async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
+        let timer = crate::core::metrics::Timer::start(format!("llm_complete:{}", request.model));
         let url = format!("{}/chat/completions", self.config.url);
 
         let response = self
@@ -85,6 +86,7 @@ impl LLMClient {
             .await
             .map_err(|e| MantraError::llm(format!("Failed to parse response: {}", e)))?;
 
+        timer.stop_with_message("Response received");
         Ok(completion)
     }
 }

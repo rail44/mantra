@@ -105,10 +105,13 @@ impl Handler<GenerateAll> for DocumentActor {
                 for (checksum, signature) in targets {
                     debug!("Starting generation for checksum {:x}", checksum);
 
-                    // Create a target generator for this checksum
-                    let target_gen = TargetGenerator::new(checksum, document_addr.clone());
-
-                    match target_gen.generate(workspace.clone()).await {
+                    match crate::generation::generate_for_target(
+                        checksum,
+                        document_addr.clone(),
+                        workspace.clone(),
+                    )
+                    .await
+                    {
                         Ok(generated_code) => {
                             debug!("Successfully generated code for checksum {:x}", checksum);
                             let edit = crate::generation::EditEvent::new(
@@ -192,60 +195,6 @@ impl Handler<DocumentShutdown> for DocumentActor {
     fn handle(&mut self, _msg: DocumentShutdown, ctx: &mut Context<Self>) -> Self::Result {
         debug!("Shutting down DocumentActor: {}", self.uri);
         ctx.stop();
-    }
-}
-
-// ============================================================================
-// TargetGenerator Bridge
-// ============================================================================
-
-/// Target generator that coordinates with DocumentActor for code generation
-struct TargetGenerator {
-    checksum: u64,
-    document_addr: Addr<DocumentActor>,
-}
-
-impl TargetGenerator {
-    fn new(checksum: u64, document_addr: Addr<DocumentActor>) -> Self {
-        Self {
-            checksum,
-            document_addr,
-        }
-    }
-
-    async fn generate(&self, workspace: Addr<super::actor::Workspace>) -> Result<String> {
-        // Get target info from DocumentActor
-        let (target, _package_name, _start_line, _end_line) = self
-            .document_addr
-            .send(GetTargetInfo {
-                checksum: self.checksum,
-            })
-            .await??;
-
-        debug!("Got target info for {}", target.name);
-
-        // Build prompt using generation module
-        let prompt = crate::generation::build_prompt(&target);
-
-        // Get LLM client and generate code
-        let llm_client = workspace.send(super::messages::GetLlmClient).await?;
-        let request = crate::llm::CompletionRequest {
-            model: llm_client.model().to_string(),
-            provider: None,
-            messages: vec![crate::llm::Message::user(prompt)],
-            max_tokens: Some(2000),
-            temperature: 0.7,
-        };
-
-        let response = llm_client.complete(request).await?;
-
-        if let Some(choice) = response.choices.first() {
-            Ok(crate::generation::clean_generated_code(
-                choice.message.content.clone(),
-            ))
-        } else {
-            Err(anyhow::anyhow!("No response from LLM"))
-        }
     }
 }
 
@@ -419,7 +368,3 @@ impl DocumentActor {
         }
     }
 }
-
-// ============================================================================
-// Helper Functions
-// ============================================================================

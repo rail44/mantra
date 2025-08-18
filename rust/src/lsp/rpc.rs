@@ -1,9 +1,7 @@
 use jsonrpsee::proc_macros::rpc;
+use lsp_types::{Position, TextDocumentIdentifier};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-// Import common types from core module
-pub use crate::core::types::{Location, Position, Range, TextDocumentIdentifier};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HoverParams {
@@ -23,14 +21,8 @@ pub struct InitializeParams {
     pub workspace_folders: Option<Vec<Value>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextDocumentItem {
-    pub uri: String,
-    #[serde(rename = "languageId")]
-    pub language_id: String,
-    pub version: i32,
-    pub text: String,
-}
+// Kept for backward compatibility, will be removed later
+pub type TextDocumentItem = lsp_types::TextDocumentItem;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DidOpenTextDocumentParams {
@@ -38,73 +30,21 @@ pub struct DidOpenTextDocumentParams {
     pub text_document: TextDocumentItem,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitializeResult {
-    pub capabilities: ServerCapabilities,
-    #[serde(rename = "serverInfo")]
-    pub server_info: Option<ServerInfo>,
-}
+// Use lsp-types version
+pub type InitializeResult = lsp_types::InitializeResult;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerCapabilities {
-    #[serde(rename = "hoverProvider", default)]
-    pub hover_provider: bool,
-    #[serde(rename = "textDocumentSync", default)]
-    pub text_document_sync: Option<Value>,
-    // 他のcapabilitiesは必要に応じて追加
-    #[serde(flatten)]
-    pub other: std::collections::HashMap<String, Value>,
-}
+// Use lsp-types version
+pub type ServerCapabilities = lsp_types::ServerCapabilities;
+pub type ServerInfo = lsp_types::ServerInfo;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServerInfo {
-    pub name: String,
-    pub version: Option<String>,
-}
+// Use lsp-types version
+pub type Hover = lsp_types::Hover;
+pub type MarkupContent = lsp_types::MarkupContent;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Hover {
-    pub contents: MarkupContent,
-    pub range: Option<Range>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum MarkupContent {
-    PlainText(String),
-    Markdown { kind: String, value: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Diagnostic {
-    pub range: Range,
-    pub severity: Option<u32>,
-    pub code: Option<DiagnosticCode>,
-    pub source: Option<String>,
-    pub message: String,
-    #[serde(rename = "relatedInformation")]
-    pub related_information: Option<Vec<DiagnosticRelatedInformation>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum DiagnosticCode {
-    Number(u32),
-    String(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiagnosticRelatedInformation {
-    pub location: Location,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishDiagnosticsParams {
-    pub uri: String,
-    pub version: Option<i32>,
-    pub diagnostics: Vec<Diagnostic>,
-}
+// Use lsp-types versions
+pub type Diagnostic = lsp_types::Diagnostic;
+pub type DiagnosticRelatedInformation = lsp_types::DiagnosticRelatedInformation;
+pub type PublishDiagnosticsParams = lsp_types::PublishDiagnosticsParams;
 
 /// Define LSP RPC interface using proc macro
 /// This generates type-safe client methods automatically

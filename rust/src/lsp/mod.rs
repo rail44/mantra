@@ -7,12 +7,13 @@ mod transport;
 
 pub use client::{Client, DocumentSymbol};
 pub use notification::NotificationHandler;
-// Re-export core types
-pub use crate::core::types::{Location, Position, Range, TextDocumentIdentifier};
 
-// Re-export LSP-specific types
-pub use rpc::{
-    Diagnostic, DidOpenTextDocumentParams, Hover, HoverParams, InitializeParams, InitializeResult,
-    LspRpcClient, MarkupContent, PublishDiagnosticsParams, ServerCapabilities, ServerInfo,
-    TextDocumentItem,
+// Re-export lsp-types for convenient access
+pub use lsp_types::{
+    Diagnostic, Hover, InitializeResult, Location, MarkupContent, Position,
+    PublishDiagnosticsParams, Range, ServerCapabilities, ServerInfo, TextDocumentIdentifier,
+    TextDocumentItem, TextEdit,
 };
+
+// Re-export our custom types
+pub use rpc::{DidOpenTextDocumentParams, HoverParams, InitializeParams, LspRpcClient};

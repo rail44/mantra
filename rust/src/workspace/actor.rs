@@ -40,31 +40,15 @@ impl Workspace {
 
         // Initialize workspace with LSP
         let workspace_uri = format!("file://{}", root_dir.display());
+        let capabilities = LspClient::default_capabilities();
+        let workspace_folders = LspClient::default_workspace_folders(&workspace_uri)?;
+
         lsp_client
             .initialize(
                 Some(std::process::id()),
                 Some(workspace_uri.clone()),
-                serde_json::json!({
-                    "textDocument": {
-                        "hover": {
-                            "contentFormat": ["markdown", "plaintext"]
-                        },
-                        "synchronization": {
-                            "didOpen": true,
-                            "didChange": true
-                        },
-                        "definition": {
-                            "dynamicRegistration": false
-                        },
-                        "typeDefinition": {
-                            "dynamicRegistration": false
-                        }
-                    }
-                }),
-                Some(vec![serde_json::json!({
-                    "uri": workspace_uri,
-                    "name": "workspace"
-                })]),
+                capabilities,
+                Some(workspace_folders),
             )
             .await?;
         lsp_client.initialized().await?;
@@ -199,9 +183,10 @@ impl Handler<GetDocument> for Workspace {
                 let document_addr = document.start();
 
                 // Open document in LSP
+                let doc_uri = lsp_types::Url::parse(&uri)?;
                 lsp_client
-                    .did_open(crate::lsp::TextDocumentItem {
-                        uri: uri.clone(),
+                    .did_open(lsp_types::TextDocumentItem {
+                        uri: doc_uri,
                         language_id: "go".to_string(),
                         version: 1,
                         text: source,

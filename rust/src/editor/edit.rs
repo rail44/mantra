@@ -1,2 +1,2 @@
-// Re-export common types from core module
-pub use crate::core::types::{Position, Range, TextEdit};
+// Re-export LSP types
+pub use lsp_types::{Position, Range, TextEdit};

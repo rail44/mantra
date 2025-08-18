@@ -1,11 +1,10 @@
-use actix::prelude::*;
-use anyhow::Result;
-use std::path::PathBuf;
-
-use crate::core::types::Range;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::tools::inspect::{InspectRequest, InspectResponse};
+use actix::prelude::*;
+use anyhow::Result;
+use lsp_types::Range;
+use std::path::PathBuf;
 
 use super::document::DocumentActor;
 

@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Mantra - AI-powered Go code generation tool
 #[derive(Parser, Debug)]
@@ -26,15 +26,25 @@ enum Commands {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Setup logging with RUST_LOG environment variable
+    // Setup structured logging with RUST_LOG environment variable
     // Default to "warn" if RUST_LOG is not set
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mantra=info"));
 
-    let subscriber = FmtSubscriber::builder()
-        .with_env_filter(env_filter)
-        .finish();
+    // Configure structured logging
+    let format_layer = fmt::layer()
+        .with_target(false)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_file(true)
+        .with_line_number(true)
+        .with_level(true)
+        .compact();
 
-    tracing::subscriber::set_global_default(subscriber)?;
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(format_layer)
+        .init();
 
     // Use Actix system for all operations
     match args.command {
@@ -44,7 +54,10 @@ fn main() -> Result<()> {
 
 fn generate_command(file: PathBuf) -> Result<()> {
     use actix::prelude::*;
+    use mantra::core::metrics::Timer;
     use mantra::workspace::{GenerateFile, Shutdown, Workspace};
+
+    let total_timer = Timer::start("total_generation");
 
     // Load configuration by searching from the file's directory upward
     let config = config::Config::load(&file)?;
@@ -80,5 +93,6 @@ fn generate_command(file: PathBuf) -> Result<()> {
     // Output to stdout
     print!("{}", result);
 
+    total_timer.stop();
     Ok(())
 }

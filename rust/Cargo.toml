@@ -34,6 +34,7 @@ regex = "1"
 hashbrown = "0.14"
 walkdir = "2"
 jsonrpsee = { version = "0.24", features = ["client", "server", "macros"] }
+lsp-types = "0.95"
 
 # Actor framework
 actix = "0.13"

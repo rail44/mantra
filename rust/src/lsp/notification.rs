@@ -58,13 +58,13 @@ impl NotificationHandler {
         loop {
             match rx.recv().await {
                 Ok(diagnostics) => {
-                    if diagnostics.uri == uri {
+                    if diagnostics.uri.as_str() == uri {
                         return Ok(diagnostics);
                     }
                     // 他のURIの診断は無視して待機を続ける
                     tracing::trace!(
                         "Skipping diagnostics for different URI: {} (waiting for: {})",
-                        diagnostics.uri,
+                        diagnostics.uri.as_str(),
                         uri
                     );
                 }

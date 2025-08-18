@@ -10,18 +10,15 @@ async fn test_lsp_basic_operations() -> Result<()> {
     let client = LspClient::new("gopls", &[]).await?;
 
     // Initialize
+    let capabilities = LspClient::default_capabilities();
+    let workspace_folders = LspClient::default_workspace_folders("file:///tmp")?;
+
     let _init_result = client
         .initialize(
             Some(std::process::id()),
             Some("file:///tmp".to_string()),
-            serde_json::json!({
-                "textDocument": {
-                    "hover": {
-                        "contentFormat": ["markdown", "plaintext"]
-                    }
-                }
-            }),
-            None,
+            capabilities,
+            Some(workspace_folders),
         )
         .await?;
 
@@ -74,18 +71,15 @@ async fn test_lsp_definition() -> Result<()> {
     let client = LspClient::new("gopls", &[]).await?;
 
     // Initialize with definition capability
+    let capabilities = LspClient::default_capabilities();
+    let workspace_folders = LspClient::default_workspace_folders("file:///tmp")?;
+
     client
         .initialize(
             Some(std::process::id()),
             Some("file:///tmp".to_string()),
-            serde_json::json!({
-                "textDocument": {
-                    "definition": {
-                        "dynamicRegistration": false
-                    }
-                }
-            }),
-            None,
+            capabilities,
+            Some(workspace_folders),
         )
         .await?;
     client.initialized().await?;

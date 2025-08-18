@@ -2,15 +2,17 @@ use anyhow::Result;
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::core::traits::ToRpcParams;
+use lsp_types::{
+    ClientCapabilities, GotoCapability, Hover, HoverClientCapabilities, InitializeResult, Location,
+    MarkupKind, Position, PublishDiagnosticsParams, Range, TextDocumentClientCapabilities,
+    TextDocumentIdentifier, TextDocumentSyncClientCapabilities, Url, WorkspaceFolder,
+};
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::core::types::{Location, Position, Range, TextDocumentIdentifier};
 use crate::lsp::connection::LspConnection;
-use crate::lsp::PublishDiagnosticsParams;
-use crate::lsp::{Hover, InitializeResult, TextDocumentItem};
 
 // パラメータ構造体をキャメルケース変換付きで定義
 #[derive(Serialize)]
@@ -64,7 +66,7 @@ impl ToRpcParams for HoverParams {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DidOpenParams {
-    text_document: TextDocumentItem,
+    text_document: lsp_types::TextDocumentItem,
 }
 
 impl ToRpcParams for DidOpenParams {
@@ -92,19 +94,67 @@ impl Client {
         })
     }
 
+    /// Get default client capabilities
+    pub fn default_capabilities() -> ClientCapabilities {
+        ClientCapabilities {
+            text_document: Some(TextDocumentClientCapabilities {
+                hover: Some(HoverClientCapabilities {
+                    content_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
+                    ..Default::default()
+                }),
+                synchronization: Some(TextDocumentSyncClientCapabilities {
+                    dynamic_registration: Some(false),
+                    will_save: Some(false),
+                    will_save_wait_until: Some(false),
+                    did_save: Some(true),
+                }),
+                definition: Some(GotoCapability {
+                    dynamic_registration: Some(false),
+                    ..Default::default()
+                }),
+                type_definition: Some(GotoCapability {
+                    dynamic_registration: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Create default workspace folders
+    pub fn default_workspace_folders(workspace_uri: &str) -> Result<Vec<WorkspaceFolder>> {
+        let url = Url::parse(workspace_uri)?;
+        Ok(vec![WorkspaceFolder {
+            uri: url,
+            name: "workspace".to_string(),
+        }])
+    }
+
     /// Initialize the LSP connection
     pub async fn initialize(
         &self,
         process_id: Option<u32>,
         root_uri: Option<String>,
-        capabilities: Value,
-        workspace_folders: Option<Vec<Value>>,
+        capabilities: ClientCapabilities,
+        workspace_folders: Option<Vec<WorkspaceFolder>>,
     ) -> Result<InitializeResult> {
+        // Convert to Value for JSON-RPC
+        let capabilities_value = serde_json::to_value(capabilities)?;
+        let workspace_folders_value = workspace_folders
+            .map(|folders| {
+                folders
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+
         let params = InitializeParams {
             process_id,
             root_uri,
-            capabilities,
-            workspace_folders,
+            capabilities: capabilities_value,
+            workspace_folders: workspace_folders_value,
         };
 
         let result = self.connection.client.request("initialize", params).await?;
@@ -276,7 +326,7 @@ impl Client {
                     .map(|s| DocumentSymbol {
                         name: s.name,
                         kind: s.kind,
-                        range: s.location.range.clone(),
+                        range: s.location.range,
                         selection_range: s.location.range,
                         children: None,
                         detail: None,
@@ -320,7 +370,7 @@ impl Client {
                 Ok(links
                     .into_iter()
                     .map(|link| Location {
-                        uri: link.target_uri,
+                        uri: link.target_uri.clone(),
                         range: link.target_range,
                     })
                     .collect())
@@ -331,7 +381,7 @@ impl Client {
     }
 
     /// Open a text document notification
-    pub async fn did_open(&self, text_document: TextDocumentItem) -> Result<()> {
+    pub async fn did_open(&self, text_document: lsp_types::TextDocumentItem) -> Result<()> {
         let params = DidOpenParams { text_document };
 
         self.connection
@@ -398,14 +448,8 @@ pub struct SymbolInformation {
     pub deprecated: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocationLink {
-    pub origin_selection_range: Option<Range>,
-    pub target_uri: String,
-    pub target_range: Range,
-    pub target_selection_range: Range,
-}
+// Use lsp-types version
+pub type LocationLink = lsp_types::LocationLink;
 
 // didChange関連の構造体
 #[derive(Serialize)]

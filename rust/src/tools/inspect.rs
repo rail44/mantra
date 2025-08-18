@@ -1,10 +1,9 @@
 use actix::prelude::*;
 use anyhow::Result;
+use lsp_types::Range;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info};
-
-use crate::core::types::Range;
 
 use super::{InitializeTool, ShutdownTool, ToolActor};
 
@@ -163,8 +162,8 @@ impl Handler<Inspect> for InspectTool {
             // Get definition location
             let definition_location = lsp_client
                 .goto_definition(
-                    crate::core::types::TextDocumentIdentifier {
-                        uri: scope_info.uri.clone(),
+                    lsp_types::TextDocumentIdentifier {
+                        uri: lsp_types::Url::parse(&scope_info.uri).unwrap(),
                     },
                     symbol_position,
                 )
@@ -197,11 +196,11 @@ async fn find_symbol_in_scope(
     uri: &str,
     range: &Range,
     symbol: &str,
-) -> Result<crate::core::types::Position> {
+) -> Result<lsp_types::Position> {
     // Get document symbols
     let symbols = lsp_client
-        .document_symbols(crate::core::types::TextDocumentIdentifier {
-            uri: uri.to_string(),
+        .document_symbols(lsp_types::TextDocumentIdentifier {
+            uri: lsp_types::Url::parse(uri).unwrap(),
         })
         .await?;
 
@@ -224,7 +223,7 @@ async fn get_definition_code(
     // Get hover information at the definition location
     let hover = lsp_client
         .hover(
-            crate::core::types::TextDocumentIdentifier {
+            lsp_types::TextDocumentIdentifier {
                 uri: location.uri.clone(),
             },
             location.range.start,
@@ -238,15 +237,24 @@ async fn get_definition_code(
     }
 }
 
-fn is_position_in_range(pos: &crate::core::types::Position, range: &Range) -> bool {
+fn is_position_in_range(pos: &lsp_types::Position, range: &Range) -> bool {
     pos.line >= range.start.line && pos.line <= range.end.line
 }
 
 fn format_hover_content(hover: crate::lsp::Hover) -> String {
-    use crate::lsp::MarkupContent;
+    use lsp_types::{HoverContents, MarkedString, MarkupContent};
 
     match hover.contents {
-        MarkupContent::PlainText(text) => text,
-        MarkupContent::Markdown { value, .. } => value,
+        HoverContents::Scalar(MarkedString::String(text)) => text,
+        HoverContents::Scalar(MarkedString::LanguageString(ls)) => ls.value,
+        HoverContents::Markup(MarkupContent { value, .. }) => value,
+        HoverContents::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                MarkedString::String(s) => s,
+                MarkedString::LanguageString(ls) => ls.value,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }

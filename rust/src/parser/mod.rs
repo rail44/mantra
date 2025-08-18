@@ -38,6 +38,9 @@ impl GoParser {
 
     /// Parse a Go file and extract targets
     pub fn parse_file(&mut self, path: &Path) -> Result<target::FileInfo> {
+        let timer =
+            crate::core::metrics::Timer::start_debug(format!("parse_file:{}", path.display()));
+
         let source = std::fs::read_to_string(path).map_err(|e| {
             MantraError::parse(format!("Failed to read file {}: {}", path.display(), e))
         })?;
@@ -47,6 +50,7 @@ impl GoParser {
         // Extract file information
         let file_info = target::extract_file_info(path, &source, tree)?;
 
+        timer.stop_with_message(&format!("Found {} targets", file_info.targets.len()));
         Ok(file_info)
     }
 }
