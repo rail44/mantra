@@ -5,17 +5,14 @@ use tracing::{debug, error};
 
 use super::actor::Workspace;
 use super::messages::{
-    ApplyEdit, DocumentShutdown, GenerateAll, GetFileUri, GetSource, GetTargetInfo,
+    ApplyEdit, DocumentShutdown, FormatGeneratedCode, GenerateAll, GetFileUri, GetSource,
+    GetTargetInfo,
 };
 use crate::config::Config;
 use crate::editor::IncrementalEditor;
 use crate::generation::EditEvent;
 use crate::parser::{target_map::TargetMap, GoParser};
 use tree_sitter::{InputEdit, Point, Tree};
-
-// ============================================================================
-// Document Actor
-// ============================================================================
 
 /// Document actor managing a single document
 pub struct DocumentActor {
@@ -114,10 +111,27 @@ impl Handler<GenerateAll> for DocumentActor {
                     {
                         Ok(generated_code) => {
                             debug!("Successfully generated code for checksum {:x}", checksum);
+                            // Format the generated code using LSP
+                            let formatted_code = match workspace.send(FormatGeneratedCode {
+                                code: generated_code.clone(),
+                            }).await {
+                                Ok(Ok(formatted)) => {
+                                    debug!("Successfully formatted code for checksum {:x}", checksum);
+                                    formatted
+                                }
+                                Ok(Err(e)) => {
+                                    debug!("Failed to format code for checksum {:x}: {}, using unformatted", checksum, e);
+                                    generated_code
+                                }
+                                Err(e) => {
+                                    debug!("Failed to send format request for checksum {:x}: {}, using unformatted", checksum, e);
+                                    generated_code
+                                }
+                            };
                             let edit = crate::generation::EditEvent::new(
                                 checksum,
                                 signature,
-                                generated_code,
+                                formatted_code,
                             );
                             edits.push(edit);
                         }
@@ -197,10 +211,6 @@ impl Handler<DocumentShutdown> for DocumentActor {
         ctx.stop();
     }
 }
-
-// ============================================================================
-// Helper Methods
-// ============================================================================
 
 impl DocumentActor {
     /// Apply an edit to the document (internal method)

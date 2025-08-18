@@ -3,9 +3,10 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
-    ClientCapabilities, GotoCapability, Hover, HoverClientCapabilities, InitializeResult, Location,
-    MarkupKind, Position, PublishDiagnosticsParams, Range, TextDocumentClientCapabilities,
-    TextDocumentIdentifier, TextDocumentSyncClientCapabilities, Uri, WorkspaceFolder,
+    ClientCapabilities, FormattingOptions, GotoCapability, Hover, HoverClientCapabilities,
+    InitializeResult, Location, MarkupKind, Position, PublishDiagnosticsParams, Range,
+    TextDocumentClientCapabilities, TextDocumentIdentifier, TextDocumentSyncClientCapabilities,
+    TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
 };
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
@@ -380,6 +381,34 @@ impl Client {
         }
     }
 
+    /// Format a document using LSP
+    pub async fn format_document(
+        &self,
+        text_document: TextDocumentIdentifier,
+        options: FormattingOptions,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let params = DocumentFormattingParams {
+            text_document,
+            options,
+            work_done_progress_params: WorkDoneProgressParams {
+                work_done_token: None,
+            },
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/formatting", params)
+            .await?;
+
+        // Handle null response as None
+        if result.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(serde_json::from_value(result)?))
+        }
+    }
+
     /// Open a text document notification
     pub async fn did_open(&self, text_document: lsp_types::TextDocumentItem) -> Result<()> {
         let params = DidOpenParams { text_document };
@@ -450,6 +479,34 @@ pub struct SymbolInformation {
 
 // Use lsp-types version
 pub type LocationLink = lsp_types::LocationLink;
+
+// Document formatting parameters
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentFormattingParams {
+    text_document: TextDocumentIdentifier,
+    options: FormattingOptions,
+    work_done_progress_params: WorkDoneProgressParams,
+}
+
+impl ToRpcParams for DocumentFormattingParams {
+    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
+        let mut params = ObjectParams::new();
+        params
+            .insert("textDocument", self.text_document)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert("options", self.options)
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params
+            .insert(
+                "workDoneToken",
+                self.work_done_progress_params.work_done_token,
+            )
+            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+        params.to_rpc_params()
+    }
+}
 
 // didChange関連の構造体
 #[derive(Serialize)]
