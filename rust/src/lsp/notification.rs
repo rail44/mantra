@@ -40,7 +40,7 @@ impl NotificationHandler {
                 let diagnostics: PublishDiagnosticsParams = serde_json::from_value(params)?;
                 tracing::debug!(
                     "Received diagnostics for {}: {} items",
-                    diagnostics.uri,
+                    diagnostics.uri.as_str(),
                     diagnostics.diagnostics.len()
                 );
                 self.diagnostics_tx.send(diagnostics)?;

@@ -8,16 +8,17 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
+async-trait = "0.1"
 
 # Parsing
-tree-sitter = "0.22"
-tree-sitter-go = "0.21"
+tree-sitter = "0.25"
+tree-sitter-go = "0.23"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "0.9"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -31,10 +32,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Utilities
 regex = "1"
-hashbrown = "0.14"
+hashbrown = "0.15"
+rustc-hash = "2"
 walkdir = "2"
-jsonrpsee = { version = "0.24", features = ["client", "server", "macros"] }
-lsp-types = "0.95"
+jsonrpsee = { version = "0.26", features = ["client", "server", "macros"] }
+lsp-types = "0.97"
 
 # Actor framework
 actix = "0.13"

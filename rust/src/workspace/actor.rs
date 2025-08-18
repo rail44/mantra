@@ -183,7 +183,7 @@ impl Handler<GetDocument> for Workspace {
                 let document_addr = document.start();
 
                 // Open document in LSP
-                let doc_uri = lsp_types::Url::parse(&uri)?;
+                let doc_uri: lsp_types::Uri = uri.parse()?;
                 lsp_client
                     .did_open(lsp_types::TextDocumentItem {
                         uri: doc_uri,

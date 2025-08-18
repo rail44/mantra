@@ -1,12 +1,12 @@
-use hashbrown::hash_map::DefaultHashBuilder;
-use std::hash::{BuildHasher, Hash, Hasher};
+use rustc_hash::FxHasher;
+use std::hash::{Hash, Hasher};
 
 use super::target::Target;
 
 /// Calculate checksum for a target to detect changes
+/// Uses FxHasher for fast, deterministic hashing
 pub fn calculate_checksum(target: &Target) -> u64 {
-    let hash_builder = DefaultHashBuilder::default();
-    let mut hasher = hash_builder.build_hasher();
+    let mut hasher = FxHasher::default();
 
     // Hash the signature and instruction
     target.signature.hash(&mut hasher);

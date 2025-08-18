@@ -1,7 +1,8 @@
-use jsonrpsee::core::async_trait;
 use jsonrpsee::core::client::{ReceivedMessage, TransportReceiverT, TransportSenderT};
 use serde_json::Value;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -30,13 +31,8 @@ impl StdioSender {
     pub fn new(stdin: ChildStdin) -> Self {
         Self { stdin }
     }
-}
 
-#[async_trait]
-impl TransportSenderT for StdioSender {
-    type Error = TransportError;
-
-    async fn send(&mut self, msg: String) -> Result<(), Self::Error> {
+    async fn send_impl(&mut self, msg: String) -> Result<(), TransportError> {
         let content_length = msg.len();
         let header = format!("Content-Length: {}\r\n\r\n", content_length);
 
@@ -58,6 +54,18 @@ impl TransportSenderT for StdioSender {
     }
 }
 
+impl TransportSenderT for StdioSender {
+    type Error = TransportError;
+
+    #[allow(refining_impl_trait)]
+    fn send(
+        &mut self,
+        msg: String,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + '_>> {
+        Box::pin(self.send_impl(msg))
+    }
+}
+
 /// Handles receiving LSP messages from stdout
 pub struct StdioReceiver {
     stdout: AsyncBufReader<ChildStdout>,
@@ -74,13 +82,8 @@ impl StdioReceiver {
             notification_handler: Some(handler),
         }
     }
-}
 
-#[async_trait]
-impl TransportReceiverT for StdioReceiver {
-    type Error = TransportError;
-
-    async fn receive(&mut self) -> Result<ReceivedMessage, Self::Error> {
+    async fn receive_impl(&mut self) -> Result<ReceivedMessage, TransportError> {
         // Read LSP headers
         let mut headers = Vec::new();
         loop {
@@ -145,5 +148,16 @@ impl TransportReceiverT for StdioReceiver {
         }
 
         Ok(ReceivedMessage::Bytes(buffer))
+    }
+}
+
+impl TransportReceiverT for StdioReceiver {
+    type Error = TransportError;
+
+    #[allow(refining_impl_trait)]
+    fn receive(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<ReceivedMessage, Self::Error>> + Send + '_>> {
+        Box::pin(self.receive_impl())
     }
 }

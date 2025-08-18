@@ -3,8 +3,8 @@ use anyhow::Result;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+use lsp_types::{Position, Range};
 use mantra::config::Config;
-use mantra::core::types::{Position, Range};
 use mantra::workspace::{
     GenerateFile, GetLlmClient, GetLspClient, RegisterScope, Shutdown, Workspace,
 };

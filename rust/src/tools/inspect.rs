@@ -163,7 +163,7 @@ impl Handler<Inspect> for InspectTool {
             let definition_location = lsp_client
                 .goto_definition(
                     lsp_types::TextDocumentIdentifier {
-                        uri: lsp_types::Url::parse(&scope_info.uri).unwrap(),
+                        uri: scope_info.uri.parse().unwrap(),
                     },
                     symbol_position,
                 )
@@ -200,7 +200,7 @@ async fn find_symbol_in_scope(
     // Get document symbols
     let symbols = lsp_client
         .document_symbols(lsp_types::TextDocumentIdentifier {
-            uri: lsp_types::Url::parse(uri).unwrap(),
+            uri: uri.parse().unwrap(),
         })
         .await?;
 

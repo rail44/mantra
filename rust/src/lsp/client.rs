@@ -5,7 +5,7 @@ use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
     ClientCapabilities, GotoCapability, Hover, HoverClientCapabilities, InitializeResult, Location,
     MarkupKind, Position, PublishDiagnosticsParams, Range, TextDocumentClientCapabilities,
-    TextDocumentIdentifier, TextDocumentSyncClientCapabilities, Url, WorkspaceFolder,
+    TextDocumentIdentifier, TextDocumentSyncClientCapabilities, Uri, WorkspaceFolder,
 };
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
@@ -124,7 +124,7 @@ impl Client {
 
     /// Create default workspace folders
     pub fn default_workspace_folders(workspace_uri: &str) -> Result<Vec<WorkspaceFolder>> {
-        let url = Url::parse(workspace_uri)?;
+        let url: Uri = workspace_uri.parse()?;
         Ok(vec![WorkspaceFolder {
             uri: url,
             name: "workspace".to_string(),

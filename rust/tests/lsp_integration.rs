@@ -1,6 +1,6 @@
 use anyhow::Result;
-use mantra::core::types::{Position, TextDocumentIdentifier};
-use mantra::lsp::{Client as LspClient, TextDocumentItem};
+use lsp_types::{Position, TextDocumentIdentifier, TextDocumentItem, Uri};
+use mantra::lsp::Client as LspClient;
 
 /// Test basic LSP client functionality
 /// Requires gopls to be installed
@@ -36,7 +36,7 @@ func main() {
 
     client
         .did_open(TextDocumentItem {
-            uri: "file:///tmp/test.go".to_string(),
+            uri: "file:///tmp/test.go".parse::<Uri>().unwrap(),
             language_id: "go".to_string(),
             version: 1,
             text: test_content.to_string(),
@@ -47,7 +47,7 @@ func main() {
     let hover_result = client
         .hover(
             TextDocumentIdentifier {
-                uri: "file:///tmp/test.go".to_string(),
+                uri: "file:///tmp/test.go".parse::<Uri>().unwrap(),
             },
             Position {
                 line: 5,
@@ -98,7 +98,7 @@ func main() {
 
     client
         .did_open(TextDocumentItem {
-            uri: "file:///tmp/test_def.go".to_string(),
+            uri: "file:///tmp/test_def.go".parse::<Uri>().unwrap(),
             language_id: "go".to_string(),
             version: 1,
             text: test_content.to_string(),
@@ -109,7 +109,7 @@ func main() {
     let definition = client
         .definition(
             TextDocumentIdentifier {
-                uri: "file:///tmp/test_def.go".to_string(),
+                uri: "file:///tmp/test_def.go".parse::<Uri>().unwrap(),
             },
             Position {
                 line: 7,
