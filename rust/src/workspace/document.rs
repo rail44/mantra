@@ -12,7 +12,7 @@ use crate::editor::crdt::{CrdtEditor, Snapshot};
 use crate::generation::EditEvent;
 use crate::lsp::Client as LspClient;
 use crate::parser::{target_map::TargetMap, GoParser};
-use tree_sitter::{InputEdit, Point, Tree};
+use tree_sitter::Tree;
 
 /// Document actor managing a single document with CRDT support
 pub struct DocumentActor {
@@ -187,149 +187,16 @@ impl Handler<GenerateAll> for DocumentActor {
 }
 
 impl Handler<ApplyEdit> for DocumentActor {
-    type Result = ResponseActFuture<Self, Result<()>>;
+    type Result = Result<()>;
 
     fn handle(&mut self, msg: ApplyEdit, _ctx: &mut Context<Self>) -> Self::Result {
-        // Apply the edit first and get the TextEdit with change information
-        let text_edit = match self.apply_edit_internal(msg.edit) {
-            Ok(edit) => edit,
-            Err(e) => return Box::pin(fut::ready(Err(e)).into_actor(self)),
-        };
-
-        // Then format the document
-        let document_uri = self.uri.clone();
-        let lsp_client = self.lsp_client.clone();
-
-        // Keep the current LSP snapshot version for didChange notification
-        let current_version = self.lsp_snapshot.version;
-
-        // Extract the data we need from text_edit before moving into async block
-        let edit_range = text_edit.range;
-        let edit_text = text_edit.new_text;
-
-        Box::pin(
-            async move {
-                // Check LSP formatting capabilities
-                let supports_range = lsp_client.supports_range_formatting().await;
-                let supports_document = lsp_client.supports_document_formatting().await;
-
-                if !supports_document && !supports_range {
-                    debug!("LSP doesn't support any formatting");
-                    return Ok(None);
-                }
-
-                debug!("Applying LSP formatting after edit");
-
-                // Send incremental didChange notification with the TextEdit range
-                let params = lsp_types::DidChangeTextDocumentParams {
-                    text_document: lsp_types::VersionedTextDocumentIdentifier {
-                        uri: document_uri.parse()?,
-                        version: current_version,
-                    },
-                    content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
-                        range: Some(edit_range), // Use the range from TextEdit
-                        range_length: None, // Deprecated field - not needed when range is provided
-                        text: edit_text,
-                    }],
-                };
-
-                lsp_client.did_change(params).await?;
-
-                // Request formatting
-                let text_document = lsp_types::TextDocumentIdentifier {
-                    uri: document_uri.parse()?,
-                };
-
-                let formatting_options = lsp_types::FormattingOptions {
-                    tab_size: 4,
-                    insert_spaces: false, // Go uses tabs
-                    trim_trailing_whitespace: Some(true),
-                    insert_final_newline: Some(true),
-                    trim_final_newlines: Some(true),
-                    ..Default::default()
-                };
-
-                let edits = if supports_range && !supports_document {
-                    // Use range formatting if document formatting is not available
-                    let range = lsp_types::Range {
-                        start: lsp_types::Position {
-                            line: 0,
-                            character: 0,
-                        },
-                        end: lsp_types::Position {
-                            line: u32::MAX,
-                            character: u32::MAX,
-                        },
-                    };
-                    lsp_client
-                        .range_formatting(text_document, range, formatting_options)
-                        .await?
-                } else {
-                    // Prefer document formatting
-                    lsp_client
-                        .format_document(text_document, formatting_options)
-                        .await?
-                };
-
-                if let Some(text_edits) = edits {
-                    if !text_edits.is_empty() {
-                        debug!("Applying {} formatting edits", text_edits.len());
-                        for (i, edit) in text_edits.iter().enumerate() {
-                            debug!(
-                                "Edit {}: range={:?}, new_text={:?}",
-                                i, edit.range, edit.new_text
-                            );
-                        }
-                        Ok(Some(text_edits))
-                    } else {
-                        debug!("No formatting changes from LSP");
-                        Ok(None)
-                    }
-                } else {
-                    debug!("No formatting edits returned from LSP");
-                    Ok(None)
-                }
-            }
-            .into_actor(self)
-            .and_then(move |result: Option<Vec<lsp_types::TextEdit>>, act, _ctx| {
-                // Apply formatting edits if any
-                let did_change_params = result
-                    .and_then(|edits| {
-                        if edits.is_empty() {
-                            None
-                        } else {
-                            match act.apply_formatting_edits(edits) {
-                                Ok(params) if !params.is_empty() => {
-                                    Some(params)
-                                }
-                                Ok(_) => None,
-                                Err(e) => {
-                                    error!("Failed to apply formatting edits: {}", e);
-                                    None
-                                }
-                            }
-                        }
-                    })
-                    .unwrap_or_default();
-
-                // Always update LSP snapshot after the edit (and potential formatting)
-                act.lsp_snapshot = act.editor.create_snapshot();
-
-                // Send all didChange notifications asynchronously
-                let lsp_client = act.lsp_client.clone();
-                Box::pin(
-                    async move {
-                        for params in did_change_params {
-                            if let Err(e) = lsp_client.did_change(params).await {
-                                error!("Failed to send didChange after formatting: {}", e);
-                            }
-                        }
-                        Ok(())
-                    }
-                    .into_actor(act),
-                )
-            }),
-        )
+        // Apply the edit using snapshot-based positioning
+        self.apply_edit_internal(msg.edit)?;
+        
+        // Update LSP snapshot after the edit
+        self.lsp_snapshot = self.editor.create_snapshot();
+        
+        Ok(())
     }
 }
 
@@ -435,77 +302,9 @@ impl Handler<SendDidChange> for DocumentActor {
 }
 
 impl DocumentActor {
-    /// Apply formatting edits to the document and return didChange params
-    fn apply_formatting_edits(
-        &mut self,
-        edits: Vec<lsp_types::TextEdit>,
-    ) -> Result<Vec<lsp_types::DidChangeTextDocumentParams>> {
-        if edits.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Sort edits in reverse order to apply from end to start
-        let mut sorted_edits = edits;
-        sorted_edits.sort_by(|a, b| {
-            b.range
-                .start
-                .line
-                .cmp(&a.range.start.line)
-                .then(b.range.start.character.cmp(&a.range.start.character))
-        });
-
-        let mut did_change_params = Vec::new();
-
-        for edit in sorted_edits {
-            // Apply the edit using the current editor snapshot (after generation edit)
-            // LSP formatting edits are based on the post-edit state
-            let current_snapshot = self.editor.create_snapshot();
-            match self
-                .editor
-                .apply_text_edit(&edit, current_snapshot)
-            {
-                Ok(new_snapshot) => {
-                    // Update LSP snapshot since we'll notify LSP about this change
-                    self.lsp_snapshot = new_snapshot;
-
-                    // Prepare didChange params with the new version
-                    let params = lsp_types::DidChangeTextDocumentParams {
-                        text_document: lsp_types::VersionedTextDocumentIdentifier {
-                            uri: self.uri.parse()?,
-                            version: self.lsp_snapshot.version,
-                        },
-                        content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
-                            range: Some(edit.range),
-                            range_length: None,
-                            text: edit.new_text,
-                        }],
-                    };
-                    did_change_params.push(params);
-                    debug!(
-                        "Prepared didChange for formatting edit (version {})",
-                        self.lsp_snapshot.version
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to apply formatting edit: {}", e);
-                    // Continue with other edits even if one fails
-                }
-            }
-        }
-
-        // Reparse the tree after all edits
-        let new_source = self.editor.get_text();
-        self.tree = self
-            .parser
-            .parse_incremental(&new_source, Some(&self.tree))
-            .with_context(|| "Failed to reparse after formatting")?;
-
-        Ok(did_change_params)
-    }
 
     /// Apply an edit to the document (internal method)
-    /// Returns the TextEdit representing the change for LSP didChange notifications
-    fn apply_edit_internal(&mut self, edit: EditEvent) -> Result<lsp_types::TextEdit> {
+    fn apply_edit_internal(&mut self, edit: EditEvent) -> Result<()> {
         let checksum = edit.checksum;
         let content = edit.new_body.clone();
         let snapshot = edit.snapshot;
@@ -551,37 +350,7 @@ impl DocumentActor {
 
         debug!("Applied edit for checksum {:x}", checksum);
 
-        Ok(text_edit)
+        Ok(())
     }
 
-    /// Create InputEdit for a replace operation
-    fn create_input_edit_for_replace(&self, start: usize, end: usize, text: &str) -> InputEdit {
-        let (start_line, start_col) = self.editor.byte_to_line_col(start);
-        let (end_line, end_col) = self.editor.byte_to_line_col(end);
-        let start_point = Point::new(start_line, start_col);
-        let old_end_point = Point::new(end_line, end_col);
-
-        // Calculate new end position
-        let new_end_byte = start + text.len();
-        let lines: Vec<&str> = text.lines().collect();
-        let new_end_point = if lines.len() > 1 {
-            // Multi-line replacement
-            Point::new(
-                start_line + lines.len() - 1,
-                lines.last().map(|s| s.len()).unwrap_or(0),
-            )
-        } else {
-            // Single line replacement
-            Point::new(start_line, start_col + text.len())
-        };
-
-        InputEdit {
-            start_byte: start,
-            old_end_byte: end,
-            new_end_byte,
-            start_position: start_point,
-            old_end_position: old_end_point,
-            new_end_position: new_end_point,
-        }
-    }
 }
