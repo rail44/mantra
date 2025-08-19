@@ -91,3 +91,8 @@ pub struct GetSource;
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct DocumentShutdown;
+
+/// Send didChange notification to LSP
+#[derive(Message, Debug)]
+#[rtype(result = "Result<()>")]
+pub struct SendDidChange;

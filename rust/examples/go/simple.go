@@ -1,4 +1,4 @@
-package test_simple
+package example
 
 import (
 	"time"

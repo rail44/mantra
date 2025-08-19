@@ -1,25 +1,28 @@
 use anyhow::Result;
 use cola::{Deletion, Insertion, Replica, ReplicaId};
+use crop::Rope;
+use lsp_types::{Position, Range, TextEdit};
 
-/// CRDT-based collaborative text editor using cola
+/// CRDT-based collaborative text editor using cola and crop
 pub struct CrdtEditor {
     /// The cola replica for this editor instance
     replica: Replica,
     /// Replica ID for this editor instance
     replica_id: ReplicaId,
-    /// The actual text content (cola tracks structure, we track content)
-    text: String,
+    /// The text content using crop's Rope for efficient editing
+    rope: Rope,
 }
 
 impl CrdtEditor {
     /// Create a new CRDT editor with a unique replica ID
     pub fn new(replica_id: ReplicaId, initial_text: &str) -> Self {
         let replica = Replica::new(replica_id, initial_text.len());
+        let rope = Rope::from(initial_text);
 
         Self {
             replica,
             replica_id,
-            text: initial_text.to_string(),
+            rope,
         }
     }
 
@@ -42,8 +45,8 @@ impl CrdtEditor {
     }
 
     /// Get the current text content
-    pub fn get_text(&self) -> &str {
-        &self.text
+    pub fn get_text(&self) -> String {
+        self.rope.to_string()
     }
 
     /// Insert text at a specific position
@@ -54,8 +57,8 @@ impl CrdtEditor {
         // Apply to our replica
         let _ = self.replica.integrate_insertion(&insertion);
 
-        // Update our text
-        self.text.insert_str(position, text);
+        // Update our rope
+        self.rope.insert(position, text);
 
         Ok(insertion)
     }
@@ -68,8 +71,8 @@ impl CrdtEditor {
         // Apply to our replica
         let _ = self.replica.integrate_deletion(&deletion);
 
-        // Update our text
-        self.text.replace_range(start..end, "");
+        // Update our rope
+        self.rope.delete(start..end);
 
         Ok(deletion)
     }
@@ -80,14 +83,29 @@ impl CrdtEditor {
         start: usize,
         end: usize,
         text: &str,
-    ) -> Result<(Option<Deletion>, Insertion)> {
-        let deletion = if start < end {
+    ) -> Result<TextEdit> {
+        // Calculate LSP positions BEFORE the edit
+        let start_pos = self.byte_to_lsp_position(start);
+        let end_pos = self.byte_to_lsp_position(end);
+        
+        // Create the TextEdit
+        let text_edit = TextEdit {
+            range: Range {
+                start: start_pos,
+                end: end_pos,
+            },
+            new_text: text.to_string(),
+        };
+        
+        // Perform the actual edit
+        let _deletion = if start < end {
             Some(self.delete(start, end)?)
         } else {
             None
         };
-        let insertion = self.insert(start, text)?;
-        Ok((deletion, insertion))
+        let _insertion = self.insert(start, text)?;
+        
+        Ok(text_edit)
     }
 
     /// Apply an insertion from another replica
@@ -99,7 +117,7 @@ impl CrdtEditor {
         // For now, we'll use a simple approach
         // In a real implementation, we'd need proper position mapping
         let position = self.crdt_to_text_position(insertion);
-        self.text.insert_str(position, text);
+        self.rope.insert(position, text);
 
         Ok(())
     }
@@ -111,8 +129,8 @@ impl CrdtEditor {
 
         // Map CRDT deletion to text positions and apply
         let (start, end) = self.crdt_deletion_to_text_range(deletion);
-        if start < end && end <= self.text.len() {
-            self.text.replace_range(start..end, "");
+        if start < end && end <= self.rope.byte_len() {
+            self.rope.delete(start..end);
         }
 
         Ok(())
@@ -139,62 +157,56 @@ impl CrdtEditor {
 
     /// Get the current length of the document
     pub fn len(&self) -> usize {
-        self.text.len()
+        self.rope.byte_len()
     }
 
     /// Check if the document is empty
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
+        self.rope.byte_len() == 0
     }
 
     /// Convert byte position to line/column
     pub fn byte_to_line_col(&self, byte_pos: usize) -> (usize, usize) {
-        let mut line = 0;
-        let mut col = 0;
-        let mut current_byte = 0;
-
-        for ch in self.text.chars() {
-            if current_byte >= byte_pos {
-                break;
-            }
-
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += ch.len_utf8();
-            }
-
-            current_byte += ch.len_utf8();
-        }
-
+        let line = self.rope.line_of_byte(byte_pos);
+        let line_start_byte = self.rope.byte_of_line(line);
+        let col = byte_pos - line_start_byte;
         (line, col)
+    }
+
+    /// Convert byte position to LSP Position (0-based line, UTF-16 code unit column)
+    pub fn byte_to_lsp_position(&self, byte_pos: usize) -> Position {
+        let line = self.rope.line_of_byte(byte_pos);
+        let line_start_byte = self.rope.byte_of_line(line);
+        
+        // Get the UTF-16 position of the line start
+        let line_start_utf16 = self.rope.utf16_code_unit_of_byte(line_start_byte);
+        // Get the UTF-16 position of our target
+        let target_utf16 = self.rope.utf16_code_unit_of_byte(byte_pos);
+        // Calculate the UTF-16 column within the line
+        let utf16_col = target_utf16 - line_start_utf16;
+        
+        Position {
+            line: line as u32,
+            character: utf16_col as u32,
+        }
+    }
+    
+    /// Convert LSP Position (UTF-16) to byte position
+    pub fn lsp_position_to_byte(&self, position: Position) -> usize {
+        let line_start_byte = self.rope.byte_of_line(position.line as usize);
+        let line_start_utf16 = self.rope.utf16_code_unit_of_byte(line_start_byte);
+        
+        // Calculate the target UTF-16 position
+        let target_utf16 = line_start_utf16 + position.character as usize;
+        
+        // Convert to byte position
+        self.rope.byte_of_utf16_code_unit(target_utf16)
     }
 
     /// Convert line/column to byte position
     pub fn line_col_to_byte(&self, line: usize, col: usize) -> usize {
-        let mut current_line = 0;
-        let mut byte_offset = 0;
-        let mut line_start_byte = 0;
-
-        for ch in self.text.chars() {
-            if current_line == line && (byte_offset - line_start_byte) >= col {
-                return byte_offset;
-            }
-
-            if ch == '\n' {
-                current_line += 1;
-                line_start_byte = byte_offset + ch.len_utf8();
-            }
-
-            byte_offset += ch.len_utf8();
-
-            if current_line > line {
-                break;
-            }
-        }
-
-        line_start_byte + col
+        let line_start = self.rope.byte_of_line(line);
+        line_start + col.min(self.rope.line(line).byte_len())
     }
 
     /// Fork this replica to create a new one
@@ -205,7 +217,7 @@ impl CrdtEditor {
         Self {
             replica: new_replica,
             replica_id: new_replica_id,
-            text: self.text.clone(),
+            rope: self.rope.clone(),
         }
     }
 

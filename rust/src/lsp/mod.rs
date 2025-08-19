@@ -2,7 +2,6 @@ pub mod client;
 mod connection;
 pub mod crdt_adapter;
 pub mod error;
-pub mod formatting;
 pub mod notification;
 pub mod rpc;
 mod transport;

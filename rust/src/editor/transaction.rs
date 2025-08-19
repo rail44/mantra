@@ -85,7 +85,7 @@ impl TransactionalCrdtEditor {
     }
 
     /// Get the current text
-    pub fn get_text(&self) -> &str {
+    pub fn get_text(&self) -> String {
         self.editor.get_text()
     }
 
@@ -299,15 +299,24 @@ impl TransactionalCrdtEditor {
         self.editor.byte_to_line_col(byte_pos)
     }
 
+    /// Convert byte position to LSP Position
+    pub fn byte_to_lsp_position(&self, byte_pos: usize) -> lsp_types::Position {
+        self.editor.byte_to_lsp_position(byte_pos)
+    }
+    
+    /// Convert LSP Position to byte position
+    pub fn lsp_position_to_byte(&self, position: lsp_types::Position) -> usize {
+        self.editor.lsp_position_to_byte(position)
+    }
+
     /// Convert line/column to byte position
     pub fn line_col_to_byte(&self, line: usize, col: usize) -> usize {
         self.editor.line_col_to_byte(line, col)
     }
 
     /// Replace text in a range (without transaction)
-    pub fn replace(&mut self, start: usize, end: usize, text: &str) -> Result<()> {
-        self.editor.replace(start, end, text)?;
-        Ok(())
+    pub fn replace(&mut self, start: usize, end: usize, text: &str) -> Result<lsp_types::TextEdit> {
+        self.editor.replace(start, end, text)
     }
 }
 

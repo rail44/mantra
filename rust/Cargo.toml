@@ -49,6 +49,7 @@ actix = "0.13"
 tempfile = "3"
 cola = "0.5.1"
 rand = "0.9.2"
+crop = { version = "0.4.3", features = ["utf16-metric"] }
 
 [dev-dependencies]
 env_logger = "0.11"
