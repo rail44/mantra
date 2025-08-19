@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lsp_types::{Position, Range, TextEdit};
 
-use crate::editor::crdt::Snapshot;
+use crate::editor::crdt::CrdtEditor;
 
 /// Edit event that describes a change to apply to the source
 /// Uses mantra checksum as a stable identifier
@@ -17,7 +17,7 @@ pub struct EditEvent {
     pub new_body: String,
 
     /// Snapshot of the document when generation task started
-    pub snapshot: Snapshot,
+    pub snapshot: CrdtEditor,
 
     /// Function start position (byte offset)
     pub start_byte: usize,
@@ -31,7 +31,7 @@ impl EditEvent {
         checksum: u64,
         signature: String,
         new_body: String,
-        snapshot: Snapshot,
+        snapshot: CrdtEditor,
         start_byte: usize,
         end_byte: usize,
     ) -> Self {

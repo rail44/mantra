@@ -9,7 +9,7 @@ use super::messages::{
     SendDidChange,
 };
 use crate::config::Config;
-use crate::editor::crdt::{CrdtEditor, Snapshot};
+use crate::editor::crdt::CrdtEditor;
 use crate::generation::EditEvent;
 use crate::lsp::Client as LspClient;
 use crate::parser::{target_map::TargetMap, GoParser};
@@ -24,7 +24,7 @@ pub struct DocumentActor {
     tree: Tree,
     editor: CrdtEditor,
     /// Snapshot of the version that LSP knows about
-    lsp_snapshot: Snapshot,
+    lsp_snapshot: CrdtEditor,
 }
 
 impl DocumentActor {
@@ -48,7 +48,7 @@ impl DocumentActor {
 
         // Initialize CRDT editor
         let editor = CrdtEditor::new(&content);
-        let lsp_snapshot = editor.create_snapshot();
+        let lsp_snapshot = editor.fork();
 
         Ok(Self {
             uri,
@@ -101,7 +101,7 @@ impl Handler<GenerateAll> for DocumentActor {
         let document_addr = ctx.address();
 
         // Capture snapshot and position info at the beginning of generation
-        let generation_snapshot = self.editor.create_snapshot();
+        let generation_snapshot = self.editor.fork();
 
         // Get position information for all targets before generation
         let source = self.editor.get_text().to_string();
@@ -212,7 +212,7 @@ impl Handler<ApplyEdit> for DocumentActor {
 
         if result.is_ok() {
             // Update LSP snapshot after the edit
-            self.lsp_snapshot = self.editor.create_snapshot();
+            self.lsp_snapshot = self.editor.fork();
         }
 
         result
@@ -337,7 +337,7 @@ impl DocumentActor {
         );
 
         // Create replacement content: function with checksum comment + signature + new body
-        let source = snapshot.rope.to_string();
+        let source = snapshot.get_text();
         let func_text = &source[func_start_byte..func_end_byte];
 
         // Extract signature (everything before the body)
@@ -357,20 +357,14 @@ impl DocumentActor {
         // Create TextEdit for the replacement using snapshot-based positions
         let text_edit = lsp_types::TextEdit {
             range: lsp_types::Range {
-                start: crate::editor::crdt::CrdtEditor::byte_to_lsp_position_with_rope(
-                    func_start_byte,
-                    &snapshot.rope,
-                ),
-                end: crate::editor::crdt::CrdtEditor::byte_to_lsp_position_with_rope(
-                    func_end_byte,
-                    &snapshot.rope,
-                ),
+                start: snapshot.byte_to_lsp_position(func_start_byte),
+                end: snapshot.byte_to_lsp_position(func_end_byte),
             },
             new_text: replacement.clone(),
         };
 
         // Apply the edit using snapshot-based CRDT
-        self.editor.apply_text_edit(text_edit, snapshot)?;
+        self.editor.apply_text_edit(text_edit, snapshot);
 
         // Reparse the tree
         let new_source = self.editor.get_text();
@@ -428,7 +422,7 @@ impl Handler<FormatDocument> for DocumentActor {
                         debug!("Received {} formatting edits from LSP", edits.len());
                         // Capture snapshot for all formatting edits at current state
                         act.editor
-                            .apply_text_edits(&edits, formatting_snapshot.fork())?;
+                            .apply_text_edits(&edits, formatting_snapshot.fork());
 
                         // Reparse after formatting
                         let new_source = act.editor.get_text();
