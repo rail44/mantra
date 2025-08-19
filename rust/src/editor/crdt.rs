@@ -2,26 +2,6 @@ use anyhow::Result;
 use cola::{Replica, ReplicaId};
 use crop::Rope;
 use lsp_types::{Position, TextEdit};
-use tree_sitter::{InputEdit, Point};
-
-struct Tree {
-    tree: Option<tree_sitter::Tree>,
-    parser: tree_sitter::Parser,
-}
-
-impl Tree {
-    pub fn new(source: &str) -> Self {
-        let mut parser = tree_sitter::Parser::new();
-        // Initialize with a default language, e.g., JavaScript
-        parser.set_language(&tree_sitter_go::LANGUAGE.into());
-        let tree = parser.parse(source, None);
-
-        Self {
-            tree,
-            parser,
-        }
-    }
-}
 
 /// Snapshot for tracking document state at a specific point
 #[derive(Clone, Debug)]
@@ -56,22 +36,19 @@ pub struct CrdtEditor {
     rope: Rope,
     /// Document version for LSP synchronization
     document_version: i32,
-    tree: Tree,
 }
 
 impl CrdtEditor {
     /// Create a new CRDT editor with a unique replica ID
-    pub fn new(replica_id: ReplicaId, initial_text: &str) -> Self {
+    pub fn new(initial_text: &str) -> Self {
         let id = Self::generate_replica_id();
-        let replica = Replica::new(replica_id, initial_text.len());
+        let replica = Replica::new(id, initial_text.len());
         let rope = Rope::from(initial_text);
-        let tree = Tree::new(initial_text);
 
         Self {
             replica,
             rope,
             document_version: 0,
-            tree,
         }
     }
 
@@ -202,54 +179,51 @@ impl CrdtEditor {
 
         // Apply each edit in sequence
         for edit in edits {
-            debug!("Applying text edit: {:?}", edit);
-            snapshot = self.apply_text_edit(edit, snapshot)?;
+            use tracing::debug;
+
+            // Convert LSP positions to byte positions using snapshot's rope
+            let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
+            let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
+
+            debug!(
+                "CRDT apply_text_edit: start_byte={}, end_byte={}, new_text.len()={}",
+                start_byte,
+                end_byte,
+                edit.new_text.len()
+            );
+            debug!(
+                "CRDT snapshot version: {}, current version: {}",
+                snapshot.version, self.document_version
+            );
+
+            // Handle deletion if needed
+            if start_byte < end_byte {
+                let deletion = snapshot.replica.deleted(start_byte..end_byte);
+                let ranges = self.replica.integrate_deletion(&deletion);
+                debug!("CRDT deletion ranges: {:?}", ranges);
+                self.apply_deletions_to_rope(&ranges);
+            }
+
+            // Handle insertion if needed
+            if !edit.new_text.is_empty() {
+                let insertion = snapshot.replica.inserted(start_byte, edit.new_text.len());
+                if let Some(position) = self.replica.integrate_insertion(&insertion) {
+                    debug!("CRDT insertion at position: {}", position);
+                    self.apply_insertion_to_rope(position, &edit.new_text);
+                } else {
+                    debug!("CRDT insertion returned None - edit was ignored or conflicted");
+                }
+            }
+
         }
 
-        Ok(snapshot)
+        self.increment_version();
+        Ok(self.create_snapshot())
     }
 
     /// Apply a TextEdit from a snapshot and return a new snapshot
-    pub fn apply_text_edit(&mut self, edit: &TextEdit, mut snapshot: Snapshot) -> Result<Snapshot> {
-        use tracing::debug;
-
-        // Convert LSP positions to byte positions using snapshot's rope
-        let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
-        let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
-
-        debug!(
-            "CRDT apply_text_edit: start_byte={}, end_byte={}, new_text.len()={}",
-            start_byte,
-            end_byte,
-            edit.new_text.len()
-        );
-        debug!(
-            "CRDT snapshot version: {}, current version: {}",
-            snapshot.version, self.document_version
-        );
-
-        // Handle deletion if needed
-        if start_byte < end_byte {
-            let deletion = snapshot.replica.deleted(start_byte..end_byte);
-            let ranges = self.replica.integrate_deletion(&deletion);
-            debug!("CRDT deletion ranges: {:?}", ranges);
-            self.apply_deletions_to_rope(&ranges);
-        }
-
-        // Handle insertion if needed
-        if !edit.new_text.is_empty() {
-            let insertion = snapshot.replica.inserted(start_byte, edit.new_text.len());
-            if let Some(position) = self.replica.integrate_insertion(&insertion) {
-                debug!("CRDT insertion at position: {}", position);
-                self.apply_insertion_to_rope(position, &edit.new_text);
-            } else {
-                debug!("CRDT insertion returned None - edit was ignored or conflicted");
-            }
-        }
-
-        // Increment version and create new snapshot
-        self.increment_version();
-        Ok(self.create_snapshot())
+    pub fn apply_text_edit(&mut self, edit: TextEdit, snapshot: Snapshot) -> Result<Snapshot> {
+        self.apply_text_edits(&[edit], snapshot)
     }
 }
 
@@ -260,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_basic_operations() {
-        let mut editor = CrdtEditor::from_text("Hello, world!");
+        let mut editor = CrdtEditor::new("Hello, world!");
 
         // Test insertion using apply_text_edit
         let snapshot = editor.create_snapshot();
@@ -319,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_position_conversion() {
-        let editor = CrdtEditor::from_text("line1\nline2\nline3");
+        let editor = CrdtEditor::new("line1\nline2\nline3");
 
         // Test byte to line/col
         assert_eq!(editor.byte_to_line_col(0), (0, 0));
@@ -334,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_empty_document() {
-        let editor = CrdtEditor::from_text("");
+        let editor = CrdtEditor::new("");
         assert!(editor.is_empty());
         assert_eq!(editor.len(), 0);
         assert_eq!(editor.get_text(), "");
@@ -342,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_utf8_handling() {
-        let mut editor = CrdtEditor::from_text("こんにちは");
+        let mut editor = CrdtEditor::new("こんにちは");
 
         // Japanese characters handling
         assert_eq!(editor.byte_to_line_col(0), (0, 0));
