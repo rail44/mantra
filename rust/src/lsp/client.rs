@@ -3,10 +3,11 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
-    ClientCapabilities, FormattingOptions, GotoCapability, Hover, HoverClientCapabilities,
-    InitializeResult, Location, MarkupKind, Position, PublishDiagnosticsParams, Range,
-    TextDocumentClientCapabilities, TextDocumentIdentifier, TextDocumentSyncClientCapabilities,
-    TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
+    ClientCapabilities, DidChangeTextDocumentParams, DocumentFormattingParams,
+    DocumentRangeFormattingParams, FormattingOptions, GotoCapability, Hover,
+    HoverClientCapabilities, InitializeResult, Location, MarkupKind, Position,
+    PublishDiagnosticsParams, Range, TextDocumentClientCapabilities, TextDocumentIdentifier,
+    TextDocumentSyncClientCapabilities, TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
 };
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,27 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use crate::lsp::connection::LspConnection;
+
+/// 中間trait：Serializeできる型をRPCパラメータに変換
+trait LspParams: Serialize + Send {
+    fn to_object_params(self) -> Result<ObjectParams, serde_json::Error>;
+}
+
+// Serializeを実装している全ての型に対してLspParamsを実装
+impl<T: Serialize + Send> LspParams for T {
+    fn to_object_params(self) -> Result<ObjectParams, serde_json::Error> {
+        let value = serde_json::to_value(self)?;
+        let mut params = ObjectParams::new();
+        if let Value::Object(map) = value {
+            for (key, value) in map {
+                params
+                    .insert(&key, value)
+                    .map_err(|e| serde_json::Error::custom(e.to_string()))?;
+            }
+        }
+        Ok(params)
+    }
+}
 
 // パラメータ構造体をキャメルケース変換付きで定義
 #[derive(Serialize)]
@@ -84,6 +106,7 @@ impl ToRpcParams for DidOpenParams {
 #[derive(Clone, Debug)]
 pub struct Client {
     connection: Arc<LspConnection>,
+    server_capabilities: Arc<tokio::sync::RwLock<Option<lsp_types::ServerCapabilities>>>,
 }
 
 impl Client {
@@ -92,6 +115,7 @@ impl Client {
         let connection = LspConnection::new(command, args).await?;
         Ok(Self {
             connection: Arc::new(connection),
+            server_capabilities: Arc::new(tokio::sync::RwLock::new(None)),
         })
     }
 
@@ -159,8 +183,12 @@ impl Client {
         };
 
         let result = self.connection.client.request("initialize", params).await?;
+        let init_result: InitializeResult = serde_json::from_value(result)?;
 
-        Ok(serde_json::from_value(result)?)
+        // Save server capabilities
+        *self.server_capabilities.write().await = Some(init_result.capabilities.clone());
+
+        Ok(init_result)
     }
 
     /// Send initialized notification
@@ -381,6 +409,40 @@ impl Client {
         }
     }
 
+    /// Check if the server supports range formatting
+    pub async fn supports_range_formatting(&self) -> bool {
+        let capabilities = self.server_capabilities.read().await;
+        if let Some(caps) = capabilities.as_ref() {
+            if let Some(doc_formatting) = &caps.document_range_formatting_provider {
+                match doc_formatting {
+                    lsp_types::OneOf::Left(supported) => *supported,
+                    lsp_types::OneOf::Right(_) => true,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Check if the server supports document formatting
+    pub async fn supports_document_formatting(&self) -> bool {
+        let capabilities = self.server_capabilities.read().await;
+        if let Some(caps) = capabilities.as_ref() {
+            if let Some(doc_formatting) = &caps.document_formatting_provider {
+                match doc_formatting {
+                    lsp_types::OneOf::Left(supported) => *supported,
+                    lsp_types::OneOf::Right(_) => true,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     /// Format a document using LSP
     pub async fn format_document(
         &self,
@@ -398,7 +460,37 @@ impl Client {
         let result: Value = self
             .connection
             .client
-            .request("textDocument/formatting", params)
+            .request("textDocument/formatting", params.to_object_params()?)
+            .await?;
+
+        // Handle null response as None
+        if result.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(serde_json::from_value(result)?))
+        }
+    }
+
+    /// Format a range of a document using LSP
+    pub async fn range_formatting(
+        &self,
+        text_document: TextDocumentIdentifier,
+        range: Range,
+        options: FormattingOptions,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let params = DocumentRangeFormattingParams {
+            text_document,
+            range,
+            options,
+            work_done_progress_params: WorkDoneProgressParams {
+                work_done_token: None,
+            },
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/rangeFormatting", params.to_object_params()?)
             .await?;
 
         // Handle null response as None
@@ -420,19 +512,10 @@ impl Client {
         Ok(())
     }
 
-    pub async fn did_change(
-        &self,
-        text_document: VersionedTextDocumentIdentifier,
-        content_changes: Vec<TextDocumentContentChangeEvent>,
-    ) -> Result<()> {
-        let params = DidChangeParams {
-            text_document,
-            content_changes,
-        };
-
+    pub async fn did_change(&self, params: DidChangeTextDocumentParams) -> Result<()> {
         self.connection
             .client
-            .notification("textDocument/didChange", params)
+            .notification("textDocument/didChange", params.to_object_params()?)
             .await?;
         Ok(())
     }
@@ -479,65 +562,3 @@ pub struct SymbolInformation {
 
 // Use lsp-types version
 pub type LocationLink = lsp_types::LocationLink;
-
-// Document formatting parameters
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentFormattingParams {
-    text_document: TextDocumentIdentifier,
-    options: FormattingOptions,
-    work_done_progress_params: WorkDoneProgressParams,
-}
-
-impl ToRpcParams for DocumentFormattingParams {
-    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
-        let mut params = ObjectParams::new();
-        params
-            .insert("textDocument", self.text_document)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params
-            .insert("options", self.options)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params
-            .insert(
-                "workDoneToken",
-                self.work_done_progress_params.work_done_token,
-            )
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params.to_rpc_params()
-    }
-}
-
-// didChange関連の構造体
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VersionedTextDocumentIdentifier {
-    pub uri: String,
-    pub version: i32,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextDocumentContentChangeEvent {
-    pub text: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DidChangeParams {
-    text_document: VersionedTextDocumentIdentifier,
-    content_changes: Vec<TextDocumentContentChangeEvent>,
-}
-
-impl ToRpcParams for DidChangeParams {
-    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
-        let mut params = ObjectParams::new();
-        params
-            .insert("textDocument", self.text_document)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params
-            .insert("contentChanges", self.content_changes)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params.to_rpc_params()
-    }
-}

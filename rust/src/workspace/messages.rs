@@ -91,10 +91,3 @@ pub struct GetSource;
 #[derive(Message, Debug)]
 #[rtype(result = "()")]
 pub struct DocumentShutdown;
-
-/// Format generated code using LSP
-#[derive(Message, Debug)]
-#[rtype(result = "Result<String>")]
-pub struct FormatGeneratedCode {
-    pub code: String,
-}

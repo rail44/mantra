@@ -4,24 +4,118 @@ use std::path::PathBuf;
 use tracing::{debug, error};
 
 use super::actor::Workspace;
+use super::generation_session::GenerationSessionManager;
 use super::messages::{
-    ApplyEdit, DocumentShutdown, FormatGeneratedCode, GenerateAll, GetFileUri, GetSource,
-    GetTargetInfo,
+    ApplyEdit, DocumentShutdown, GenerateAll, GetFileUri, GetSource, GetTargetInfo,
 };
 use crate::config::Config;
-use crate::editor::CrdtEditor;
+use crate::editor::TransactionalCrdtEditor;
 use crate::generation::EditEvent;
+use crate::lsp::Client as LspClient;
 use crate::parser::{target_map::TargetMap, GoParser};
 use tree_sitter::{InputEdit, Point, Tree};
 
-/// Document actor managing a single document with CRDT support
+// Helper function to apply LSP text edits to a string
+fn apply_text_edits(text: &str, edits: &[lsp_types::TextEdit]) -> String {
+    // Sort edits in reverse order to apply from end to start
+    let mut sorted_edits = edits.to_vec();
+    sorted_edits.sort_by(|a, b| {
+        b.range
+            .start
+            .line
+            .cmp(&a.range.start.line)
+            .then(b.range.start.character.cmp(&a.range.start.character))
+    });
+
+    let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+
+    for edit in sorted_edits {
+        let start_line = edit.range.start.line as usize;
+        let start_char = edit.range.start.character as usize;
+        let end_line = edit.range.end.line as usize;
+        let end_char = edit.range.end.character as usize;
+
+        // Skip edit if line indices are out of bounds
+        if start_line >= lines.len() || end_line >= lines.len() {
+            continue;
+        }
+
+        // Handle single-line edit
+        if start_line == end_line {
+            if let Some(line) = lines.get_mut(start_line) {
+                let mut chars: Vec<char> = line.chars().collect();
+                let line_len = chars.len();
+
+                // Ensure valid range
+                let safe_start = start_char.min(line_len);
+                let safe_end = end_char.min(line_len);
+
+                if safe_start <= safe_end {
+                    chars.splice(safe_start..safe_end, edit.new_text.chars());
+                    *line = chars.into_iter().collect();
+                } else {
+                    // Invalid range, just insert at safe_start
+                    chars.splice(safe_start..safe_start, edit.new_text.chars());
+                    *line = chars.into_iter().collect();
+                }
+            }
+        } else {
+            // Multi-line edit
+            let new_lines: Vec<String> = edit.new_text.lines().map(|s| s.to_string()).collect();
+
+            // Get the parts to keep from start and end lines
+            let start_keep = if let Some(line) = lines.get(start_line) {
+                line.chars()
+                    .take(start_char.min(line.len()))
+                    .collect::<String>()
+            } else {
+                String::new()
+            };
+
+            let end_keep = if let Some(line) = lines.get(end_line) {
+                let line_len = line.chars().count();
+                line.chars()
+                    .skip(end_char.min(line_len))
+                    .collect::<String>()
+            } else {
+                String::new()
+            };
+
+            // Combine the parts
+            let mut replacement = Vec::new();
+            if new_lines.is_empty() {
+                replacement.push(format!("{}{}", start_keep, end_keep));
+            } else {
+                for (i, new_line) in new_lines.iter().enumerate() {
+                    if i == 0 {
+                        replacement.push(format!("{}{}", start_keep, new_line));
+                    } else if i == new_lines.len() - 1 {
+                        replacement.push(format!("{}{}", new_line, end_keep));
+                    } else {
+                        replacement.push(new_line.clone());
+                    }
+                }
+            }
+
+            // Replace the lines
+            lines.splice(start_line..=end_line, replacement);
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Document actor managing a single document with CRDT support and transaction management
 pub struct DocumentActor {
     uri: String,
     workspace: Addr<Workspace>,
+    lsp_client: LspClient, // LSPクライアントの参照
     parser: GoParser,
     tree: Tree,
-    editor: CrdtEditor, // Using CRDT editor for all text operations
+    editor: TransactionalCrdtEditor, // Transactional CRDT editor for version control
     document_version: i32,
+    #[allow(dead_code)]
+    generation_manager: GenerationSessionManager, // Manages parallel generation sessions
 }
 
 impl DocumentActor {
@@ -30,6 +124,7 @@ impl DocumentActor {
         file_path: PathBuf,
         uri: String,
         workspace: Addr<Workspace>,
+        lsp_client: LspClient,
     ) -> Result<Self> {
         // Read the file content
         let content = tokio::fs::read_to_string(&file_path)
@@ -42,16 +137,21 @@ impl DocumentActor {
             .parse(&content)
             .with_context(|| "Failed to parse Go source")?;
 
-        // Initialize CRDT editor for all text operations
-        let editor = CrdtEditor::from_text(&content);
+        // Initialize transactional CRDT editor for version control
+        let mut editor = TransactionalCrdtEditor::new(&content);
+
+        // Initialize generation session manager
+        let generation_manager = GenerationSessionManager::new(&mut editor);
 
         Ok(Self {
             uri,
             workspace,
+            lsp_client,
             parser,
             tree,
             editor,
             document_version: 1,
+            generation_manager,
         })
     }
 }
@@ -102,6 +202,12 @@ impl Handler<GenerateAll> for DocumentActor {
                 for (checksum, signature) in targets {
                     debug!("Starting generation for checksum {:x}", checksum);
 
+                    // Get target info for formatting  
+                    let _target_info = match document_addr.send(GetTargetInfo { checksum }).await {
+                        Ok(Ok((_, _, start_line, end_line))) => Some((start_line, end_line)),
+                        _ => None,
+                    };
+
                     match crate::generation::generate_for_target(
                         checksum,
                         document_addr.clone(),
@@ -111,23 +217,8 @@ impl Handler<GenerateAll> for DocumentActor {
                     {
                         Ok(generated_code) => {
                             debug!("Successfully generated code for checksum {:x}", checksum);
-                            // Format the generated code using LSP
-                            let formatted_code = match workspace.send(FormatGeneratedCode {
-                                code: generated_code.clone(),
-                            }).await {
-                                Ok(Ok(formatted)) => {
-                                    debug!("Successfully formatted code for checksum {:x}", checksum);
-                                    formatted
-                                }
-                                Ok(Err(e)) => {
-                                    debug!("Failed to format code for checksum {:x}: {}, using unformatted", checksum, e);
-                                    generated_code
-                                }
-                                Err(e) => {
-                                    debug!("Failed to send format request for checksum {:x}: {}, using unformatted", checksum, e);
-                                    generated_code
-                                }
-                            };
+                            // Apply generated code and format
+                            let formatted_code = generated_code;
                             let edit = crate::generation::EditEvent::new(
                                 checksum,
                                 signature,
@@ -144,24 +235,170 @@ impl Handler<GenerateAll> for DocumentActor {
                 edits
             }
             .into_actor(self)
-            .map(|edits, act, _ctx| {
-                // Apply all edits
+            .then(|edits, act, ctx| {
+                // Send ApplyEdit messages to self for each edit to trigger formatting
+                let mut edit_futures = Vec::new();
+
                 for edit in edits {
-                    if let Err(e) = act.apply_edit_internal(edit) {
-                        error!("Failed to apply edit: {}", e);
-                    }
+                    let apply_edit_msg = ApplyEdit { edit };
+                    let future = ctx.address().send(apply_edit_msg);
+                    edit_futures.push(future);
                 }
-                Ok(act.editor.get_text().to_string())
+
+                // Wait for all edits to complete
+                async move {
+                    for future in edit_futures {
+                        if let Err(e) = future.await {
+                            error!("Failed to send ApplyEdit message: {}", e);
+                        }
+                    }
+                    Ok(())
+                }
+                .into_actor(act)
+                .map(|_result: Result<()>, act, _ctx| Ok(act.editor.get_text().to_string()))
             }),
         )
     }
 }
 
 impl Handler<ApplyEdit> for DocumentActor {
-    type Result = Result<()>;
+    type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: ApplyEdit, _ctx: &mut Context<Self>) -> Self::Result {
-        self.apply_edit_internal(msg.edit)
+        // Apply the edit first
+        if let Err(e) = self.apply_edit_internal(msg.edit) {
+            return Box::pin(fut::ready(Err(e)).into_actor(self));
+        }
+
+        // Then format the document
+        let document_uri = self.uri.clone();
+        let lsp_client = self.lsp_client.clone();
+        let current_text = self.editor.get_text().to_string();
+
+        Box::pin(
+            async move {
+                // Check LSP formatting capabilities
+                let supports_range = lsp_client.supports_range_formatting().await;
+                let supports_document = lsp_client.supports_document_formatting().await;
+
+                if !supports_document && !supports_range {
+                    debug!("LSP doesn't support any formatting");
+                    return Ok(None);
+                }
+
+                debug!("Applying LSP formatting after edit");
+
+                // Send didChange notification
+                let params = lsp_types::DidChangeTextDocumentParams {
+                    text_document: lsp_types::VersionedTextDocumentIdentifier {
+                        uri: document_uri.parse()?,
+                        version: 0, // TODO: Track version properly
+                    },
+                    content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                        range: None,
+                        range_length: None,
+                        text: current_text.clone(),
+                    }],
+                };
+
+                lsp_client.did_change(params).await?;
+
+                // Request formatting
+                let text_document = lsp_types::TextDocumentIdentifier {
+                    uri: document_uri.parse()?,
+                };
+
+                let formatting_options = lsp_types::FormattingOptions {
+                    tab_size: 4,
+                    insert_spaces: false, // Go uses tabs
+                    trim_trailing_whitespace: Some(true),
+                    insert_final_newline: Some(true),
+                    trim_final_newlines: Some(true),
+                    ..Default::default()
+                };
+
+                let edits = if supports_range && !supports_document {
+                    // Use range formatting if document formatting is not available
+                    let range = lsp_types::Range {
+                        start: lsp_types::Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: lsp_types::Position {
+                            line: u32::MAX,
+                            character: u32::MAX,
+                        },
+                    };
+                    lsp_client
+                        .range_formatting(text_document, range, formatting_options)
+                        .await?
+                } else {
+                    // Prefer document formatting
+                    lsp_client
+                        .format_document(text_document, formatting_options)
+                        .await?
+                };
+
+                if let Some(text_edits) = edits {
+                    if !text_edits.is_empty() {
+                        debug!("Applying {} formatting edits", text_edits.len());
+                        Ok(Some(text_edits))
+                    } else {
+                        debug!("No formatting changes from LSP");
+                        Ok(None)
+                    }
+                } else {
+                    debug!("No formatting edits returned from LSP");
+                    Ok(None)
+                }
+            }
+            .into_actor(self)
+            .map(
+                |result: Result<Option<Vec<lsp_types::TextEdit>>, anyhow::Error>, act, _ctx| {
+                    match result {
+                        Ok(Some(text_edits)) => {
+                            // Apply formatting edits to CRDT editor
+                            let formatted_text =
+                                apply_text_edits(act.editor.get_text(), &text_edits);
+
+                            // Replace entire document with formatted version
+                            let doc_len = act.editor.get_text().len();
+                            if let Err(e) = act.editor.replace(0, doc_len, &formatted_text) {
+                                error!("Failed to apply formatting: {}", e);
+                                return Err(anyhow::anyhow!("Failed to apply formatting: {}", e));
+                            }
+
+                            // Reparse the tree
+                            match act
+                                .parser
+                                .parse_incremental(&formatted_text, Some(&act.tree))
+                            {
+                                Ok(new_tree) => {
+                                    act.tree = new_tree;
+                                }
+                                Err(e) => {
+                                    error!("Failed to reparse after formatting: {}", e);
+                                    return Err(anyhow::anyhow!(
+                                        "Failed to reparse after formatting: {}",
+                                        e
+                                    ));
+                                }
+                            }
+                            Ok(())
+                        }
+                        Ok(None) => {
+                            // No formatting edits
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("Formatting failed: {}", e);
+                            // Continue without formatting
+                            Ok(())
+                        }
+                    }
+                },
+            ),
+        )
     }
 }
 
@@ -216,8 +453,14 @@ impl DocumentActor {
     /// Apply an edit to the document (internal method)
     fn apply_edit_internal(&mut self, edit: EditEvent) -> Result<()> {
         let checksum = edit.checksum;
-        let content = edit.new_body;
+        let content = edit.new_body.clone();
+        let transaction_id = format!("edit_{:x}", checksum);
 
+        // Start a transaction for this edit
+        self.editor.begin_transaction(
+            transaction_id.clone(),
+            format!("Apply edit for checksum {:x}", checksum),
+        )?;
         // Find the target by checksum - extract all needed data and drop target_map
         let source = self.editor.get_text().to_string();
         let (target_name, func_start_byte, func_end_byte, body_start_byte, body_text) = {
@@ -343,8 +586,13 @@ impl DocumentActor {
                 "Applied edit for checksum {:x} to {}",
                 checksum, target_name
             );
+
+            // Commit the transaction
+            self.editor.commit_transaction(&transaction_id)?;
         } else {
             error!("Target not found for checksum {:x}", checksum);
+            // Rollback the transaction if target not found
+            self.editor.rollback_transaction(&transaction_id)?;
         }
 
         Ok(())

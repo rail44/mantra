@@ -4,4 +4,5 @@ pub use self::messages::*;
 
 mod actor;
 pub(crate) mod document;
+mod generation_session;
 mod messages;

@@ -11,74 +11,11 @@ use crate::tools::inspect::{InspectTool, RegisterScope as InspectRegisterScope};
 
 use super::document::DocumentActor;
 use super::messages::*;
-use lsp_types::{FormattingOptions, TextDocumentIdentifier, TextEdit as LspTextEdit};
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-/// Apply LSP text edits to a string
-fn apply_text_edits(text: &str, edits: &[LspTextEdit]) -> String {
-    // Sort edits in reverse order to apply from end to start
-    let mut sorted_edits = edits.to_vec();
-    sorted_edits.sort_by(|a, b| {
-        b.range
-            .start
-            .line
-            .cmp(&a.range.start.line)
-            .then(b.range.start.character.cmp(&a.range.start.character))
-    });
-
-    let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
-
-    for edit in sorted_edits {
-        let start_line = edit.range.start.line as usize;
-        let start_char = edit.range.start.character as usize;
-        let end_line = edit.range.end.line as usize;
-        let end_char = edit.range.end.character as usize;
-
-        // Handle single-line edit
-        if start_line == end_line {
-            if let Some(line) = lines.get_mut(start_line) {
-                let mut chars: Vec<char> = line.chars().collect();
-                chars.splice(start_char..end_char.min(chars.len()), edit.new_text.chars());
-                *line = chars.into_iter().collect();
-            }
-        } else {
-            // Multi-line edit
-            let new_lines: Vec<String> = edit.new_text.lines().map(|s| s.to_string()).collect();
-
-            // Get the parts to keep from start and end lines
-            let start_prefix = lines
-                .get(start_line)
-                .map(|l| l.chars().take(start_char).collect::<String>())
-                .unwrap_or_default();
-            let end_suffix = lines
-                .get(end_line)
-                .map(|l| l.chars().skip(end_char).collect::<String>())
-                .unwrap_or_default();
-
-            // Build replacement lines
-            let mut replacement = Vec::new();
-            if let Some(first) = new_lines.first() {
-                replacement.push(format!("{}{}", start_prefix, first));
-                for line in new_lines.iter().skip(1) {
-                    replacement.push(line.clone());
-                }
-                if let Some(last) = replacement.last_mut() {
-                    last.push_str(&end_suffix);
-                }
-            } else {
-                replacement.push(format!("{}{}", start_prefix, end_suffix));
-            }
-
-            // Replace the lines
-            lines.splice(start_line..=end_line, replacement);
-        }
-    }
-
-    lines.join("\n")
-}
 
 // ============================================================================
 // Actor Definition
@@ -244,9 +181,14 @@ impl Handler<GetDocument> for Workspace {
                 let source = tokio::fs::read_to_string(&file_path).await?;
 
                 // Create and start document actor
-                let document =
-                    DocumentActor::new(config, file_path.clone(), uri.clone(), workspace_addr)
-                        .await?;
+                let document = DocumentActor::new(
+                    config,
+                    file_path.clone(),
+                    uri.clone(),
+                    workspace_addr,
+                    lsp_client.clone(),
+                )
+                .await?;
 
                 let document_addr = document.start();
 
@@ -365,70 +307,6 @@ impl Handler<GenerateFile> for Workspace {
                     Err(anyhow::anyhow!("Actor communication error: {}", e))
                 }
             }
-        })
-    }
-}
-
-impl Handler<FormatGeneratedCode> for Workspace {
-    type Result = ResponseFuture<Result<String>>;
-
-    fn handle(&mut self, msg: FormatGeneratedCode, _ctx: &mut Context<Self>) -> Self::Result {
-        debug!("FormatGeneratedCode request");
-
-        let lsp_client = self.lsp_client.clone();
-        let root_dir = self.root_dir.clone();
-
-        Box::pin(async move {
-            // Create a temporary file with the code to format
-            let temp_file = tempfile::NamedTempFile::new_in(&root_dir)?;
-            let temp_path = temp_file.path().to_path_buf();
-            let temp_uri = format!("file://{}", temp_path.display());
-
-            // Write the code to the temp file
-            tokio::fs::write(&temp_path, &msg.code).await?;
-
-            // Open the document in LSP
-            let text_document_item = lsp_types::TextDocumentItem {
-                uri: temp_uri.parse()?,
-                language_id: "go".to_string(),
-                version: 1,
-                text: msg.code.clone(),
-            };
-
-            lsp_client.did_open(text_document_item).await?;
-
-            // Request formatting
-            let text_document = TextDocumentIdentifier {
-                uri: temp_uri.parse()?,
-            };
-
-            let formatting_options = FormattingOptions {
-                tab_size: 4,
-                insert_spaces: false, // Go uses tabs
-                trim_trailing_whitespace: Some(true),
-                insert_final_newline: Some(true),
-                trim_final_newlines: Some(true),
-                ..Default::default()
-            };
-
-            let formatted = match lsp_client
-                .format_document(text_document, formatting_options)
-                .await?
-            {
-                Some(edits) if !edits.is_empty() => {
-                    // Apply the edits to get the formatted code
-                    apply_text_edits(&msg.code, &edits)
-                }
-                _ => {
-                    debug!("No formatting changes from LSP");
-                    msg.code
-                }
-            };
-
-            // Clean up temp file
-            drop(temp_file);
-
-            Ok(formatted)
         })
     }
 }
