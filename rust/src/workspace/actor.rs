@@ -7,7 +7,6 @@ use tracing::{debug, error, info};
 use crate::config::Config;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
-use crate::tools::inspect::{InspectTool, RegisterScope as InspectRegisterScope};
 
 use super::document::DocumentActor;
 use super::messages::*;
@@ -32,8 +31,6 @@ pub struct Workspace {
     root_dir: PathBuf,
     /// Configuration
     config: Config,
-    /// Inspect tool actor address
-    inspect_tool: Option<Addr<InspectTool>>,
 }
 
 impl Workspace {
@@ -66,7 +63,6 @@ impl Workspace {
             llm_client,
             root_dir,
             config,
-            inspect_tool: None,
         })
     }
 
@@ -82,10 +78,6 @@ impl Actor for Workspace {
 
     fn started(&mut self, _ctx: &mut Self::Context) {
         info!("Workspace actor started for: {}", self.root_dir.display());
-
-        // Start InspectTool actor
-        let inspect_tool = InspectTool::new().start();
-        self.inspect_tool = Some(inspect_tool);
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
@@ -120,32 +112,6 @@ impl Handler<GetLlmClient> for Workspace {
     fn handle(&mut self, _msg: GetLlmClient, _ctx: &mut Context<Self>) -> Self::Result {
         debug!("GetLlmClient requested");
         MessageResult(self.llm_client.clone())
-    }
-}
-
-impl Handler<RegisterScope> for Workspace {
-    type Result = ResponseFuture<String>;
-
-    fn handle(&mut self, msg: RegisterScope, _ctx: &mut Context<Self>) -> Self::Result {
-        debug!("RegisterScope: uri={}, range={:?}", msg.uri, msg.range);
-
-        if let Some(ref inspect_tool) = self.inspect_tool {
-            let inspect_tool = inspect_tool.clone();
-            Box::pin(async move {
-                inspect_tool
-                    .send(InspectRegisterScope {
-                        uri: msg.uri,
-                        range: msg.range,
-                    })
-                    .await
-                    .unwrap_or_else(|e| {
-                        error!("Failed to register scope: {}", e);
-                        "error_registering_scope".to_string()
-                    })
-            })
-        } else {
-            Box::pin(async move { "no_inspect_tool".to_string() })
-        }
     }
 }
 
@@ -216,30 +182,6 @@ impl Handler<GetDocument> for Workspace {
                 }
             }),
         )
-    }
-}
-
-impl Handler<InspectSymbol> for Workspace {
-    type Result = ResponseFuture<Result<crate::tools::inspect::InspectResponse>>;
-
-    fn handle(&mut self, msg: InspectSymbol, _ctx: &mut Context<Self>) -> Self::Result {
-        debug!("InspectSymbol: {:?}", msg.request);
-
-        if let Some(ref inspect_tool) = self.inspect_tool {
-            let inspect_tool = inspect_tool.clone();
-            let lsp_client = self.lsp_client.clone();
-
-            Box::pin(async move {
-                inspect_tool
-                    .send(crate::tools::inspect::Inspect {
-                        request: msg.request,
-                        lsp_client,
-                    })
-                    .await?
-            })
-        } else {
-            Box::pin(async move { Err(anyhow::anyhow!("InspectTool not initialized")) })
-        }
     }
 }
 

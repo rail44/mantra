@@ -1,9 +1,7 @@
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
-use crate::tools::inspect::{InspectRequest, InspectResponse};
 use actix::prelude::*;
 use anyhow::Result;
-use lsp_types::Range;
 use std::path::PathBuf;
 
 use super::document::DocumentActor;
@@ -28,21 +26,6 @@ pub struct GetLspClient;
 #[derive(Message, Debug)]
 #[rtype(result = "LLMClient")]
 pub struct GetLlmClient;
-
-/// Register a scope in InspectTool
-#[derive(Message, Debug)]
-#[rtype(result = "String")]
-pub struct RegisterScope {
-    pub uri: String,
-    pub range: Range,
-}
-
-/// Inspect a symbol
-#[derive(Message, Debug)]
-#[rtype(result = "Result<InspectResponse>")]
-pub struct InspectSymbol {
-    pub request: InspectRequest,
-}
 
 /// Generate code for a file
 #[derive(Message, Debug)]

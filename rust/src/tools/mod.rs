@@ -1,8 +1,4 @@
 // Tool actors for code generation support
-pub mod inspect;
-
-// Re-export commonly used types
-pub use inspect::{InspectRequest, InspectResponse, InspectTool};
 
 // Tool actor trait for common tool behaviors
 use actix::prelude::*;
