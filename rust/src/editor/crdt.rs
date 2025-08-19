@@ -2,6 +2,26 @@ use anyhow::Result;
 use cola::{Replica, ReplicaId};
 use crop::Rope;
 use lsp_types::{Position, TextEdit};
+use tree_sitter::{InputEdit, Point};
+
+struct Tree {
+    tree: Option<tree_sitter::Tree>,
+    parser: tree_sitter::Parser,
+}
+
+impl Tree {
+    pub fn new(source: &str) -> Self {
+        let mut parser = tree_sitter::Parser::new();
+        // Initialize with a default language, e.g., JavaScript
+        parser.set_language(&tree_sitter_go::LANGUAGE.into());
+        let tree = parser.parse(source, None);
+
+        Self {
+            tree,
+            parser,
+        }
+    }
+}
 
 /// Snapshot for tracking document state at a specific point
 #[derive(Clone, Debug)]
@@ -14,6 +34,20 @@ pub struct Snapshot {
     pub rope: Rope,
 }
 
+impl Snapshot {
+    /// Create a fork of this snapshot with a new replica ID
+    pub fn fork(&self) -> Self {
+        let new_replica_id = CrdtEditor::generate_replica_id();
+        let forked_replica = self.replica.fork(new_replica_id);
+
+        Self {
+            version: self.version,
+            replica: forked_replica,
+            rope: self.rope.clone(),
+        }
+    }
+}
+
 /// CRDT-based collaborative text editor using cola and crop
 pub struct CrdtEditor {
     /// The cola replica for this editor instance
@@ -22,26 +56,23 @@ pub struct CrdtEditor {
     rope: Rope,
     /// Document version for LSP synchronization
     document_version: i32,
+    tree: Tree,
 }
 
 impl CrdtEditor {
     /// Create a new CRDT editor with a unique replica ID
     pub fn new(replica_id: ReplicaId, initial_text: &str) -> Self {
+        let id = Self::generate_replica_id();
         let replica = Replica::new(replica_id, initial_text.len());
         let rope = Rope::from(initial_text);
+        let tree = Tree::new(initial_text);
 
         Self {
             replica,
             rope,
             document_version: 0,
+            tree,
         }
-    }
-
-    /// Create an editor from existing content
-    pub fn from_text(text: &str) -> Self {
-        // Generate a new replica ID based on timestamp and random component
-        let replica_id = Self::generate_replica_id();
-        Self::new(replica_id, text)
     }
 
     /// Generate a unique replica ID using fast random number generation
@@ -119,7 +150,7 @@ impl CrdtEditor {
     pub fn byte_to_lsp_position_with_rope(byte_pos: usize, rope: &Rope) -> Position {
         let line = rope.line_of_byte(byte_pos);
         let line_start_byte = rope.byte_of_line(line);
-        
+
         // Convert byte offset within line to UTF-16 character offset
         let byte_offset = byte_pos - line_start_byte;
         let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
@@ -162,16 +193,46 @@ impl CrdtEditor {
         }
     }
 
+    pub fn apply_text_edits(
+        &mut self,
+        edits: &[TextEdit],
+        mut snapshot: Snapshot,
+    ) -> Result<Snapshot> {
+        use tracing::debug;
+
+        // Apply each edit in sequence
+        for edit in edits {
+            debug!("Applying text edit: {:?}", edit);
+            snapshot = self.apply_text_edit(edit, snapshot)?;
+        }
+
+        Ok(snapshot)
+    }
+
     /// Apply a TextEdit from a snapshot and return a new snapshot
     pub fn apply_text_edit(&mut self, edit: &TextEdit, mut snapshot: Snapshot) -> Result<Snapshot> {
+        use tracing::debug;
+
         // Convert LSP positions to byte positions using snapshot's rope
         let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
         let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
+
+        debug!(
+            "CRDT apply_text_edit: start_byte={}, end_byte={}, new_text.len()={}",
+            start_byte,
+            end_byte,
+            edit.new_text.len()
+        );
+        debug!(
+            "CRDT snapshot version: {}, current version: {}",
+            snapshot.version, self.document_version
+        );
 
         // Handle deletion if needed
         if start_byte < end_byte {
             let deletion = snapshot.replica.deleted(start_byte..end_byte);
             let ranges = self.replica.integrate_deletion(&deletion);
+            debug!("CRDT deletion ranges: {:?}", ranges);
             self.apply_deletions_to_rope(&ranges);
         }
 
@@ -179,9 +240,11 @@ impl CrdtEditor {
         if !edit.new_text.is_empty() {
             let insertion = snapshot.replica.inserted(start_byte, edit.new_text.len());
             if let Some(position) = self.replica.integrate_insertion(&insertion) {
+                debug!("CRDT insertion at position: {}", position);
                 self.apply_insertion_to_rope(position, &edit.new_text);
+            } else {
+                debug!("CRDT insertion returned None - edit was ignored or conflicted");
             }
-            // If None (backlogged), we ignore for now as discussed
         }
 
         // Increment version and create new snapshot
@@ -189,7 +252,6 @@ impl CrdtEditor {
         Ok(self.create_snapshot())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

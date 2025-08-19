@@ -96,3 +96,8 @@ pub struct DocumentShutdown;
 #[derive(Message, Debug)]
 #[rtype(result = "Result<()>")]
 pub struct SendDidChange;
+
+/// Format document using LSP
+#[derive(Message, Debug)]
+#[rtype(result = "Result<()>")]
+pub struct FormatDocument;
