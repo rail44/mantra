@@ -9,7 +9,7 @@ use super::messages::{
     GetTargetInfo,
 };
 use crate::config::Config;
-use crate::editor::{CrdtEditor, IncrementalEditor};
+use crate::editor::CrdtEditor;
 use crate::generation::EditEvent;
 use crate::parser::{target_map::TargetMap, GoParser};
 use tree_sitter::{InputEdit, Point, Tree};
@@ -20,9 +20,7 @@ pub struct DocumentActor {
     workspace: Addr<Workspace>,
     parser: GoParser,
     tree: Tree,
-    editor: IncrementalEditor,
-    #[allow(dead_code)] // Will be used for collaborative editing
-    crdt_editor: CrdtEditor, // CRDT editor for collaborative editing
+    editor: CrdtEditor, // Using CRDT editor for all text operations
     document_version: i32,
 }
 
@@ -44,11 +42,8 @@ impl DocumentActor {
             .parse(&content)
             .with_context(|| "Failed to parse Go source")?;
 
-        // Initialize editor with the content
-        let editor = IncrementalEditor::new(content.clone());
-
-        // Initialize CRDT editor for collaborative editing
-        let crdt_editor = CrdtEditor::from_text(&content);
+        // Initialize CRDT editor for all text operations
+        let editor = CrdtEditor::from_text(&content);
 
         Ok(Self {
             uri,
@@ -56,7 +51,6 @@ impl DocumentActor {
             parser,
             tree,
             editor,
-            crdt_editor,
             document_version: 1,
         })
     }
@@ -77,7 +71,7 @@ impl Handler<GenerateAll> for DocumentActor {
         debug!("GenerateAll for: {}", self.uri);
 
         // Build target map
-        let source = self.editor.source();
+        let source = self.editor.get_text();
         let target_map = match TargetMap::build(&self.tree, source) {
             Ok(map) => map,
             Err(e) => {
@@ -157,7 +151,7 @@ impl Handler<GenerateAll> for DocumentActor {
                         error!("Failed to apply edit: {}", e);
                     }
                 }
-                Ok(act.editor.source().to_string())
+                Ok(act.editor.get_text().to_string())
             }),
         )
     }
@@ -175,7 +169,7 @@ impl Handler<GetTargetInfo> for DocumentActor {
     type Result = Result<(crate::parser::target::Target, String, u32, u32)>;
 
     fn handle(&mut self, msg: GetTargetInfo, _ctx: &mut Context<Self>) -> Self::Result {
-        let source = self.editor.source();
+        let source = self.editor.get_text();
         let target_map = TargetMap::build(&self.tree, source)?;
 
         if let Some((target, node)) = target_map.get(msg.checksum) {
@@ -205,7 +199,7 @@ impl Handler<GetSource> for DocumentActor {
     type Result = Result<String>;
 
     fn handle(&mut self, _msg: GetSource, _ctx: &mut Context<Self>) -> Self::Result {
-        Ok(self.editor.source().to_string())
+        Ok(self.editor.get_text().to_string())
     }
 }
 
@@ -225,7 +219,7 @@ impl DocumentActor {
         let content = edit.new_body;
 
         // Find the target by checksum - extract all needed data and drop target_map
-        let source = self.editor.source().to_string();
+        let source = self.editor.get_text().to_string();
         let (target_name, func_start_byte, func_end_byte, body_start_byte, body_text) = {
             let target_map = TargetMap::build(&self.tree, &source)?;
 
@@ -299,7 +293,8 @@ impl DocumentActor {
 
                     self.tree.edit(&input_edit);
                     self.editor
-                        .replace(checksum_line_start, func_end_byte, replacement);
+                        .replace(checksum_line_start, func_end_byte, &replacement)
+                        .with_context(|| "Failed to replace text")?;
                 } else {
                     // Add new checksum: replace entire function
                     let replacement = format!(
@@ -317,7 +312,8 @@ impl DocumentActor {
 
                     self.tree.edit(&input_edit);
                     self.editor
-                        .replace(func_start_byte, func_end_byte, replacement);
+                        .replace(func_start_byte, func_end_byte, &replacement)
+                        .with_context(|| "Failed to replace text")?;
                 }
             } else {
                 // First line of file - just replace body
@@ -329,11 +325,12 @@ impl DocumentActor {
 
                 self.tree.edit(&input_edit);
                 self.editor
-                    .replace(body_content_start, body_content_end, content);
+                    .replace(body_content_start, body_content_end, &content)
+                    .with_context(|| "Failed to replace text")?;
             }
 
             // Reparse the tree
-            let new_source = self.editor.source();
+            let new_source = self.editor.get_text();
             self.tree = self
                 .parser
                 .parse_incremental(new_source, Some(&self.tree))
