@@ -70,13 +70,6 @@ pub struct ApplyEdit {
     pub edit: crate::generation::EditEvent,
 }
 
-/// Get target info by checksum
-#[derive(Message, Debug)]
-#[rtype(result = "Result<(crate::parser::target::Target, String, u32, u32)>")]
-pub struct GetTargetInfo {
-    pub checksum: u64,
-}
-
 /// Get file URI
 #[derive(Message, Debug)]
 #[rtype(result = "Result<String>")]

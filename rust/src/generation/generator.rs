@@ -1,23 +1,19 @@
 use actix::prelude::*;
 use anyhow::Result;
 use tracing::debug;
+use crate::parser::target::Target;
 
-use crate::workspace::{DocumentActor, GetLlmClient, GetTargetInfo, Workspace};
+use crate::workspace::{GetLlmClient, Workspace};
 
 /// Generate code for a specific target
 pub async fn generate_for_target(
-    checksum: u64,
-    document_addr: Addr<DocumentActor>,
+    target: &Target,
     workspace_addr: Addr<Workspace>,
 ) -> Result<String> {
-    // Get target info from DocumentActor
-    let (target, _package_name, _start_line, _end_line) =
-        document_addr.send(GetTargetInfo { checksum }).await??;
-
     debug!("Got target info for {}", target.name);
 
     // Build prompt using generation module
-    let prompt = super::build_prompt(&target);
+    let prompt = super::build_prompt(target);
 
     // Get LLM client and generate code
     let llm_client = workspace_addr.send(GetLlmClient).await?;

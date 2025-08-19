@@ -5,14 +5,14 @@ use tracing::{debug, error, info};
 
 use super::actor::Workspace;
 use super::messages::{
-    ApplyEdit, DocumentShutdown, FormatDocument, GenerateAll, GetFileUri, GetSource, GetTargetInfo,
+    ApplyEdit, DocumentShutdown, FormatDocument, GenerateAll, GetFileUri, GetSource,
     SendDidChange,
 };
 use crate::config::Config;
 use crate::editor::crdt::CrdtEditor;
 use crate::generation::EditEvent;
 use crate::lsp::Client as LspClient;
-use crate::parser::{target_map::TargetMap, GoParser};
+use crate::parser::{target::Target, target_map::TargetMap, GoParser};
 use tree_sitter::Tree;
 
 /// Document actor managing a single document with CRDT support
@@ -77,7 +77,7 @@ impl Handler<GenerateAll> for DocumentActor {
         debug!("GenerateAll for: {}", self.uri);
 
         // Build target map
-        let source = self.editor.get_text();
+        let source = self.editor.get_text().clone();
         let target_map = match TargetMap::build(&self.tree, &source) {
             Ok(map) => map,
             Err(e) => {
@@ -87,9 +87,9 @@ impl Handler<GenerateAll> for DocumentActor {
         };
 
         // Get all targets
-        let targets: Vec<(u64, String)> = target_map
+        let targets: Vec<(u64, Target)> = target_map
             .iter()
-            .map(|(checksum, (target, _))| (*checksum, target.signature.clone()))
+            .map(|(checksum, (target, _))| (*checksum, target.clone()))
             .collect();
 
         if targets.is_empty() {
@@ -104,27 +104,21 @@ impl Handler<GenerateAll> for DocumentActor {
         let generation_snapshot = self.editor.fork();
 
         // Get position information for all targets before generation
-        let source = self.editor.get_text().to_string();
         let target_positions: std::collections::HashMap<u64, (usize, usize)> = {
-            use crate::parser::target_map::TargetMap;
-            if let Ok(target_map) = TargetMap::build(&self.tree, &source) {
-                targets
-                    .iter()
-                    .filter_map(|(checksum, _)| {
-                        target_map
-                            .get(*checksum)
-                            .map(|(_, node)| (*checksum, (node.start_byte(), node.end_byte())))
-                    })
-                    .collect()
-            } else {
-                std::collections::HashMap::new()
-            }
+            targets
+                .iter()
+                .filter_map(|(checksum, _)| {
+                    target_map
+                        .get(*checksum)
+                        .map(|(_, node)| (*checksum, (node.start_byte(), node.end_byte())))
+                })
+                .collect()
         };
 
         // Generate code for all targets and apply immediately
         Box::pin(
             async move {
-                for (checksum, signature) in targets {
+                for (checksum, target) in targets {
                     debug!("Starting generation for checksum {:x}", checksum);
 
                     // Get position info for this target
@@ -132,8 +126,7 @@ impl Handler<GenerateAll> for DocumentActor {
                         target_positions.get(&checksum).copied().unwrap_or((0, 0));
 
                     match crate::generation::generate_for_target(
-                        checksum,
-                        document_addr.clone(),
+                        &target,
                         workspace.clone(),
                     )
                     .await
@@ -142,12 +135,12 @@ impl Handler<GenerateAll> for DocumentActor {
                             debug!("Successfully generated code for checksum {:x}", checksum);
                             debug!("Generated code: {:?}", generated_code);
                             debug!("Position: start_byte={}, end_byte={}", start_byte, end_byte);
-                            debug!("Signature: {:?}", signature);
+                            debug!("Signature: {:?}", target.signature);
 
                             // Create edit and apply immediately
                             let edit = crate::generation::EditEvent::new(
                                 checksum,
-                                signature,
+                                target.signature,
                                 generated_code,
                                 generation_snapshot.fork(), // 各編集に独立したforkを作成
                                 start_byte,
@@ -216,28 +209,6 @@ impl Handler<ApplyEdit> for DocumentActor {
         }
 
         result
-    }
-}
-
-impl Handler<GetTargetInfo> for DocumentActor {
-    type Result = Result<(crate::parser::target::Target, String, u32, u32)>;
-
-    fn handle(&mut self, msg: GetTargetInfo, _ctx: &mut Context<Self>) -> Self::Result {
-        let source = self.editor.get_text();
-        let target_map = TargetMap::build(&self.tree, &source)?;
-
-        if let Some((target, node)) = target_map.get(msg.checksum) {
-            let start_line = node.start_position().row as u32;
-            let end_line = node.end_position().row as u32;
-            let package_name = target_map.package_name().to_string();
-
-            Ok((target.clone(), package_name, start_line, end_line))
-        } else {
-            Err(anyhow::anyhow!(
-                "Target with checksum {:x} not found",
-                msg.checksum
-            ))
-        }
     }
 }
 
