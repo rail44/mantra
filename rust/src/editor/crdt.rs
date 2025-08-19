@@ -4,7 +4,7 @@ use crop::Rope;
 use lsp_types::{Position, TextEdit};
 
 /// Snapshot for tracking document state at a specific point
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Snapshot {
     /// The version number when this snapshot was created
     pub version: i32,
@@ -113,6 +113,23 @@ impl CrdtEditor {
 
         // Convert to byte position
         rope.byte_of_utf16_code_unit(target_utf16)
+    }
+
+    /// Convert byte position to LSP position using provided rope
+    pub fn byte_to_lsp_position_with_rope(byte_pos: usize, rope: &Rope) -> Position {
+        let line = rope.line_of_byte(byte_pos);
+        let line_start_byte = rope.byte_of_line(line);
+        
+        // Convert byte offset within line to UTF-16 character offset
+        let byte_offset = byte_pos - line_start_byte;
+        let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
+        let target_utf16 = rope.utf16_code_unit_of_byte(line_start_byte + byte_offset);
+        let utf16_col = target_utf16 - line_start_utf16;
+
+        Position {
+            line: line as u32,
+            character: utf16_col as u32,
+        }
     }
 
     /// Convert line/column to byte position

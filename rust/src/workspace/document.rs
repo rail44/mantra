@@ -99,6 +99,24 @@ impl Handler<GenerateAll> for DocumentActor {
         let workspace = self.workspace.clone();
         let document_addr = ctx.address();
 
+        // Capture snapshot and position info at the beginning of generation
+        let generation_snapshot = self.editor.create_snapshot();
+        
+        // Get position information for all targets before generation
+        let source = self.editor.get_text().to_string();
+        let target_positions: std::collections::HashMap<u64, (usize, usize)> = {
+            use crate::parser::target_map::TargetMap;
+            if let Ok(target_map) = TargetMap::build(&self.tree, &source) {
+                targets.iter().filter_map(|(checksum, _)| {
+                    target_map.get(*checksum).map(|(_, node)| {
+                        (*checksum, (node.start_byte(), node.end_byte()))
+                    })
+                }).collect()
+            } else {
+                std::collections::HashMap::new()
+            }
+        };
+
         // Generate code for all targets using TargetGenerator
         Box::pin(
             async move {
@@ -107,11 +125,10 @@ impl Handler<GenerateAll> for DocumentActor {
                 for (checksum, signature) in targets {
                     debug!("Starting generation for checksum {:x}", checksum);
 
-                    // Get target info for formatting
-                    let _target_info = match document_addr.send(GetTargetInfo { checksum }).await {
-                        Ok(Ok((_, _, start_line, end_line))) => Some((start_line, end_line)),
-                        _ => None,
-                    };
+                    // Get position info for this target
+                    let (start_byte, end_byte) = target_positions.get(&checksum)
+                        .copied()
+                        .unwrap_or((0, 0));
 
                     match crate::generation::generate_for_target(
                         checksum,
@@ -128,6 +145,9 @@ impl Handler<GenerateAll> for DocumentActor {
                                 checksum,
                                 signature,
                                 formatted_code,
+                                generation_snapshot.clone(),
+                                start_byte,
+                                end_byte,
                             );
                             edits.push(edit);
                         }
@@ -180,8 +200,7 @@ impl Handler<ApplyEdit> for DocumentActor {
         let document_uri = self.uri.clone();
         let lsp_client = self.lsp_client.clone();
 
-        // Create a new snapshot after the edit and update LSP's known state
-        self.lsp_snapshot = self.editor.create_snapshot();
+        // Keep the current LSP snapshot version for didChange notification
         let current_version = self.lsp_snapshot.version;
 
         // Extract the data we need from text_edit before moving into async block
@@ -281,8 +300,6 @@ impl Handler<ApplyEdit> for DocumentActor {
                         } else {
                             match act.apply_formatting_edits(edits) {
                                 Ok(params) if !params.is_empty() => {
-                                    // Update LSP snapshot after successful formatting
-                                    act.lsp_snapshot = act.editor.create_snapshot();
                                     Some(params)
                                 }
                                 Ok(_) => None,
@@ -294,6 +311,9 @@ impl Handler<ApplyEdit> for DocumentActor {
                         }
                     })
                     .unwrap_or_default();
+
+                // Always update LSP snapshot after the edit (and potential formatting)
+                act.lsp_snapshot = act.editor.create_snapshot();
 
                 // Send all didChange notifications asynchronously
                 let lsp_client = act.lsp_client.clone();
@@ -437,11 +457,12 @@ impl DocumentActor {
         let mut did_change_params = Vec::new();
 
         for edit in sorted_edits {
-            // Apply the edit using the current LSP snapshot
-            // This ensures we're applying formatting based on what LSP knows
+            // Apply the edit using the current editor snapshot (after generation edit)
+            // LSP formatting edits are based on the post-edit state
+            let current_snapshot = self.editor.create_snapshot();
             match self
                 .editor
-                .apply_text_edit(&edit, self.lsp_snapshot.clone())
+                .apply_text_edit(&edit, current_snapshot)
             {
                 Ok(new_snapshot) => {
                     // Update LSP snapshot since we'll notify LSP about this change
@@ -487,202 +508,50 @@ impl DocumentActor {
     fn apply_edit_internal(&mut self, edit: EditEvent) -> Result<lsp_types::TextEdit> {
         let checksum = edit.checksum;
         let content = edit.new_body.clone();
+        let snapshot = edit.snapshot;
+        let func_start_byte = edit.start_byte;
+        let func_end_byte = edit.end_byte;
 
-        // Create a snapshot before the edit
-        let snapshot = self.editor.create_snapshot();
-        // Find the target by checksum - extract all needed data and drop target_map
-        let source = self.editor.get_text().to_string();
-        let (target_name, func_start_byte, func_end_byte, body_start_byte, body_text) = {
-            let target_map = TargetMap::build(&self.tree, &source)?;
-
-            if let Some((target, node)) = target_map.get(checksum) {
-                let target_name = target.name.clone();
-                let func_start = node.start_byte();
-                let func_end = node.end_byte();
-
-                // Get the function body node
-                let body_node = node
-                    .child_by_field_name("body")
-                    .with_context(|| "Function has no body")?;
-
-                let body_start = body_node.start_byte();
-                let body_text = body_node.utf8_text(source.as_bytes())?.to_string();
-
-                (
-                    Some(target_name),
-                    func_start,
-                    func_end,
-                    body_start,
-                    body_text,
-                )
-            } else {
-                (None, 0, 0, 0, String::new())
-            }
-        }; // target_map is dropped here
-
-        if let Some(target_name) = target_name {
-            // Find body boundaries (inside the braces)
-            let open_brace_offset = body_text.find('{').unwrap_or(0);
-            let close_brace_offset = body_text.rfind('}').unwrap_or(body_text.len());
-
-            let body_content_start = body_start_byte + open_brace_offset + 1;
-            let body_content_end = body_start_byte + close_brace_offset;
-
-            // Check if we need to add checksum comment
-            let (func_line, _) = self.editor.byte_to_line_col(func_start_byte);
-
-            // Create a combined edit: replace function with checksum comment + signature + new body
-            let func_signature = &source[func_start_byte..body_start_byte];
-
-            if func_line > 0 {
-                // Check if checksum comment already exists
-                let lines: Vec<&str> = source.lines().collect();
-                let has_checksum = lines
-                    .get(func_line.saturating_sub(1))
-                    .map(|line| line.contains("// mantra:checksum:"))
-                    .unwrap_or(false);
-
-                if has_checksum {
-                    // Update existing checksum: replace from checksum line to end of function
-                    let checksum_line_start = source
-                        .lines()
-                        .take(func_line - 1)
-                        .map(|l| l.len() + 1)
-                        .sum::<usize>();
-
-                    let replacement = format!(
-                        "// mantra:checksum:{:x}\n{} {{\n{}}}",
-                        checksum,
-                        func_signature.trim_end(),
-                        content
-                    );
-
-                    let input_edit = self.create_input_edit_for_replace(
-                        checksum_line_start,
-                        func_end_byte,
-                        &replacement,
-                    );
-
-                    self.tree.edit(&input_edit);
-
-                    // Create TextEdit for the replacement
-                    let start_pos = self.editor.byte_to_lsp_position(checksum_line_start);
-                    let end_pos = self.editor.byte_to_lsp_position(func_end_byte);
-                    let text_edit = lsp_types::TextEdit {
-                        range: lsp_types::Range {
-                            start: start_pos,
-                            end: end_pos,
-                        },
-                        new_text: replacement.clone(),
-                    };
-
-                    // Apply the edit
-                    let _new_snapshot = self.editor.apply_text_edit(&text_edit, snapshot)?;
-
-                    // Reparse the tree
-                    let new_source = self.editor.get_text();
-                    self.tree = self
-                        .parser
-                        .parse_incremental(&new_source, Some(&self.tree))
-                        .with_context(|| "Failed to reparse after edit")?;
-
-                    debug!(
-                        "Applied edit for checksum {:x} to {}",
-                        checksum, target_name
-                    );
-
-                    Ok(text_edit)
-                } else {
-                    // Add new checksum: replace entire function
-                    let replacement = format!(
-                        "// mantra:checksum:{:x}\n{} {{\n{}}}",
-                        checksum,
-                        func_signature.trim_end(),
-                        content
-                    );
-
-                    let input_edit = self.create_input_edit_for_replace(
-                        func_start_byte,
-                        func_end_byte,
-                        &replacement,
-                    );
-
-                    self.tree.edit(&input_edit);
-
-                    // Create TextEdit for the replacement
-                    let start_pos = self.editor.byte_to_lsp_position(func_start_byte);
-                    let end_pos = self.editor.byte_to_lsp_position(func_end_byte);
-                    let text_edit = lsp_types::TextEdit {
-                        range: lsp_types::Range {
-                            start: start_pos,
-                            end: end_pos,
-                        },
-                        new_text: replacement.clone(),
-                    };
-
-                    // Apply the edit
-                    let _new_snapshot = self.editor.apply_text_edit(&text_edit, snapshot)?;
-
-                    // Reparse the tree
-                    let new_source = self.editor.get_text();
-                    self.tree = self
-                        .parser
-                        .parse_incremental(&new_source, Some(&self.tree))
-                        .with_context(|| "Failed to reparse after edit")?;
-
-                    debug!(
-                        "Applied edit for checksum {:x} to {}",
-                        checksum, target_name
-                    );
-
-                    Ok(text_edit)
-                }
-            } else {
-                // First line of file - just replace body
-                let input_edit = self.create_input_edit_for_replace(
-                    body_content_start,
-                    body_content_end,
-                    &content,
-                );
-
-                self.tree.edit(&input_edit);
-
-                // Create TextEdit for the replacement
-                let start_pos = self.editor.byte_to_lsp_position(body_content_start);
-                let end_pos = self.editor.byte_to_lsp_position(body_content_end);
-                let text_edit = lsp_types::TextEdit {
-                    range: lsp_types::Range {
-                        start: start_pos,
-                        end: end_pos,
-                    },
-                    new_text: content.clone(),
-                };
-
-                // Apply the edit
-                let _new_snapshot = self.editor.apply_text_edit(&text_edit, snapshot)?;
-
-                // Reparse the tree
-                let new_source = self.editor.get_text();
-                self.tree = self
-                    .parser
-                    .parse_incremental(&new_source, Some(&self.tree))
-                    .with_context(|| "Failed to reparse after edit")?;
-
-                debug!(
-                    "Applied edit for checksum {:x} to {}",
-                    checksum, target_name
-                );
-
-                Ok(text_edit)
-            }
+        // Create replacement content: function with checksum comment + signature + new body
+        let source = snapshot.rope.to_string();
+        let func_text = &source[func_start_byte..func_end_byte];
+        
+        // Extract signature (everything before the body)
+        let func_signature = if let Some(brace_pos) = func_text.find('{') {
+            &func_text[..brace_pos]
         } else {
-            error!("Target not found for checksum {:x}", checksum);
-            // No rollback needed without transactions
-            Err(anyhow::anyhow!(
-                "Target with checksum {:x} not found",
-                checksum
-            ))
-        }
+            func_text
+        };
+
+        let replacement = format!(
+            "// mantra:checksum:{:x}\n{} {{\n{}}}",
+            checksum,
+            func_signature.trim_end(),
+            content
+        );
+
+        // Create TextEdit for the replacement using snapshot-based positions
+        let text_edit = lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: crate::editor::crdt::CrdtEditor::byte_to_lsp_position_with_rope(func_start_byte, &snapshot.rope),
+                end: crate::editor::crdt::CrdtEditor::byte_to_lsp_position_with_rope(func_end_byte, &snapshot.rope),
+            },
+            new_text: replacement.clone(),
+        };
+
+        // Apply the edit using snapshot-based CRDT
+        self.editor.apply_text_edit(&text_edit, snapshot)?;
+
+        // Reparse the tree
+        let new_source = self.editor.get_text();
+        self.tree = self
+            .parser
+            .parse_incremental(&new_source, Some(&self.tree))
+            .with_context(|| "Failed to reparse after edit")?;
+
+        debug!("Applied edit for checksum {:x}", checksum);
+
+        Ok(text_edit)
     }
 
     /// Create InputEdit for a replace operation
