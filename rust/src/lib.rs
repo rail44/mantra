@@ -6,5 +6,4 @@ pub mod language;
 pub mod llm;
 pub mod lsp;
 pub mod parser;
-pub mod tools;
 pub mod workspace;
