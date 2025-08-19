@@ -1,8 +1,6 @@
 pub mod crdt;
-pub mod edit;
 pub mod text;
 
-// Re-export common types for LSP integration
+// Re-export common types
 pub use crdt::{CrdtEditor, CrdtOperation};
-pub use edit::{Position, Range, TextEdit};
-pub use text::{indent_code, IncrementalEditor};
+pub use text::indent_code;

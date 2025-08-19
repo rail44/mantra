@@ -1,7 +1,5 @@
 use anyhow::Result;
-
-// Re-use LSP types from editor module
-pub use crate::editor::{Position, Range, TextEdit};
+use lsp_types::{Position, Range, TextEdit};
 
 /// Edit event that describes a change to apply to the source
 /// Uses mantra checksum as a stable identifier
