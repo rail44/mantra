@@ -9,18 +9,20 @@ use super::messages::{
     GetTargetInfo,
 };
 use crate::config::Config;
-use crate::editor::IncrementalEditor;
+use crate::editor::{CrdtEditor, IncrementalEditor};
 use crate::generation::EditEvent;
 use crate::parser::{target_map::TargetMap, GoParser};
 use tree_sitter::{InputEdit, Point, Tree};
 
-/// Document actor managing a single document
+/// Document actor managing a single document with CRDT support
 pub struct DocumentActor {
     uri: String,
     workspace: Addr<Workspace>,
     parser: GoParser,
     tree: Tree,
     editor: IncrementalEditor,
+    #[allow(dead_code)] // Will be used for collaborative editing
+    crdt_editor: CrdtEditor, // CRDT editor for collaborative editing
     document_version: i32,
 }
 
@@ -43,7 +45,10 @@ impl DocumentActor {
             .with_context(|| "Failed to parse Go source")?;
 
         // Initialize editor with the content
-        let editor = IncrementalEditor::new(content);
+        let editor = IncrementalEditor::new(content.clone());
+
+        // Initialize CRDT editor for collaborative editing
+        let crdt_editor = CrdtEditor::from_text(&content);
 
         Ok(Self {
             uri,
@@ -51,6 +56,7 @@ impl DocumentActor {
             parser,
             tree,
             editor,
+            crdt_editor,
             document_version: 1,
         })
     }

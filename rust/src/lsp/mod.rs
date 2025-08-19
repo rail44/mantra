@@ -1,5 +1,6 @@
 pub mod client;
 mod connection;
+pub mod crdt_adapter;
 pub mod error;
 pub mod notification;
 pub mod rpc;
