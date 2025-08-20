@@ -1,5 +1,6 @@
 use anyhow::{Context as AnyhowContext, Result};
 use std::path::PathBuf;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::config::Config;
@@ -8,11 +9,79 @@ use crate::generation::EditEvent;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::parser::{target::Target, target_map::TargetMap, GoParser};
+use crate::workspace::service::{Handler, Service};
 use lsp_types::{
     DidChangeTextDocumentParams, Range, TextDocumentContentChangeEvent,
     VersionedTextDocumentIdentifier,
 };
 use tree_sitter::Tree;
+
+impl Service for Document {}
+
+pub struct GenerateAll {}
+
+impl Handler<GenerateAll> for Document {
+    type Response = Result<String>;
+
+    async fn handle(&mut self, _message: GenerateAll) -> Self::Response {
+        info!("GenerateAll: {}", self.uri);
+
+        let source = self.editor.get_text();
+
+        // Create channel for edit events
+        let (tx, mut rx) = mpsc::channel::<EditEvent>(32);
+
+        // Spawn generation tasks in a scope to drop target_map early
+        {
+            let target_map = TargetMap::build(&self.tree, &source)?;
+
+            if target_map.is_empty() {
+                return Ok(source.clone());
+            }
+
+            for (checksum, (target, node)) in target_map.iter() {
+                let tx = tx.clone();
+                let checksum = *checksum;
+                let target = target.clone();
+                let start_byte = node.start_byte();
+                let end_byte = node.end_byte();
+                let snapshot = self.editor.fork();
+                let llm_client = self.llm_client.clone();
+
+                tokio::spawn(async move {
+                    match Self::generate_for_target_static(&llm_client, &target).await {
+                        Ok(new_body) => {
+                            let event = EditEvent::new(
+                                checksum,
+                                target.signature.clone(),
+                                new_body,
+                                snapshot,
+                                start_byte,
+                                end_byte,
+                            );
+                            let _ = tx.send(event).await;
+                        }
+                        Err(e) => {
+                            error!("Failed to generate for {}: {}", target.name, e);
+                        }
+                    }
+                });
+            }
+        }
+
+        // Drop the sender to close channel after all tasks complete
+        drop(tx);
+
+        // Apply edits as they arrive
+        while let Some(event) = rx.recv().await {
+            if let Err(e) = self.apply_edit(event).await {
+                error!("Failed to apply edit: {}", e);
+            }
+        }
+
+        Ok(self.editor.get_text())
+    }
+}
 
 /// Document managing a single document with CRDT support
 pub struct Document {
@@ -62,64 +131,8 @@ impl Document {
         })
     }
 
-    /// Generate code for all targets
-    pub async fn generate_all(&mut self) -> Result<String> {
-        info!("GenerateAll: {}", self.uri);
-
-        let source = self.editor.get_text();
-
-        // Collect targets and their information before moving self
-        let targets_info: Vec<(u64, Target, usize, usize)> = {
-            let target_map = TargetMap::build(&self.tree, &source)?;
-
-            if target_map.is_empty() {
-                return Ok(source.clone());
-            }
-
-            target_map
-                .iter()
-                .map(|(checksum, (target, node))| {
-                    (
-                        *checksum,
-                        target.clone(),
-                        node.start_byte(),
-                        node.end_byte(),
-                    )
-                })
-                .collect()
-        };
-
-        // Generate code for each target
-        let mut events = Vec::new();
-        for (checksum, target, start_byte, end_byte) in targets_info {
-            match self.generate_for_target(&target).await {
-                Ok(new_body) => {
-                    let event = EditEvent::new(
-                        checksum,
-                        target.signature.clone(),
-                        new_body,
-                        self.editor.fork(),
-                        start_byte,
-                        end_byte,
-                    );
-                    events.push(event);
-                }
-                Err(e) => {
-                    error!("Failed to generate for {}: {}", target.name, e);
-                }
-            }
-        }
-
-        // Apply all edits
-        for event in events {
-            self.apply_edit(event).await?;
-        }
-
-        Ok(self.editor.get_text())
-    }
-
-    /// Generate code for a specific target
-    async fn generate_for_target(&self, target: &Target) -> Result<String> {
+    /// Generate code for a specific target (static version for spawned tasks)
+    async fn generate_for_target_static(llm_client: &LLMClient, target: &Target) -> Result<String> {
         debug!("Generating for target: {}", target.name);
 
         // Build prompt
@@ -127,9 +140,8 @@ impl Document {
 
         // Generate using LLM
         let request = crate::llm::CompletionRequest {
-            model: self.llm_client.model().to_string(),
-            provider: self
-                .llm_client
+            model: llm_client.model().to_string(),
+            provider: llm_client
                 .openrouter_config()
                 .map(|config| crate::llm::ProviderSpec {
                     only: Some(config.providers.clone()),
@@ -139,7 +151,7 @@ impl Document {
             temperature: 0.7,
         };
 
-        let response = self.llm_client.complete(request).await?;
+        let response = llm_client.complete(request).await?;
 
         if let Some(choice) = response.choices.first() {
             Ok(crate::generation::clean_generated_code(
