@@ -38,9 +38,6 @@ fastrand = "2"
 jsonrpsee = { version = "0.26", features = ["client", "server", "macros"] }
 lsp-types = "0.97"
 
-# Actor framework
-actix = "0.13"
-
 # CRDT
 cola = "0.5.1"
 crop = { version = "0.4.3", features = ["utf16-metric"] }

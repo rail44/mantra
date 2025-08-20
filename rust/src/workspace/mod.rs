@@ -1,7 +1,5 @@
-pub use self::actor::*;
 pub use self::document::Document;
-pub use self::messages::*;
+pub use self::workspace::Workspace;
 
-mod actor;
 pub(crate) mod document;
-mod messages;
+mod workspace;

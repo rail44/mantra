@@ -23,7 +23,8 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Setup structured logging with RUST_LOG environment variable
@@ -46,16 +47,15 @@ fn main() -> Result<()> {
         .with(format_layer)
         .init();
 
-    // Use Actix system for all operations
+    // Process commands
     match args.command {
-        Commands::Generate { file } => generate_command(file),
+        Commands::Generate { file } => generate_command(file).await,
     }
 }
 
-fn generate_command(file: PathBuf) -> Result<()> {
-    use actix::prelude::*;
+async fn generate_command(file: PathBuf) -> Result<()> {
     use mantra::core::metrics::Timer;
-    use mantra::workspace::{GenerateFile, Shutdown, Workspace};
+    use mantra::workspace::Workspace;
 
     let total_timer = Timer::start("total_generation");
 
@@ -71,27 +71,17 @@ fn generate_command(file: PathBuf) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?
         .to_path_buf();
 
-    // Create Actix system
-    let system = System::new();
+    // Create workspace
+    let mut workspace = Workspace::new(workspace_root, config).await?;
 
-    let result = system.block_on(async {
-        // Create and start Workspace actor
-        let addr = Workspace::start_actor(workspace_root, config).await?;
-
-        // Send GenerateFile message
-        let result = addr.send(GenerateFile { file_path: file }).await??;
-
-        // Shutdown workspace
-        addr.send(Shutdown).await?;
-
-        // Stop the system
-        System::current().stop();
-
-        Ok::<String, anyhow::Error>(result)
-    })?;
+    // Generate code
+    let result = workspace.generate_file(file).await?;
 
     // Output to stdout
     print!("{}", result);
+
+    // Shutdown workspace
+    workspace.shutdown().await?;
 
     total_timer.stop();
     Ok(())
