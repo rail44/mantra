@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 
-use super::document::DocumentActor;
+use super::document::Document;
 use super::messages::*;
 
 // ============================================================================
@@ -21,8 +21,8 @@ use super::messages::*;
 
 /// Actix-based Workspace actor (renamed from WorkspaceActor for clarity)
 pub struct Workspace {
-    /// Document actors by file URI
-    documents: HashMap<String, Addr<DocumentActor>>,
+    /// Documents by file URI
+    documents: HashMap<String, Document>,
     /// LSP client
     lsp_client: LspClient,
     /// LLM client
@@ -115,80 +115,12 @@ impl Handler<GetLlmClient> for Workspace {
     }
 }
 
-impl Handler<GetDocument> for Workspace {
-    type Result = ResponseActFuture<Self, Result<Addr<DocumentActor>>>;
-
-    fn handle(&mut self, msg: GetDocument, ctx: &mut Context<Self>) -> Self::Result {
-        debug!("GetDocument: uri={}", msg.uri);
-
-        // Check if document actor already exists
-        if let Some(addr) = self.documents.get(&msg.uri) {
-            let addr = addr.clone();
-            return Box::pin(async move { Ok(addr) }.into_actor(self));
-        }
-
-        // Parse file path from URI
-        let file_path = if let Some(stripped) = msg.uri.strip_prefix("file://") {
-            PathBuf::from(stripped)
-        } else {
-            PathBuf::from(&msg.uri)
-        };
-
-        // Create new document actor
-        let config = self.config.clone();
-        let uri = msg.uri.clone();
-        let workspace_addr = ctx.address();
-        let lsp_client = self.lsp_client.clone();
-
-        Box::pin(
-            async move {
-                // Read file content
-                let source = tokio::fs::read_to_string(&file_path).await?;
-
-                // Create and start document actor
-                let document = DocumentActor::new(
-                    config,
-                    file_path.clone(),
-                    uri.clone(),
-                    workspace_addr,
-                    lsp_client.clone(),
-                )
-                .await?;
-
-                let document_addr = document.start();
-
-                // Open document in LSP
-                let doc_uri: lsp_types::Uri = uri.parse()?;
-                lsp_client
-                    .did_open(lsp_types::TextDocumentItem {
-                        uri: doc_uri,
-                        language_id: "go".to_string(),
-                        version: 1,
-                        text: source,
-                    })
-                    .await?;
-
-                Ok((uri, document_addr))
-            }
-            .into_actor(self)
-            .map(|result, actor, _ctx| {
-                match result {
-                    Ok((uri, addr)) => {
-                        // Store the document actor
-                        actor.documents.insert(uri, addr.clone());
-                        Ok(addr)
-                    }
-                    Err(e) => Err(e),
-                }
-            }),
-        )
-    }
-}
+// GetDocumentハンドラを削除（直接GenerateFileで処理）
 
 impl Handler<GenerateFile> for Workspace {
-    type Result = ResponseFuture<Result<String>>;
+    type Result = ResponseActFuture<Self, Result<String>>;
 
-    fn handle(&mut self, msg: GenerateFile, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: GenerateFile, _ctx: &mut Context<Self>) -> Self::Result {
         debug!("GenerateFile: {}", msg.file_path.display());
 
         // Convert file path to URI
@@ -200,7 +132,7 @@ impl Handler<GenerateFile> for Workspace {
                 Err(e) => {
                     let err_msg = format!("Failed to get current directory: {}", e);
                     error!("{}", err_msg);
-                    return Box::pin(async move { Err(anyhow::anyhow!(err_msg)) });
+                    return Box::pin(async move { Err(anyhow::anyhow!(err_msg)) }.into_actor(self));
                 }
             }
         };
@@ -209,46 +141,62 @@ impl Handler<GenerateFile> for Workspace {
         if !absolute_path.exists() {
             let err_msg = format!("File does not exist: {}", absolute_path.display());
             error!("{}", err_msg);
-            return Box::pin(async move { Err(anyhow::anyhow!(err_msg)) });
+            return Box::pin(async move { Err(anyhow::anyhow!(err_msg)) }.into_actor(self));
         }
 
         let file_uri = format!("file://{}", absolute_path.display());
 
-        // Get self address for GetDocument
-        let addr = ctx.address();
+        // For existing documents, we need to recreate them to generate
+        // (because we can't safely borrow mutable in async context)
 
-        Box::pin(async move {
-            // Get document actor
-            let document_addr = match addr
-                .send(GetDocument {
-                    uri: file_uri.clone(),
-                })
-                .await
-            {
-                Ok(Ok(addr)) => addr,
-                Ok(Err(e)) => {
-                    error!("Failed to get document actor for {}: {}", file_uri, e);
-                    return Err(e);
-                }
-                Err(e) => {
-                    error!("Failed to send GetDocument message: {}", e);
-                    return Err(anyhow::anyhow!("Actor communication error: {}", e));
-                }
-            };
+        // Create new document
+        let config = self.config.clone();
+        let lsp_client = self.lsp_client.clone();
+        let llm_client = self.llm_client.clone();
 
-            // Generate code
-            match document_addr.send(GenerateAll).await {
-                Ok(Ok(result)) => Ok(result),
-                Ok(Err(e)) => {
-                    error!("Code generation failed: {}", e);
-                    Err(e)
-                }
-                Err(e) => {
-                    error!("Failed to send GenerateAll message: {}", e);
-                    Err(anyhow::anyhow!("Actor communication error: {}", e))
-                }
+        Box::pin(
+            async move {
+                // Read file content
+                let source = tokio::fs::read_to_string(&absolute_path).await?;
+
+                // Create document
+                let mut document = Document::new(
+                    config,
+                    absolute_path.clone(),
+                    file_uri.clone(),
+                    lsp_client.clone(),
+                    llm_client,
+                )
+                .await?;
+
+                // Open document in LSP
+                let doc_uri: lsp_types::Uri = file_uri.parse()?;
+                lsp_client
+                    .did_open(lsp_types::TextDocumentItem {
+                        uri: doc_uri,
+                        language_id: "go".to_string(),
+                        version: 1,
+                        text: source,
+                    })
+                    .await?;
+
+                // Generate code
+                let result = document.generate_all().await?;
+
+                Ok((file_uri, document, result))
             }
-        })
+            .into_actor(self)
+            .map(|result, actor, _ctx| {
+                match result {
+                    Ok((uri, doc, generated)) => {
+                        // Store the document
+                        actor.documents.insert(uri, doc);
+                        Ok(generated)
+                    }
+                    Err(e) => Err(e),
+                }
+            }),
+        )
     }
 }
 

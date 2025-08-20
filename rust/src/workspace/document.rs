@@ -1,24 +1,25 @@
-use actix::prelude::*;
 use anyhow::{Context as AnyhowContext, Result};
 use std::path::PathBuf;
 use tracing::{debug, error, info};
 
-use super::actor::Workspace;
-use super::messages::{
-    ApplyEdit, FormatDocument, GenerateAll, SendDidChange,
-};
 use crate::config::Config;
 use crate::editor::crdt::CrdtEditor;
 use crate::generation::EditEvent;
+use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::parser::{target::Target, target_map::TargetMap, GoParser};
+use lsp_types::{
+    DidChangeTextDocumentParams, Range, TextDocumentContentChangeEvent,
+    VersionedTextDocumentIdentifier,
+};
 use tree_sitter::Tree;
 
-/// Document actor managing a single document with CRDT support
-pub struct DocumentActor {
+/// Document managing a single document with CRDT support
+pub struct Document {
     uri: String,
-    workspace: Addr<Workspace>,
+    file_path: PathBuf,
     lsp_client: LspClient,
+    llm_client: LLMClient,
     parser: GoParser,
     tree: Tree,
     editor: CrdtEditor,
@@ -26,13 +27,13 @@ pub struct DocumentActor {
     lsp_snapshot: CrdtEditor,
 }
 
-impl DocumentActor {
+impl Document {
     pub async fn new(
         _config: Config,
         file_path: PathBuf,
         uri: String,
-        workspace: Addr<Workspace>,
         lsp_client: LspClient,
+        llm_client: LLMClient,
     ) -> Result<Self> {
         // Read the file content
         let content = tokio::fs::read_to_string(&file_path)
@@ -51,344 +52,247 @@ impl DocumentActor {
 
         Ok(Self {
             uri,
-            workspace,
+            file_path,
             lsp_client,
+            llm_client,
             parser,
             tree,
             editor,
             lsp_snapshot,
         })
     }
-}
 
-impl Actor for DocumentActor {
-    type Context = Context<Self>;
+    /// Generate code for all targets
+    pub async fn generate_all(&mut self) -> Result<String> {
+        info!("GenerateAll: {}", self.uri);
 
-    fn started(&mut self, _ctx: &mut Self::Context) {
-        debug!("DocumentActor started for: {}", self.uri);
-    }
-}
+        let source = self.editor.get_text();
 
-impl Handler<GenerateAll> for DocumentActor {
-    type Result = ResponseActFuture<Self, Result<String>>;
+        // Collect targets and their information before moving self
+        let targets_info: Vec<(u64, Target, usize, usize)> = {
+            let target_map = TargetMap::build(&self.tree, &source)?;
 
-    fn handle(&mut self, _msg: GenerateAll, ctx: &mut Context<Self>) -> Self::Result {
-        debug!("GenerateAll for: {}", self.uri);
-
-        // Build target map
-        let source = self.editor.get_text().clone();
-        let target_map = match TargetMap::build(&self.tree, &source) {
-            Ok(map) => map,
-            Err(e) => {
-                error!("Failed to build target map: {}", e);
-                return Box::pin(fut::ready(Err(e)).into_actor(self));
+            if target_map.is_empty() {
+                return Ok(source.clone());
             }
-        };
 
-        // Get all targets
-        let targets: Vec<(u64, Target)> = target_map
-            .iter()
-            .map(|(checksum, (target, _))| (*checksum, target.clone()))
-            .collect();
-
-        if targets.is_empty() {
-            debug!("No targets found in document");
-            return Box::pin(fut::ready(Ok(source.to_string())).into_actor(self));
-        }
-
-        let workspace = self.workspace.clone();
-        let document_addr = ctx.address();
-
-        // Capture snapshot and position info at the beginning of generation
-        let generation_snapshot = self.editor.fork();
-
-        // Get position information for all targets before generation
-        let target_positions: std::collections::HashMap<u64, (usize, usize)> = {
-            targets
+            target_map
                 .iter()
-                .filter_map(|(checksum, _)| {
-                    target_map
-                        .get(*checksum)
-                        .map(|(_, node)| (*checksum, (node.start_byte(), node.end_byte())))
+                .map(|(checksum, (target, node))| {
+                    (
+                        *checksum,
+                        target.clone(),
+                        node.start_byte(),
+                        node.end_byte(),
+                    )
                 })
                 .collect()
         };
 
-        // Generate code for all targets and apply immediately
-        Box::pin(
-            async move {
-                for (checksum, target) in targets {
-                    debug!("Starting generation for checksum {:x}", checksum);
-
-                    // Get position info for this target
-                    let (start_byte, end_byte) =
-                        target_positions.get(&checksum).copied().unwrap_or((0, 0));
-
-                    match crate::generation::generate_for_target(
-                        &target,
-                        workspace.clone(),
-                    )
-                    .await
-                    {
-                        Ok(generated_code) => {
-                            debug!("Successfully generated code for checksum {:x}", checksum);
-                            debug!("Generated code: {:?}", generated_code);
-                            debug!("Position: start_byte={}, end_byte={}", start_byte, end_byte);
-                            debug!("Signature: {:?}", target.signature);
-
-                            // Create edit and apply immediately
-                            let edit = crate::generation::EditEvent::new(
-                                checksum,
-                                target.signature,
-                                generated_code,
-                                generation_snapshot.fork(), // 各編集に独立したforkを作成
-                                start_byte,
-                                end_byte,
-                            );
-
-                            // Send ApplyEdit message immediately
-                            let apply_edit_msg = ApplyEdit { edit };
-                            if let Err(e) = document_addr.send(apply_edit_msg).await {
-                                error!(
-                                    "Failed to send ApplyEdit message for checksum {:x}: {}",
-                                    checksum, e
-                                );
-                            }
-
-                            if let Err(e) = document_addr
-                                .send(SendDidChange)
-                                .await
-                                .with_context(|| "Failed to update target checksum in workspace")
-                            {
-                                error!(
-                                    "Failed to update target checksum {:x} in workspace: {}",
-                                    checksum, e
-                                );
-                            }
-
-                            if let Err(e) = document_addr
-                                .send(FormatDocument)
-                                .await
-                                .with_context(|| "Failed to send SendDidChange message")
-                            {
-                                error!(
-                                    "Failed to send FormatDocument message for checksum {:x}: {}",
-                                    checksum, e
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to generate code for checksum {:x}: {}", checksum, e);
-                        }
-                    }
+        // Generate code for each target
+        let mut events = Vec::new();
+        for (checksum, target, start_byte, end_byte) in targets_info {
+            match self.generate_for_target(&target).await {
+                Ok(new_body) => {
+                    let event = EditEvent::new(
+                        checksum,
+                        target.signature.clone(),
+                        new_body,
+                        self.editor.fork(),
+                        start_byte,
+                        end_byte,
+                    );
+                    events.push(event);
                 }
-
-                Ok(())
+                Err(e) => {
+                    error!("Failed to generate for {}: {}", target.name, e);
+                }
             }
-            .into_actor(self)
-            .map(|_result: Result<()>, act, _ctx| Ok(act.editor.get_text().to_string())),
-        )
-    }
-}
-
-impl Handler<ApplyEdit> for DocumentActor {
-    type Result = Result<()>;
-
-    fn handle(&mut self, msg: ApplyEdit, _ctx: &mut Context<Self>) -> Self::Result {
-        info!(
-            "Applying edit for checksum {:x} in document: {}",
-            msg.edit.checksum, self.uri
-        );
-        // Apply the edit synchronously
-        let result = self.apply_edit_internal(msg.edit);
-
-        if result.is_ok() {
-            // Update LSP snapshot after the edit
-            self.lsp_snapshot = self.editor.fork();
         }
 
-        result
+        // Apply all edits
+        for event in events {
+            self.apply_edit(event).await?;
+        }
+
+        Ok(self.editor.get_text())
     }
-}
 
-impl Handler<SendDidChange> for DocumentActor {
-    type Result = ResponseActFuture<Self, Result<()>>;
+    /// Generate code for a specific target
+    async fn generate_for_target(&self, target: &Target) -> Result<String> {
+        debug!("Generating for target: {}", target.name);
 
-    fn handle(&mut self, _msg: SendDidChange, _ctx: &mut Context<Self>) -> Self::Result {
-        // Note: This sends a full document update to LSP
-        // The editor's version will be incremented by the next edit operation
-        let current_version = self.editor.get_version();
+        // Build prompt
+        let prompt = crate::generation::build_prompt(target);
 
-        let uri_result = self.uri.parse();
-        let uri = match uri_result {
-            Ok(uri) => uri,
-            Err(e) => {
-                error!("Failed to parse URI: {}", e);
-                return Box::pin(
-                    fut::ready(Err(anyhow::anyhow!("Failed to parse URI: {}", e))).into_actor(self),
-                );
-            }
+        // Generate using LLM
+        let request = crate::llm::CompletionRequest {
+            model: self.llm_client.model().to_string(),
+            provider: self
+                .llm_client
+                .openrouter_config()
+                .map(|config| crate::llm::ProviderSpec {
+                    only: Some(config.providers.clone()),
+                }),
+            messages: vec![crate::llm::Message::user(prompt)],
+            max_tokens: Some(2000),
+            temperature: 0.7,
         };
 
-        let params = lsp_types::DidChangeTextDocumentParams {
-            text_document: lsp_types::VersionedTextDocumentIdentifier {
-                uri,
-                version: current_version,
-            },
-            content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
-                range: None, // Full document update - incremental changes require tracking edit ranges
-                range_length: None,
-                text: self.editor.get_text().to_string(),
-            }],
-        };
+        let response = self.llm_client.complete(request).await?;
 
-        let lsp_client = self.lsp_client.clone();
-        let uri_str = self.uri.clone();
-        let version = current_version;
-
-        Box::pin(
-            async move {
-                if let Err(e) = lsp_client.did_change(params).await {
-                    error!("Failed to send didChange notification: {}", e);
-                    return Err(e);
-                }
-
-                debug!(
-                    "Sent didChange notification for version {} to {}",
-                    version, uri_str
-                );
-
-                Ok(())
-            }
-            .into_actor(self),
-        )
-    }
-}
-
-impl DocumentActor {
-    /// Apply an edit to the document (internal method)
-    fn apply_edit_internal(&mut self, edit: EditEvent) -> Result<()> {
-        let checksum = edit.checksum;
-        let content = edit.new_body.clone();
-        let snapshot = edit.snapshot;
-        let func_start_byte = edit.start_byte;
-        let func_end_byte = edit.end_byte;
-
-        debug!("Applying edit for checksum {:x}", checksum);
-        debug!("Content: {:?}", content);
-        debug!(
-            "Position: start_byte={}, end_byte={}",
-            func_start_byte, func_end_byte
-        );
-
-        // Create replacement content: function with checksum comment + signature + new body
-        let source = snapshot.get_text();
-        let func_text = &source[func_start_byte..func_end_byte];
-
-        // Extract signature (everything before the body)
-        let func_signature = if let Some(brace_pos) = func_text.find('{') {
-            &func_text[..brace_pos]
+        if let Some(choice) = response.choices.first() {
+            Ok(crate::generation::clean_generated_code(
+                choice.message.content.clone(),
+            ))
         } else {
-            func_text
-        };
+            Err(anyhow::anyhow!("No response from LLM"))
+        }
+    }
 
-        let replacement = format!(
-            "// mantra:checksum:{:x}\n{} {{\n{}\n}}",
-            checksum,
-            func_signature.trim_end(),
-            content
-        );
+    /// Apply an edit event
+    pub async fn apply_edit(&mut self, edit: EditEvent) -> Result<()> {
+        debug!("ApplyEdit: checksum={:x}", edit.checksum);
 
-        // Create TextEdit for the replacement using snapshot-based positions
-        let text_edit = lsp_types::TextEdit {
-            range: lsp_types::Range {
-                start: snapshot.byte_to_lsp_position(func_start_byte),
-                end: snapshot.byte_to_lsp_position(func_end_byte),
-            },
-            new_text: replacement.clone(),
-        };
+        // Find the function in the current tree
+        let source = self.editor.get_text();
 
-        // Apply the edit using snapshot-based CRDT
-        self.editor.apply_text_edit(text_edit, snapshot);
+        // Get body positions and apply edit
+        {
+            let target_map = TargetMap::build(&self.tree, &source)?;
 
-        // Reparse the tree
+            if let Some((_target, node)) = target_map.get(edit.checksum) {
+                // Get function body node
+                let body_node = node.child_by_field_name("body");
+                let body_start = body_node
+                    .as_ref()
+                    .map(|n| n.start_byte())
+                    .unwrap_or(node.end_byte());
+                let body_end = body_node
+                    .as_ref()
+                    .map(|n| n.end_byte())
+                    .unwrap_or(node.end_byte());
+
+                let body = format!("{{\n{}\n}}", edit.new_body.trim());
+
+                // Create text edit
+                let start_pos = self.editor.byte_to_lsp_position(body_start);
+                let end_pos = self.editor.byte_to_lsp_position(body_end);
+                let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
+
+                // Apply edit using CRDT
+                self.editor.apply_text_edit(text_edit, edit.snapshot);
+            } else {
+                error!("Function with checksum {:x} not found", edit.checksum);
+                return Ok(());
+            }
+        }
+
+        // Re-parse the document after target_map is dropped
         let new_source = self.editor.get_text();
-        self.tree = self
-            .parser
-            .parse_incremental(&new_source, Some(&self.tree))
-            .with_context(|| "Failed to reparse after edit")?;
+        self.tree = self.parser.parse(&new_source)?;
 
-        debug!("Applied edit for checksum {:x}", checksum);
+        // Send changes to LSP
+        self.send_did_change().await?;
+
+        // Format document
+        self.format_document().await?;
 
         Ok(())
     }
-}
 
-impl Handler<FormatDocument> for DocumentActor {
-    type Result = ResponseActFuture<Self, Result<()>>;
+    /// Send didChange notification to LSP
+    async fn send_did_change(&mut self) -> Result<()> {
+        let current_version = self.editor.get_version();
+        let uri: lsp_types::Uri = self.uri.parse()?;
 
-    fn handle(&mut self, _msg: FormatDocument, _ctx: &mut Context<Self>) -> Self::Result {
-        info!("Formatting document: {}", self.uri);
-        use lsp_types::{DocumentFormattingParams, FormattingOptions, TextDocumentIdentifier};
+        // Get the current document text
+        let content = self.editor.get_text();
 
-        let Ok(uri) = self
-            .uri
-            .parse()
-            .with_context(|| "Failed to parse URI for formatting")
-        else {
-            return Box::pin(
-                fut::ready(Err(anyhow::anyhow!("Failed to parse URI for formatting")))
-                    .into_actor(self),
-            );
-        };
-
-        let params = DocumentFormattingParams {
-            text_document: TextDocumentIdentifier { uri },
-            options: FormattingOptions {
-                tab_size: 4,
-                insert_spaces: false,
-                ..Default::default()
+        // Send full document update
+        let params = DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri,
+                version: current_version,
             },
-            work_done_progress_params: Default::default(),
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: content,
+            }],
         };
-        let client = self.lsp_client.clone();
-        let formatting_snapshot = self.lsp_snapshot.fork();
 
-        Box::pin(
-            async move {
-                client
-                    .format_document(params.text_document, params.options)
-                    .await
+        self.lsp_client.did_change(params).await?;
+
+        // Update LSP snapshot
+        self.lsp_snapshot = self.editor.fork();
+
+        // Wait for diagnostics
+        if let Ok(diagnostics) = self
+            .lsp_client
+            .wait_for_diagnostics_timeout(&self.uri, std::time::Duration::from_secs(2))
+            .await
+        {
+            if !diagnostics.diagnostics.is_empty() {
+                info!(
+                    "Diagnostics for {}: {:?}",
+                    self.uri, diagnostics.diagnostics
+                );
             }
-            .into_actor(self)
-            .map(move |result, act, _ctx| {
-                match result {
-                    Ok(Some(edits)) => {
-                        debug!("Received {} formatting edits from LSP", edits.len());
-                        // Capture snapshot for all formatting edits at current state
-                        act.editor
-                            .apply_text_edits(&edits, formatting_snapshot.fork());
+        }
 
-                        // Reparse after formatting
-                        let new_source = act.editor.get_text();
-                        act.tree = act
-                            .parser
-                            .parse_incremental(&new_source, Some(&act.tree))
-                            .with_context(|| "Failed to reparse after formatting")?;
+        Ok(())
+    }
 
-                        debug!("Document formatted successfully");
-                    }
-                    Ok(None) => {
-                        debug!("LSP returned no formatting edits");
-                    }
-                    Err(e) => {
-                        error!("LSP formatting failed: {}", e);
-                        return Err(e);
-                    }
-                }
+    /// Format document using LSP
+    async fn format_document(&mut self) -> Result<()> {
+        if !self.lsp_client.supports_document_formatting().await {
+            debug!("Document formatting not supported");
+            return Ok(());
+        }
 
-                Ok(())
-            }),
-        )
+        let uri: lsp_types::Uri = self.uri.parse()?;
+        let formatting_options = lsp_types::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: false,
+            trim_trailing_whitespace: Some(true),
+            insert_final_newline: Some(true),
+            trim_final_newlines: Some(true),
+            properties: Default::default(),
+        };
+
+        if let Some(edits) = self
+            .lsp_client
+            .format_document(
+                lsp_types::TextDocumentIdentifier { uri },
+                formatting_options,
+            )
+            .await?
+        {
+            if !edits.is_empty() {
+                debug!("Applying {} formatting edits", edits.len());
+                let snapshot = self.editor.fork();
+                self.editor.apply_text_edits(&edits, snapshot);
+
+                // Re-parse after formatting
+                let new_source = self.editor.get_text();
+                self.tree = self.parser.parse(&new_source)?;
+
+                // Send updated content to LSP
+                self.send_did_change().await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get the file URI
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    /// Get the file path
+    pub fn file_path(&self) -> &PathBuf {
+        &self.file_path
     }
 }

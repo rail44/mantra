@@ -4,18 +4,9 @@ use actix::prelude::*;
 use anyhow::Result;
 use std::path::PathBuf;
 
-use super::document::DocumentActor;
-
 // ============================================================================
 // Message Definitions
 // ============================================================================
-
-/// Get or create a Document actor
-#[derive(Message, Debug)]
-#[rtype(result = "Result<Addr<DocumentActor>>")]
-pub struct GetDocument {
-    pub uri: String,
-}
 
 /// Get LSP client (clone)
 #[derive(Message, Debug)]
@@ -39,26 +30,4 @@ pub struct GenerateFile {
 #[rtype(result = "()")]
 pub struct Shutdown;
 
-// Document messages
-
-/// Generate all targets
-#[derive(Message, Debug)]
-#[rtype(result = "Result<String>")]
-pub struct GenerateAll;
-
-/// Apply edit to document
-#[derive(Message, Debug)]
-#[rtype(result = "Result<()>")]
-pub struct ApplyEdit {
-    pub edit: crate::generation::EditEvent,
-}
-
-/// Send didChange notification to LSP
-#[derive(Message, Debug)]
-#[rtype(result = "Result<()>")]
-pub struct SendDidChange;
-
-/// Format document using LSP
-#[derive(Message, Debug)]
-#[rtype(result = "Result<()>")]
-pub struct FormatDocument;
+// Document messages are no longer needed since Document is not an Actor

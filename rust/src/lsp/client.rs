@@ -5,8 +5,8 @@ use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
     ClientCapabilities, DidChangeTextDocumentParams, DocumentFormattingParams,
     DocumentRangeFormattingParams, FormattingOptions, GotoCapability, Hover,
-    HoverClientCapabilities, InitializeResult, MarkupKind, Position,
-    PublishDiagnosticsParams, Range, TextDocumentClientCapabilities, TextDocumentIdentifier,
+    HoverClientCapabilities, InitializeResult, MarkupKind, Position, PublishDiagnosticsParams,
+    Range, TextDocumentClientCapabilities, TextDocumentIdentifier,
     TextDocumentSyncClientCapabilities, TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
 };
 use serde::de::Error;
@@ -371,4 +371,3 @@ impl Client {
         Ok(())
     }
 }
-
