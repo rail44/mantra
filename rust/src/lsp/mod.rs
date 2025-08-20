@@ -5,7 +5,7 @@ pub mod notification;
 pub mod rpc;
 mod transport;
 
-pub use client::{Client, DocumentSymbol};
+pub use client::Client;
 pub use notification::NotificationHandler;
 
 // Re-export lsp-types for convenient access

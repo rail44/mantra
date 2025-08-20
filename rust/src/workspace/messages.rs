@@ -53,21 +53,6 @@ pub struct ApplyEdit {
     pub edit: crate::generation::EditEvent,
 }
 
-/// Get file URI
-#[derive(Message, Debug)]
-#[rtype(result = "Result<String>")]
-pub struct GetFileUri;
-
-/// Get source text
-#[derive(Message, Debug)]
-#[rtype(result = "Result<String>")]
-pub struct GetSource;
-
-/// Shutdown document
-#[derive(Message, Debug)]
-#[rtype(result = "()")]
-pub struct DocumentShutdown;
-
 /// Send didChange notification to LSP
 #[derive(Message, Debug)]
 #[rtype(result = "Result<()>")]

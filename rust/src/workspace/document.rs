@@ -5,8 +5,7 @@ use tracing::{debug, error, info};
 
 use super::actor::Workspace;
 use super::messages::{
-    ApplyEdit, DocumentShutdown, FormatDocument, GenerateAll, GetFileUri, GetSource,
-    SendDidChange,
+    ApplyEdit, FormatDocument, GenerateAll, SendDidChange,
 };
 use crate::config::Config;
 use crate::editor::crdt::CrdtEditor;
@@ -209,31 +208,6 @@ impl Handler<ApplyEdit> for DocumentActor {
         }
 
         result
-    }
-}
-
-impl Handler<GetFileUri> for DocumentActor {
-    type Result = Result<String>;
-
-    fn handle(&mut self, _msg: GetFileUri, _ctx: &mut Context<Self>) -> Self::Result {
-        Ok(self.uri.clone())
-    }
-}
-
-impl Handler<GetSource> for DocumentActor {
-    type Result = Result<String>;
-
-    fn handle(&mut self, _msg: GetSource, _ctx: &mut Context<Self>) -> Self::Result {
-        Ok(self.editor.get_text().to_string())
-    }
-}
-
-impl Handler<DocumentShutdown> for DocumentActor {
-    type Result = ();
-
-    fn handle(&mut self, _msg: DocumentShutdown, ctx: &mut Context<Self>) -> Self::Result {
-        debug!("Shutting down DocumentActor: {}", self.uri);
-        ctx.stop();
     }
 }
 

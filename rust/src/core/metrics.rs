@@ -1,17 +1,11 @@
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, Level};
 
 /// Performance timer for measuring operation durations
 pub struct Timer {
     operation: String,
     start: Instant,
-    log_level: LogLevel,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum LogLevel {
-    Debug,
-    Info,
+    log_level: Level,
 }
 
 impl Timer {
@@ -20,7 +14,7 @@ impl Timer {
         Self {
             operation: operation.into(),
             start: Instant::now(),
-            log_level: LogLevel::Info,
+            log_level: Level::INFO,
         }
     }
 
@@ -29,7 +23,7 @@ impl Timer {
         Self {
             operation: operation.into(),
             start: Instant::now(),
-            log_level: LogLevel::Debug,
+            log_level: Level::DEBUG,
         }
     }
 
@@ -42,20 +36,21 @@ impl Timer {
     pub fn stop(self) {
         let duration = self.start.elapsed();
         match self.log_level {
-            LogLevel::Info => {
+            Level::INFO => {
                 info!(
                     operation = %self.operation,
                     duration_ms = duration.as_millis(),
                     "Operation completed"
                 );
             }
-            LogLevel::Debug => {
+            Level::DEBUG => {
                 debug!(
                     operation = %self.operation,
                     duration_ms = duration.as_millis(),
                     "Operation completed"
                 );
             }
+            _ => {}
         }
     }
 
@@ -63,7 +58,7 @@ impl Timer {
     pub fn stop_with_message(self, message: &str) {
         let duration = self.start.elapsed();
         match self.log_level {
-            LogLevel::Info => {
+            Level::INFO => {
                 info!(
                     operation = %self.operation,
                     duration_ms = duration.as_millis(),
@@ -71,7 +66,7 @@ impl Timer {
                     "Operation completed"
                 );
             }
-            LogLevel::Debug => {
+            Level::DEBUG => {
                 debug!(
                     operation = %self.operation,
                     duration_ms = duration.as_millis(),
@@ -79,6 +74,7 @@ impl Timer {
                     "Operation completed"
                 );
             }
+            _ => {}
         }
     }
 }

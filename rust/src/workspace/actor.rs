@@ -258,11 +258,8 @@ impl Handler<Shutdown> for Workspace {
     fn handle(&mut self, _msg: Shutdown, _ctx: &mut Context<Self>) -> Self::Result {
         info!("Shutting down Workspace actor");
 
-        // Send shutdown to all document actors
-        for (uri, addr) in self.documents.drain() {
-            debug!("Shutting down document: {}", uri);
-            addr.do_send(DocumentShutdown);
-        }
+        // Clear all document actors
+        self.documents.clear();
 
         // Clone LSP client for shutdown
         let lsp_client = self.lsp_client.clone();

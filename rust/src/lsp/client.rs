@@ -5,12 +5,12 @@ use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
     ClientCapabilities, DidChangeTextDocumentParams, DocumentFormattingParams,
     DocumentRangeFormattingParams, FormattingOptions, GotoCapability, Hover,
-    HoverClientCapabilities, InitializeResult, Location, MarkupKind, Position,
+    HoverClientCapabilities, InitializeResult, MarkupKind, Position,
     PublishDiagnosticsParams, Range, TextDocumentClientCapabilities, TextDocumentIdentifier,
     TextDocumentSyncClientCapabilities, TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
 };
 use serde::de::Error;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -260,155 +260,6 @@ impl Client {
         }
     }
 
-    /// Get definition location(s) of a symbol
-    pub async fn definition(
-        &self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-    ) -> Result<Option<crate::lsp::Location>> {
-        let params = HoverParams {
-            text_document,
-            position,
-        };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/definition", params)
-            .await?;
-
-        // Handle null response as None
-        if result.is_null() {
-            Ok(None)
-        } else {
-            // Could be Location or Location[]
-            if let Ok(location) = serde_json::from_value::<crate::lsp::Location>(result.clone()) {
-                Ok(Some(location))
-            } else if let Ok(locations) =
-                serde_json::from_value::<Vec<crate::lsp::Location>>(result)
-            {
-                Ok(locations.into_iter().next())
-            } else {
-                Ok(None)
-            }
-        }
-    }
-
-    /// Get type definition location(s) of a symbol
-    pub async fn type_definition(
-        &self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-    ) -> Result<Option<crate::lsp::Location>> {
-        let params = HoverParams {
-            text_document,
-            position,
-        };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/typeDefinition", params)
-            .await?;
-
-        // Handle null response as None
-        if result.is_null() {
-            Ok(None)
-        } else {
-            // Could be Location or Location[]
-            if let Ok(location) = serde_json::from_value::<crate::lsp::Location>(result.clone()) {
-                Ok(Some(location))
-            } else if let Ok(locations) =
-                serde_json::from_value::<Vec<crate::lsp::Location>>(result)
-            {
-                Ok(locations.into_iter().next())
-            } else {
-                Ok(None)
-            }
-        }
-    }
-
-    /// Get document symbols
-    pub async fn document_symbols(
-        &self,
-        text_document: TextDocumentIdentifier,
-    ) -> Result<Vec<DocumentSymbol>> {
-        let params = DocumentSymbolParams { text_document };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/documentSymbol", params)
-            .await?;
-
-        // Handle null response as empty vector
-        if result.is_null() {
-            Ok(Vec::new())
-        } else {
-            // Could be DocumentSymbol[] or SymbolInformation[]
-            if let Ok(symbols) = serde_json::from_value::<Vec<DocumentSymbol>>(result.clone()) {
-                Ok(symbols)
-            } else if let Ok(symbols) = serde_json::from_value::<Vec<SymbolInformation>>(result) {
-                // Convert SymbolInformation to DocumentSymbol
-                Ok(symbols
-                    .into_iter()
-                    .map(|s| DocumentSymbol {
-                        name: s.name,
-                        kind: s.kind,
-                        range: s.location.range,
-                        selection_range: s.location.range,
-                        children: None,
-                        detail: None,
-                        deprecated: None,
-                    })
-                    .collect())
-            } else {
-                Ok(Vec::new())
-            }
-        }
-    }
-
-    /// Go to definition location(s) of a symbol
-    pub async fn goto_definition(
-        &self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-    ) -> Result<Vec<Location>> {
-        let params = HoverParams {
-            text_document,
-            position,
-        };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/definition", params)
-            .await?;
-
-        // Handle null response as empty vector
-        if result.is_null() {
-            Ok(Vec::new())
-        } else {
-            // Could be Location, Location[], or LocationLink[]
-            if let Ok(location) = serde_json::from_value::<Location>(result.clone()) {
-                Ok(vec![location])
-            } else if let Ok(locations) = serde_json::from_value::<Vec<Location>>(result.clone()) {
-                Ok(locations)
-            } else if let Ok(links) = serde_json::from_value::<Vec<LocationLink>>(result) {
-                // Convert LocationLink to Location
-                Ok(links
-                    .into_iter()
-                    .map(|link| Location {
-                        uri: link.target_uri.clone(),
-                        range: link.target_range,
-                    })
-                    .collect())
-            } else {
-                Ok(Vec::new())
-            }
-        }
-    }
-
     /// Check if the server supports range formatting
     pub async fn supports_range_formatting(&self) -> bool {
         let capabilities = self.server_capabilities.read().await;
@@ -521,44 +372,3 @@ impl Client {
     }
 }
 
-// LSP type definitions
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentSymbolParams {
-    text_document: TextDocumentIdentifier,
-}
-
-impl ToRpcParams for DocumentSymbolParams {
-    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
-        let mut params = ObjectParams::new();
-        params
-            .insert("textDocument", self.text_document)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params.to_rpc_params()
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DocumentSymbol {
-    pub name: String,
-    pub kind: u32,
-    pub range: Range,
-    #[serde(rename = "selectionRange")]
-    pub selection_range: Range,
-    pub detail: Option<String>,
-    pub children: Option<Vec<DocumentSymbol>>,
-    pub deprecated: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SymbolInformation {
-    pub name: String,
-    pub kind: u32,
-    pub location: Location,
-    #[serde(rename = "containerName")]
-    pub container_name: Option<String>,
-    pub deprecated: Option<bool>,
-}
-
-// Use lsp-types version
-pub type LocationLink = lsp_types::LocationLink;
