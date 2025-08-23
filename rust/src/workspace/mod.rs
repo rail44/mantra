@@ -1,9 +1,7 @@
-pub(crate) mod document;
-pub(crate) mod document_service;
+pub mod document;
 pub mod service;
 
-pub use self::document::Document;
-pub use self::document_service::{DocumentService, GetContent, StartGeneration};
+pub use self::document::{Document, DocumentService, GetContent, StartGeneration};
 pub use self::service::{Client as ServiceClient, Service};
 
 use anyhow::Result;
@@ -18,13 +16,13 @@ use crate::lsp::Client as LspClient;
 /// Workspace managing documents and services
 pub struct Workspace {
     /// Documents by file URI
-    documents: HashMap<String, ServiceClient<DocumentService>>,
+    documents: HashMap<String, ServiceClient<document::DocumentService>>,
     /// LSP client
     lsp_client: LspClient,
     /// LLM client
     llm_client: LLMClient,
-    /// Configuration
-    config: Config,
+    /// Configuration (kept for potential future use)
+    _config: Config,
 }
 
 impl Workspace {
@@ -55,7 +53,7 @@ impl Workspace {
             documents: HashMap::new(),
             lsp_client,
             llm_client,
-            config,
+            _config: config,
         })
     }
 
@@ -101,8 +99,7 @@ impl Workspace {
             .await?;
 
         // Create document service
-        let document_service = DocumentService::new(
-            self.config.clone(),
+        let document_service = document::DocumentService::new(
             absolute_path.clone(),
             file_uri.clone(),
             self.lsp_client.clone(),
