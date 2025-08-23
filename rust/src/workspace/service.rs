@@ -19,6 +19,34 @@ pub trait Service: Send + Sized + 'static {
             _phantom: PhantomData,
         }
     }
+
+    /// Spawn a service with self-reference support
+    /// This is useful when a service needs to send messages to itself
+    fn spawn_with_self<F>(mut self, init: F) -> Client<Self>
+    where
+        F: FnOnce(&mut Self, Client<Self>),
+    {
+        let (tx, mut rx) = mpsc::channel::<Box<dyn Envelope>>(16);
+        let client = Client {
+            tx: tx.clone(),
+            _phantom: PhantomData,
+        };
+
+        // Initialize the service with its own client
+        init(&mut self, client.clone());
+
+        tokio::spawn(async move {
+            while let Some(envelope) = rx.recv().await {
+                let service = &mut self as &mut dyn Any;
+                envelope.handle_envelope(service).await;
+            }
+        });
+
+        Client {
+            tx,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 // MessageトレイトなしでHandlerを定義
@@ -73,10 +101,18 @@ where
     }
 }
 
-#[derive(Clone)]
 pub struct Client<S: Service> {
     tx: mpsc::Sender<Box<dyn Envelope>>,
     _phantom: PhantomData<S>,
+}
+
+impl<S: Service> Clone for Client<S> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<S: Service> Client<S> {

@@ -1,7 +1,9 @@
 pub(crate) mod document;
+pub(crate) mod document_service;
 pub mod service;
 
-pub use self::document::{Document, GenerateAll};
+pub use self::document::Document;
+pub use self::document_service::{DocumentService, GetContent, StartGeneration};
 pub use self::service::{Client as ServiceClient, Service};
 
 use anyhow::Result;
@@ -16,7 +18,7 @@ use crate::lsp::Client as LspClient;
 /// Workspace managing documents and services
 pub struct Workspace {
     /// Documents by file URI
-    documents: HashMap<String, ServiceClient<Document>>,
+    documents: HashMap<String, ServiceClient<DocumentService>>,
     /// LSP client
     lsp_client: LspClient,
     /// LLM client
@@ -80,22 +82,12 @@ impl Workspace {
 
         // Check if document already exists
         if let Some(client) = self.documents.get_mut(&file_uri) {
-            return client.request(GenerateAll {}).await;
+            client.request(StartGeneration).await;
+            return Ok(client.request(GetContent).await);
         }
 
         // Read file content
         let source = tokio::fs::read_to_string(&absolute_path).await?;
-
-        // Create document
-        let document = Document::new(
-            self.config.clone(),
-            absolute_path.clone(),
-            file_uri.clone(),
-            self.lsp_client.clone(),
-            self.llm_client.clone(),
-        )
-        .await?;
-        let client = document.run();
 
         // Open document in LSP
         let doc_uri: lsp_types::Uri = file_uri.parse()?;
@@ -108,8 +100,20 @@ impl Workspace {
             })
             .await?;
 
-        // Generate code
-        let result = client.request(GenerateAll {}).await?;
+        // Create document service
+        let document_service = DocumentService::new(
+            self.config.clone(),
+            absolute_path.clone(),
+            file_uri.clone(),
+            self.lsp_client.clone(),
+            self.llm_client.clone(),
+        )
+        .await?;
+        let client = document_service.spawn();
+
+        // Start generation
+        client.request(StartGeneration).await;
+        let result = client.request(GetContent).await;
 
         // Store the document
         self.documents.insert(file_uri, client);
