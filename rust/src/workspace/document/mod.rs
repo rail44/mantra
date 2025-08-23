@@ -8,7 +8,7 @@ use tracing::{debug, error, info};
 use tree_sitter::Tree;
 
 use crate::editor::crdt::CrdtEditor;
-use crate::generation::EditEvent;
+use crate::generation::{spawn_generation_task, ApplyGeneration, EditEvent};
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::parser::{target::Target, target_map::TargetMap, GoParser};
@@ -138,11 +138,6 @@ impl Service for DocumentService {}
 /// Message to start generation for all targets
 pub struct StartGeneration;
 
-/// Message to apply a generation result
-pub struct ApplyGeneration {
-    pub result: EditEvent,
-}
-
 /// Message to get the current content
 pub struct GetContent;
 
@@ -174,29 +169,17 @@ impl Handler<StartGeneration> for DocumentService {
         };
 
         // Spawn generation tasks
-        for (checksum, target, start_byte, end_byte) in targets {
+        for (checksum, target, _, _) in targets {
             let self_client = self_client.clone();
             let llm_client = self.llm_client.clone();
             let snapshot = self.document.editor.fork();
 
-            tokio::spawn(async move {
-                match Self::generate_for_target(&llm_client, &target).await {
-                    Ok(new_body) => {
-                        let event = EditEvent::new(
-                            checksum,
-                            target.signature.clone(),
-                            new_body,
-                            snapshot,
-                            start_byte,
-                            end_byte,
-                        );
-                        let _ = self_client.request(ApplyGeneration { result: event }).await;
-                    }
-                    Err(e) => {
-                        error!("Failed to generate for {}: {}", target.name, e);
-                    }
-                }
-            });
+            spawn_generation_task(checksum, target, snapshot, llm_client, move |result| {
+                Box::pin(async move {
+                    let _ = self_client.request(result).await;
+                })
+            })
+            .await;
         }
     }
 }
@@ -205,9 +188,19 @@ impl Handler<ApplyGeneration> for DocumentService {
     type Response = ();
 
     async fn handle(&mut self, msg: ApplyGeneration) -> Self::Response {
-        debug!("ApplyGeneration: checksum={:x}", msg.result.checksum);
+        debug!("ApplyGeneration: checksum={:x}", msg.checksum);
 
-        if let Err(e) = self.document.apply_edit(msg.result) {
+        // Create EditEvent for compatibility with existing apply_edit
+        let edit = EditEvent::new(
+            msg.checksum,
+            String::new(), // signature not needed for apply_edit
+            msg.new_body,
+            msg.snapshot,
+            0, // start_byte not used
+            0, // end_byte not used
+        );
+
+        if let Err(e) = self.document.apply_edit(edit) {
             error!("Failed to apply edit: {}", e);
             return;
         }
@@ -261,37 +254,6 @@ impl DocumentService {
         Service::spawn_with_self(self, |service, client| {
             service.self_client = Some(client);
         })
-    }
-
-    /// Generate code for a specific target
-    async fn generate_for_target(llm_client: &LLMClient, target: &Target) -> Result<String> {
-        debug!("Generating for target: {}", target.name);
-
-        // Build prompt
-        let prompt = crate::generation::build_prompt(target);
-
-        // Generate using LLM
-        let request = crate::llm::CompletionRequest {
-            model: llm_client.model().to_string(),
-            provider: llm_client
-                .openrouter_config()
-                .map(|config| crate::llm::ProviderSpec {
-                    only: Some(config.providers.clone()),
-                }),
-            messages: vec![crate::llm::Message::user(prompt)],
-            max_tokens: Some(2000),
-            temperature: 0.7,
-        };
-
-        let response = llm_client.complete(request).await?;
-
-        if let Some(choice) = response.choices.first() {
-            Ok(crate::generation::clean_generated_code(
-                choice.message.content.clone(),
-            ))
-        } else {
-            Err(anyhow::anyhow!("No response from LLM"))
-        }
     }
 
     /// Send didChange notification to LSP
