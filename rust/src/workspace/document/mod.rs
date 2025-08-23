@@ -3,6 +3,7 @@ use lsp_types::{
     DidChangeTextDocumentParams, Range, TextDocumentContentChangeEvent,
     VersionedTextDocumentIdentifier,
 };
+use std::fs;
 use std::path::PathBuf;
 use tracing::{debug, error, info};
 use tree_sitter::Tree;
@@ -23,18 +24,27 @@ pub struct Document {
     pub editor: CrdtEditor,
     /// Snapshot of the version that LSP knows about
     pub lsp_snapshot: CrdtEditor,
+    pub lsp_client: LspClient,
+    pub llm_client: LLMClient,
 }
 
 impl Document {
-    pub fn new(file_path: PathBuf, uri: String, content: &str) -> Result<Self> {
-        // Initialize parser and parse the document
+    pub fn new(
+        file_path: PathBuf,
+        uri: String,
+        lsp_client: LspClient,
+        llm_client: LLMClient,
+    ) -> Result<Self> {
+        let content = fs::read_to_string(&file_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
+
         let mut parser = GoParser::new()?;
         let tree = parser
-            .parse(content)
+            .parse(&content)
             .with_context(|| "Failed to parse Go source")?;
 
         // Initialize CRDT editor
-        let editor = CrdtEditor::new(content);
+        let editor = CrdtEditor::new(&content);
         let lsp_snapshot = editor.fork();
 
         Ok(Self {
@@ -44,6 +54,8 @@ impl Document {
             tree,
             editor,
             lsp_snapshot,
+            lsp_client,
+            llm_client,
         })
     }
 
@@ -128,12 +140,18 @@ impl Document {
 /// Service wrapper for Document with external dependencies
 pub struct DocumentService {
     document: Document,
-    lsp_client: LspClient,
-    llm_client: LLMClient,
-    self_client: Option<ServiceClient<DocumentService>>,
+    self_client: ServiceClient<DocumentService>,
 }
 
-impl Service for DocumentService {}
+impl Service for DocumentService {
+    type State = Document;
+    fn new(document: Document, self_client: ServiceClient<DocumentService>) -> Self {
+        Self {
+            document,
+            self_client,
+        }
+    }
+}
 
 /// Message to start generation for all targets
 pub struct StartGeneration;
@@ -160,18 +178,12 @@ impl Handler<StartGeneration> for DocumentService {
             return;
         }
 
-        let self_client = match &self.self_client {
-            Some(client) => client.clone(),
-            None => {
-                error!("Self client not initialized");
-                return;
-            }
-        };
+        let self_client = self.self_client.clone();
 
         // Spawn generation tasks
         for (checksum, target, _, _) in targets {
             let self_client = self_client.clone();
-            let llm_client = self.llm_client.clone();
+            let llm_client = self.document.llm_client.clone();
             let snapshot = self.document.editor.fork();
 
             spawn_generation_task(checksum, target, snapshot, llm_client, move |result| {
@@ -226,36 +238,6 @@ impl Handler<GetContent> for DocumentService {
 }
 
 impl DocumentService {
-    /// Create a new DocumentService
-    pub async fn new(
-        file_path: PathBuf,
-        uri: String,
-        lsp_client: LspClient,
-        llm_client: LLMClient,
-    ) -> Result<Self> {
-        // Read the file content
-        let content = tokio::fs::read_to_string(&file_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
-
-        // Create document
-        let document = Document::new(file_path, uri, &content)?;
-
-        Ok(Self {
-            document,
-            lsp_client,
-            llm_client,
-            self_client: None,
-        })
-    }
-
-    /// Spawn the service with self-reference support
-    pub fn spawn(self) -> ServiceClient<DocumentService> {
-        Service::spawn_with_self(self, |service, client| {
-            service.self_client = Some(client);
-        })
-    }
-
     /// Send didChange notification to LSP
     async fn send_did_change(&mut self) -> Result<()> {
         let current_version = self.document.editor.get_version();
@@ -277,13 +259,14 @@ impl DocumentService {
             }],
         };
 
-        self.lsp_client.did_change(params).await?;
+        self.document.lsp_client.did_change(params).await?;
 
         // Update LSP snapshot
         self.document.lsp_snapshot = self.document.editor.fork();
 
         // Wait for diagnostics
         if let Ok(diagnostics) = self
+            .document
             .lsp_client
             .wait_for_diagnostics_timeout(&self.document.uri, std::time::Duration::from_secs(2))
             .await
@@ -301,7 +284,12 @@ impl DocumentService {
 
     /// Format document using LSP
     async fn format_document(&mut self) -> Result<()> {
-        if !self.lsp_client.supports_document_formatting().await {
+        if !self
+            .document
+            .lsp_client
+            .supports_document_formatting()
+            .await
+        {
             debug!("Document formatting not supported");
             return Ok(());
         }
@@ -317,6 +305,7 @@ impl DocumentService {
         };
 
         if let Some(edits) = self
+            .document
             .lsp_client
             .format_document(
                 lsp_types::TextDocumentIdentifier { uri },

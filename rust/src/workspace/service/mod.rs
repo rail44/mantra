@@ -5,39 +5,22 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 
 pub trait Service: Send + Sized + 'static {
-    fn run(mut self) -> Client<Self> {
-        let (tx, mut rx) = mpsc::channel::<Box<dyn Envelope>>(16);
-        tokio::spawn(async move {
-            while let Some(envelope) = rx.recv().await {
-                let service = &mut self as &mut dyn Any;
-                envelope.handle_envelope(service).await;
-            }
-        });
+    type State;
 
-        Client {
-            tx,
-            _phantom: PhantomData,
-        }
-    }
+    fn new(state: Self::State, self_client: Client<Self>) -> Self;
 
-    /// Spawn a service with self-reference support
-    /// This is useful when a service needs to send messages to itself
-    fn spawn_with_self<F>(mut self, init: F) -> Client<Self>
-    where
-        F: FnOnce(&mut Self, Client<Self>),
-    {
+    fn run(state: Self::State) -> Client<Self> {
         let (tx, mut rx) = mpsc::channel::<Box<dyn Envelope>>(16);
         let client = Client {
             tx: tx.clone(),
             _phantom: PhantomData,
         };
 
-        // Initialize the service with its own client
-        init(&mut self, client.clone());
+        let mut service = Self::new(state, client.clone());
 
         tokio::spawn(async move {
             while let Some(envelope) = rx.recv().await {
-                let service = &mut self as &mut dyn Any;
+                let service = &mut service as &mut dyn Any;
                 envelope.handle_envelope(service).await;
             }
         });

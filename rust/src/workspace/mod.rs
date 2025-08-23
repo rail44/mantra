@@ -99,14 +99,13 @@ impl Workspace {
             .await?;
 
         // Create document service
-        let document_service = document::DocumentService::new(
+        let document = document::Document::new(
             absolute_path.clone(),
             file_uri.clone(),
             self.lsp_client.clone(),
             self.llm_client.clone(),
-        )
-        .await?;
-        let client = document_service.spawn();
+        )?;
+        let client = DocumentService::run(document);
 
         // Start generation
         client.request(StartGeneration).await;
