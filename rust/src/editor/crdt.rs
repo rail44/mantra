@@ -194,9 +194,9 @@ impl CrdtEditor {
     pub fn apply_text_edit(
         &mut self,
         edit: TextEdit,
-        snapshot: Self,
+        mut snapshot: Self,
     ) -> TextDocumentContentChangeEvent {
-        let change = self.apply_single_edit(&edit, &mut snapshot.clone());
+        let change = self.apply_single_edit(&edit, &mut snapshot);
         self.increment_version();
         change
     }

@@ -215,7 +215,7 @@ impl DocumentService {
         for (checksum, target, _, _) in targets {
             let llm_client = self.llm_client.clone();
 
-            let clone = self.clone().to_owned();
+            let clone = self.clone();
             set.spawn(Box::pin(async move {
                 let result = spawn_generation_task(checksum, target, llm_client).await?;
                 clone.apply_generation(result).await?;
