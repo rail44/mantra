@@ -198,7 +198,10 @@ impl DocumentService {
 
     pub async fn generate(&self) -> Result<String> {
         let targets = {
-            let document = self.document.read().unwrap();
+            let document = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
             let targets = document.find_targets()?;
 
             if targets.is_empty() {
@@ -224,11 +227,19 @@ impl DocumentService {
             let _ = res?;
         }
 
-        Ok(self.document.read().unwrap().get_text())
+        Ok(self
+            .document
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
+            .get_text())
     }
 
     async fn apply_generation(&self, msg: ApplyGeneration) -> Result<()> {
-        let changes = self.document.write().unwrap().apply_generation(msg)?;
+        let changes = self
+            .document
+            .write()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?
+            .apply_generation(msg)?;
         self.send_did_change(changes).await?;
         self.format_document().await?;
         Ok(())
@@ -236,7 +247,10 @@ impl DocumentService {
 
     async fn send_did_change(&self, changes: Vec<TextDocumentContentChangeEvent>) -> Result<()> {
         let (current_version, uri) = {
-            let doc = self.document.read().unwrap();
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
             let current_version = doc.editor.get_version();
             let uri: lsp_types::Uri = doc.uri.parse()?;
             (current_version, uri)
@@ -245,7 +259,11 @@ impl DocumentService {
         // Send incremental or full document update
         let content_changes = if changes.is_empty() {
             // Fallback to full document if no changes tracked
-            let content = self.document.read().unwrap().get_text();
+            let content = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
+                .get_text();
             vec![TextDocumentContentChangeEvent {
                 range: None,
                 range_length: None,
@@ -266,7 +284,12 @@ impl DocumentService {
         self.lsp_client.did_change(params).await?;
 
         // Wait for diagnostics
-        let uri_str = self.document.read().unwrap().uri.clone();
+        let uri_str = self
+            .document
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
+            .uri
+            .clone();
         self.lsp_client
             .wait_for_diagnostics_timeout(&uri_str, std::time::Duration::from_secs(2))
             .await?;
@@ -281,7 +304,12 @@ impl DocumentService {
             return Ok(());
         }
 
-        let uri: lsp_types::Uri = self.document.read().unwrap().uri.parse()?;
+        let uri: lsp_types::Uri = self
+            .document
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
+            .uri
+            .parse()?;
         let formatting_options = lsp_types::FormattingOptions {
             tab_size: 4,
             insert_spaces: false,
@@ -301,7 +329,10 @@ impl DocumentService {
         {
             if !edits.is_empty() {
                 let changes = {
-                    let mut doc = self.document.write().unwrap();
+                    let mut doc = self
+                        .document
+                        .write()
+                        .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
                     tracing::debug!("Applying {} formatting edits", edits.len());
                     let snapshot = doc.editor.fork();
                     let changes = doc.editor.apply_text_edits(&edits, snapshot);

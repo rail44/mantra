@@ -52,8 +52,11 @@ impl CrdtEditor {
             return None;
         }
 
-        let first_start = ranges.first().unwrap().start;
-        let last_end = ranges.last().unwrap().end;
+        // Safe to unwrap because we checked ranges is not empty
+        let first_range = ranges.first().expect("ranges should not be empty");
+        let last_range = ranges.last().expect("ranges should not be empty");
+        let first_start = first_range.start;
+        let last_end = last_range.end;
 
         // Apply deletions to rope in reverse order
         for range in ranges.iter().rev() {
@@ -192,8 +195,10 @@ impl CrdtEditor {
         &mut self,
         edit: TextEdit,
         snapshot: Self,
-    ) -> Vec<TextDocumentContentChangeEvent> {
-        self.apply_text_edits(&[edit], snapshot)
+    ) -> TextDocumentContentChangeEvent {
+        let change = self.apply_single_edit(&edit, &mut snapshot.clone());
+        self.increment_version();
+        change
     }
 }
 
@@ -317,9 +322,8 @@ mod tests {
 
         let snapshot = editor.fork();
         let changes = editor.apply_text_edit(insert_edit, snapshot);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].text, "beautiful ");
-        assert!(changes[0].range.is_some());
+        assert_eq!(changes.text, "beautiful ");
+        assert!(changes.range.is_some());
         assert_eq!(editor.get_text(), "Hello, beautiful world!");
     }
 
@@ -346,8 +350,7 @@ mod tests {
         let changes = editor.apply_text_edit(replace_edit, snapshot);
 
         // Replacement should produce 1 change event
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].text, "Rust");
+        assert_eq!(changes.text, "Rust");
         assert_eq!(editor.get_text(), "Hello, Rust!");
     }
 }
