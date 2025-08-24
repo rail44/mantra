@@ -1,4 +1,4 @@
-use crate::editor::crdt::CrdtEditor;
+use crate::editor::crdt::Snapshot;
 
 /// Edit event that describes a change to apply to the source
 /// Uses mantra checksum as a stable identifier
@@ -14,7 +14,7 @@ pub struct EditEvent {
     pub new_body: String,
 
     /// Snapshot of the document when generation task started
-    pub snapshot: CrdtEditor,
+    pub snapshot: Snapshot,
 
     /// Function start position (byte offset)
     pub start_byte: usize,
@@ -28,7 +28,7 @@ impl EditEvent {
         checksum: u64,
         signature: String,
         new_body: String,
-        snapshot: CrdtEditor,
+        snapshot: Snapshot,
         start_byte: usize,
         end_byte: usize,
     ) -> Self {

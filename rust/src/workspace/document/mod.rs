@@ -1,4 +1,4 @@
-use anyhow::{Context as AnyhowContext, Result};
+use anyhow::Result;
 use lsp_types::{
     DidChangeTextDocumentParams, Range, TextDocumentContentChangeEvent,
     VersionedTextDocumentIdentifier,
@@ -30,21 +30,9 @@ impl Document {
         let content = fs::read_to_string(&file_path)
             .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
 
-        let mut parser = GoParser::new()?;
-        let editor = CrdtEditor::new(&content);
-
-        // Parse using the rope directly via callback
-        let tree = parser
-            .parse_with_callback(
-                |byte_offset, _position| {
-                    if byte_offset >= editor.rope_len_bytes() {
-                        return "";
-                    }
-                    editor.rope_chunk_at(byte_offset).unwrap_or("")
-                },
-                None,
-            )
-            .with_context(|| "Failed to parse Go source")?;
+        let editor = CrdtEditor::new(&content)?;
+        let parser = GoParser::new()?;
+        let tree = editor.tree().clone();
 
         Ok(Self {
             uri,
@@ -117,11 +105,11 @@ impl Document {
 
             // Apply edit using CRDT and get changes
             let snapshot = self.editor.fork();
-            self.editor.apply_text_edits(&[text_edit], snapshot)
+            self.editor.apply_text_edits(&[text_edit], snapshot)?
         };
 
-        // Re-parse the document after modification using Rope directly
-        self.tree = self.parse_from_editor()?;
+        // Tree is already updated in CrdtEditor
+        self.tree = self.editor.tree().clone();
 
         Ok(changes)
     }
@@ -156,15 +144,18 @@ impl Document {
 
                 // Apply edit using CRDT and get changes
                 let snapshot = self.editor.fork();
-                self.editor.apply_text_edits(&[text_edit], snapshot)
+                self.editor.apply_text_edits(&[text_edit], snapshot).unwrap_or_else(|e| {
+                    error!("Failed to apply edit: {}", e);
+                    vec![]
+                })
             } else {
                 error!("Function with checksum {:x} not found", edit.checksum);
                 vec![]
             }
         };
 
-        // Re-parse the document after target_map is dropped using Rope directly
-        self.tree = self.parse_from_editor()?;
+        // Tree is already updated in CrdtEditor
+        self.tree = self.editor.tree().clone();
 
         Ok(changes)
     }
@@ -182,22 +173,6 @@ impl Document {
     /// Get the file path
     pub fn file_path(&self) -> &PathBuf {
         &self.file_path
-    }
-
-    /// Parse the document content directly from the Rope
-    fn parse_from_editor(&mut self) -> Result<Tree> {
-        self.parser
-            .parse_with_callback(
-                |byte_offset, _position| {
-                    if byte_offset >= self.editor.rope_len_bytes() {
-                        return "";
-                    }
-
-                    self.editor.rope_chunk_at(byte_offset).unwrap_or("")
-                },
-                None, // TODO: Use old_tree for incremental parsing
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to parse document: {}", e))
     }
 }
 
@@ -357,10 +332,10 @@ impl DocumentService {
                         .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
                     tracing::debug!("Applying {} formatting edits", edits.len());
                     let snapshot = doc.editor.fork();
-                    let changes = doc.editor.apply_text_edits(&edits, snapshot);
+                    let changes = doc.editor.apply_text_edits(&edits, snapshot)?;
 
-                    // Re-parse after formatting using Rope directly
-                    doc.tree = doc.parse_from_editor()?;
+                    // Tree is already updated in CrdtEditor
+                    doc.tree = doc.editor.tree().clone();
 
                     changes
                 };
