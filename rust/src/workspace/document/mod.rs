@@ -31,12 +31,20 @@ impl Document {
             .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
 
         let mut parser = GoParser::new()?;
-        let tree = parser
-            .parse(&content)
-            .with_context(|| "Failed to parse Go source")?;
-
-        // Initialize CRDT editor
         let editor = CrdtEditor::new(&content);
+
+        // Parse using the rope directly via callback
+        let tree = parser
+            .parse_with_callback(
+                |byte_offset, _position| {
+                    if byte_offset >= editor.rope_len_bytes() {
+                        return "";
+                    }
+                    editor.rope_chunk_at(byte_offset).unwrap_or("")
+                },
+                None,
+            )
+            .with_context(|| "Failed to parse Go source")?;
 
         Ok(Self {
             uri,
@@ -112,9 +120,8 @@ impl Document {
             self.editor.apply_text_edits(&[text_edit], snapshot)
         };
 
-        // Re-parse the document after modification
-        let new_source = self.editor.get_text();
-        self.tree = self.parser.parse(&new_source)?;
+        // Re-parse the document after modification using Rope directly
+        self.tree = self.parse_from_editor()?;
 
         Ok(changes)
     }
@@ -156,9 +163,8 @@ impl Document {
             }
         };
 
-        // Re-parse the document after target_map is dropped
-        let new_source = self.editor.get_text();
-        self.tree = self.parser.parse(&new_source)?;
+        // Re-parse the document after target_map is dropped using Rope directly
+        self.tree = self.parse_from_editor()?;
 
         Ok(changes)
     }
@@ -176,6 +182,22 @@ impl Document {
     /// Get the file path
     pub fn file_path(&self) -> &PathBuf {
         &self.file_path
+    }
+
+    /// Parse the document content directly from the Rope
+    fn parse_from_editor(&mut self) -> Result<Tree> {
+        self.parser
+            .parse_with_callback(
+                |byte_offset, _position| {
+                    if byte_offset >= self.editor.rope_len_bytes() {
+                        return "";
+                    }
+
+                    self.editor.rope_chunk_at(byte_offset).unwrap_or("")
+                },
+                None, // TODO: Use old_tree for incremental parsing
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to parse document: {}", e))
     }
 }
 
@@ -337,9 +359,8 @@ impl DocumentService {
                     let snapshot = doc.editor.fork();
                     let changes = doc.editor.apply_text_edits(&edits, snapshot);
 
-                    // Re-parse after formatting
-                    let new_source = doc.get_text();
-                    doc.tree = doc.parser.parse(&new_source)?;
+                    // Re-parse after formatting using Rope directly
+                    doc.tree = doc.parse_from_editor()?;
 
                     changes
                 };

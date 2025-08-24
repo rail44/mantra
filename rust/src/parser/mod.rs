@@ -36,6 +36,21 @@ impl GoParser {
             .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
     }
 
+    /// Parse using a callback to read text chunks
+    pub fn parse_with_callback<T, F>(
+        &mut self,
+        mut callback: F,
+        old_tree: Option<&Tree>,
+    ) -> Result<Tree>
+    where
+        T: AsRef<[u8]>,
+        F: FnMut(usize, tree_sitter::Point) -> T,
+    {
+        self.parser
+            .parse_with_options(&mut callback, old_tree, None)
+            .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
+    }
+
     /// Parse a Go file and extract targets
     pub fn parse_file(&mut self, path: &Path) -> Result<target::FileInfo> {
         let timer =

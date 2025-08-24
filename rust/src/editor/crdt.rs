@@ -38,6 +38,21 @@ impl CrdtEditor {
         self.rope.to_string()
     }
 
+    /// Get the byte length of the rope
+    pub fn rope_len_bytes(&self) -> usize {
+        self.rope.byte_len()
+    }
+
+    /// Get a chunk of text starting from the given byte offset
+    pub fn rope_chunk_at(&self, byte_offset: usize) -> Option<&str> {
+        if byte_offset >= self.rope.byte_len() {
+            return None;
+        }
+
+        let slice = self.rope.byte_slice(byte_offset..);
+        slice.chunks().next()
+    }
+
     /// Apply deletion and return the deleted range (start, end)
     fn apply_deletion(
         &mut self,
