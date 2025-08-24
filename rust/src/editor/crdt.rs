@@ -113,7 +113,7 @@ impl CrdtEditor {
 
     pub fn apply_text_edits(&mut self, edits: &[TextEdit], mut snapshot: Self) {
         // Apply each edit in sequence
-        for edit in edits {
+        for edit in edits.iter().rev() {
             // Convert LSP positions to byte positions using snapshot's rope
             let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
             let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
