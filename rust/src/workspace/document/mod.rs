@@ -5,7 +5,9 @@ use lsp_types::{
 };
 use std::fs;
 use std::path::PathBuf;
-use tracing::{debug, error, info};
+use std::sync::{Arc, RwLock};
+use tokio::task::JoinSet;
+use tracing::{debug, error};
 use tree_sitter::Tree;
 
 use crate::editor::crdt::CrdtEditor;
@@ -13,7 +15,6 @@ use crate::generation::{spawn_generation_task, ApplyGeneration, EditEvent};
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::parser::{target::Target, target_map::TargetMap, GoParser};
-use crate::workspace::service::{Client as ServiceClient, Handler, Service};
 
 /// Document managing a single document's state with CRDT support
 pub struct Document {
@@ -22,19 +23,10 @@ pub struct Document {
     pub parser: GoParser,
     pub tree: Tree,
     pub editor: CrdtEditor,
-    /// Snapshot of the version that LSP knows about
-    pub lsp_snapshot: CrdtEditor,
-    pub lsp_client: LspClient,
-    pub llm_client: LLMClient,
 }
 
 impl Document {
-    pub fn new(
-        file_path: PathBuf,
-        uri: String,
-        lsp_client: LspClient,
-        llm_client: LLMClient,
-    ) -> Result<Self> {
+    pub fn new(file_path: PathBuf, uri: String) -> Result<Self> {
         let content = fs::read_to_string(&file_path)
             .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
 
@@ -45,7 +37,6 @@ impl Document {
 
         // Initialize CRDT editor
         let editor = CrdtEditor::new(&content);
-        let lsp_snapshot = editor.fork();
 
         Ok(Self {
             uri,
@@ -53,9 +44,6 @@ impl Document {
             parser,
             tree,
             editor,
-            lsp_snapshot,
-            lsp_client,
-            llm_client,
         })
     }
 
@@ -74,6 +62,47 @@ impl Document {
             ));
         }
         Ok(targets)
+    }
+
+    pub fn apply_generation(&mut self, msg: ApplyGeneration) -> Result<()> {
+        debug!("ApplyGeneration: checksum={:x}", msg.checksum);
+
+        // Find the function in the current tree
+        let source = self.editor.get_text();
+
+        // Get body positions and apply edit
+        {
+            let target_map = TargetMap::build(&self.tree, &source)?;
+
+            let Some((_target, node)) = target_map.get(msg.checksum) else {
+                return Err(anyhow::anyhow!(
+                    "Function with checksum {:x} not found",
+                    msg.checksum
+                ));
+            };
+            // Get function body node
+            let body_node = node.child_by_field_name("body");
+            let body_start = body_node
+                .as_ref()
+                .map(|n| n.start_byte())
+                .unwrap_or(node.end_byte());
+            let body_end = body_node
+                .as_ref()
+                .map(|n| n.end_byte())
+                .unwrap_or(node.end_byte());
+
+            let body = format!("{{\n{}\n}}", msg.new_body.trim());
+
+            // Create text edit
+            let start_pos = self.editor.byte_to_lsp_position(body_start);
+            let end_pos = self.editor.byte_to_lsp_position(body_end);
+            let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
+            let snapshot = self.editor.fork();
+
+            // Apply edit using CRDT
+            self.editor.apply_text_edit(text_edit, snapshot);
+            Ok(())
+        }
     }
 
     /// Apply an edit event
@@ -138,113 +167,70 @@ impl Document {
 }
 
 /// Service wrapper for Document with external dependencies
+#[derive(Clone)]
 pub struct DocumentService {
-    document: Document,
-    self_client: ServiceClient<DocumentService>,
-}
-
-impl Service for DocumentService {
-    type State = Document;
-    fn new(document: Document, self_client: ServiceClient<DocumentService>) -> Self {
-        Self {
-            document,
-            self_client,
-        }
-    }
-}
-
-/// Message to start generation for all targets
-pub struct StartGeneration;
-
-/// Message to get the current content
-pub struct GetContent;
-
-impl Handler<StartGeneration> for DocumentService {
-    type Response = ();
-
-    async fn handle(&mut self, _: StartGeneration) -> Self::Response {
-        info!("StartGeneration: {}", self.document.uri);
-
-        let targets = match self.document.find_targets() {
-            Ok(targets) => targets,
-            Err(e) => {
-                error!("Failed to find targets: {}", e);
-                return;
-            }
-        };
-
-        if targets.is_empty() {
-            debug!("No targets found");
-            return;
-        }
-
-        let self_client = self.self_client.clone();
-
-        // Spawn generation tasks
-        for (checksum, target, _, _) in targets {
-            let self_client = self_client.clone();
-            let llm_client = self.document.llm_client.clone();
-            let snapshot = self.document.editor.fork();
-
-            spawn_generation_task(checksum, target, snapshot, llm_client, move |result| {
-                Box::pin(async move {
-                    let _ = self_client.request(result).await;
-                })
-            })
-            .await;
-        }
-    }
-}
-
-impl Handler<ApplyGeneration> for DocumentService {
-    type Response = ();
-
-    async fn handle(&mut self, msg: ApplyGeneration) -> Self::Response {
-        debug!("ApplyGeneration: checksum={:x}", msg.checksum);
-
-        // Create EditEvent for compatibility with existing apply_edit
-        let edit = EditEvent::new(
-            msg.checksum,
-            String::new(), // signature not needed for apply_edit
-            msg.new_body,
-            msg.snapshot,
-            0, // start_byte not used
-            0, // end_byte not used
-        );
-
-        if let Err(e) = self.document.apply_edit(edit) {
-            error!("Failed to apply edit: {}", e);
-            return;
-        }
-
-        // Send changes to LSP
-        if let Err(e) = self.send_did_change().await {
-            error!("Failed to send didChange: {}", e);
-        }
-
-        // Format document
-        if let Err(e) = self.format_document().await {
-            error!("Failed to format document: {}", e);
-        }
-    }
-}
-
-impl Handler<GetContent> for DocumentService {
-    type Response = String;
-
-    async fn handle(&mut self, _: GetContent) -> Self::Response {
-        self.document.get_text()
-    }
+    document: Arc<RwLock<Document>>,
+    lsp_client: LspClient,
+    llm_client: LLMClient,
 }
 
 impl DocumentService {
-    /// Send didChange notification to LSP
-    async fn send_did_change(&mut self) -> Result<()> {
-        let current_version = self.document.editor.get_version();
-        let uri: lsp_types::Uri = self.document.uri.parse()?;
+    pub fn new(document: Document, lsp_client: LspClient, llm_client: LLMClient) -> Self {
+        Self {
+            document: Arc::new(RwLock::new(document)),
+            llm_client,
+            lsp_client,
+        }
+    }
 
-        // Get the current document text
-        let content = self.document.get_text();
+    pub async fn generate(&self) -> Result<String> {
+        let targets = {
+            let document = self.document.read().unwrap();
+            let targets = document.find_targets()?;
+
+            if targets.is_empty() {
+                return Ok(document.get_text());
+            }
+            targets
+        };
+
+        // Spawn generation tasks
+        let mut set: JoinSet<Result<()>> = JoinSet::new();
+        for (checksum, target, _, _) in targets {
+            let llm_client = self.llm_client.clone();
+
+            let clone = self.clone().to_owned();
+            set.spawn(Box::pin(async move {
+                let result = spawn_generation_task(checksum, target, llm_client).await?;
+                clone.apply_generation(result).await?;
+                Ok(())
+            }));
+        }
+
+        while let Some(res) = set.join_next().await {
+            let _ = res?;
+        }
+
+        Ok(self.document.read().unwrap().get_text())
+    }
+
+    async fn apply_generation(&self, msg: ApplyGeneration) -> Result<()> {
+        debug!("ApplyGeneration: checksum={:x}", msg.checksum);
+
+        self.document.write().unwrap().apply_generation(msg)?;
+        self.send_did_change().await?;
+        self.format_document().await?;
+        Ok(())
+    }
+
+    async fn send_did_change(&self) -> Result<()> {
+        let (current_version, uri, content) = {
+            let doc = self.document.read().unwrap();
+            let current_version = doc.editor.get_version();
+            let uri: lsp_types::Uri = doc.uri.parse()?;
+            let content = doc.get_text();
+            (current_version, uri, content)
+        };
 
         // Send full document update
         let params = DidChangeTextDocumentParams {
@@ -259,42 +245,29 @@ impl DocumentService {
             }],
         };
 
-        self.document.lsp_client.did_change(params).await?;
+        self.lsp_client.did_change(params).await?;
 
         // Update LSP snapshot
-        self.document.lsp_snapshot = self.document.editor.fork();
+        let uri = {
+            let doc = self.document.read().unwrap();
+            doc.uri.clone()
+        };
 
-        // Wait for diagnostics
-        if let Ok(diagnostics) = self
-            .document
-            .lsp_client
-            .wait_for_diagnostics_timeout(&self.document.uri, std::time::Duration::from_secs(2))
-            .await
-        {
-            if !diagnostics.diagnostics.is_empty() {
-                info!(
-                    "Diagnostics for {}: {:?}",
-                    self.document.uri, diagnostics.diagnostics
-                );
-            }
-        }
+        self.lsp_client
+            .wait_for_diagnostics_timeout(&uri, std::time::Duration::from_secs(2))
+            .await?;
 
         Ok(())
     }
 
     /// Format document using LSP
-    async fn format_document(&mut self) -> Result<()> {
-        if !self
-            .document
-            .lsp_client
-            .supports_document_formatting()
-            .await
-        {
+    async fn format_document(&self) -> Result<()> {
+        if !self.lsp_client.supports_document_formatting().await {
             debug!("Document formatting not supported");
             return Ok(());
         }
 
-        let uri: lsp_types::Uri = self.document.uri.parse()?;
+        let uri: lsp_types::Uri = self.document.read().unwrap().uri.parse()?;
         let formatting_options = lsp_types::FormattingOptions {
             tab_size: 4,
             insert_spaces: false,
@@ -303,9 +276,12 @@ impl DocumentService {
             trim_final_newlines: Some(true),
             properties: Default::default(),
         };
+        let snapshot = {
+            let doc = self.document.read().unwrap();
+            doc.editor.fork()
+        };
 
         if let Some(edits) = self
-            .document
             .lsp_client
             .format_document(
                 lsp_types::TextDocumentIdentifier { uri },
@@ -314,15 +290,17 @@ impl DocumentService {
             .await?
         {
             if !edits.is_empty() {
-                debug!("Applying {} formatting edits", edits.len());
-                let snapshot = self.document.editor.fork();
-                self.document.editor.apply_text_edits(&edits, snapshot);
+                {
+                    let mut doc = self.document.write().unwrap();
+                    debug!("Applying {} formatting edits", edits.len());
+                    doc.editor.apply_text_edits(&edits, snapshot);
 
-                // Re-parse after formatting
-                let new_source = self.document.get_text();
-                self.document.tree = self.document.parser.parse(&new_source)?;
+                    // Re-parse after formatting
+                    let new_source = doc.get_text();
+                    doc.tree = doc.parser.parse(&new_source)?;
 
-                // Send updated content to LSP
+                    // Send updated content to LSP
+                }
                 self.send_did_change().await?;
             }
         }

@@ -1,8 +1,6 @@
 pub mod document;
-pub mod service;
 
-pub use self::document::{Document, DocumentService, GetContent, StartGeneration};
-pub use self::service::{Client as ServiceClient, Service};
+pub use self::document::{Document, DocumentService};
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -16,7 +14,7 @@ use crate::lsp::Client as LspClient;
 /// Workspace managing documents and services
 pub struct Workspace {
     /// Documents by file URI
-    documents: HashMap<String, ServiceClient<document::DocumentService>>,
+    documents: HashMap<String, DocumentService>,
     /// LSP client
     lsp_client: LspClient,
     /// LLM client
@@ -79,9 +77,8 @@ impl Workspace {
         let file_uri = format!("file://{}", absolute_path.display());
 
         // Check if document already exists
-        if let Some(client) = self.documents.get_mut(&file_uri) {
-            client.request(StartGeneration).await;
-            return Ok(client.request(GetContent).await);
+        if let Some(document) = self.documents.get_mut(&file_uri) {
+            return document.generate().await;
         }
 
         // Read file content
@@ -99,20 +96,13 @@ impl Workspace {
             .await?;
 
         // Create document service
-        let document = document::Document::new(
-            absolute_path.clone(),
-            file_uri.clone(),
-            self.lsp_client.clone(),
-            self.llm_client.clone(),
-        )?;
-        let client = DocumentService::run(document);
+        let d = Document::new(absolute_path.clone(), file_uri.clone())?;
+        let document = DocumentService::new(d, self.lsp_client.clone(), self.llm_client.clone());
 
-        // Start generation
-        client.request(StartGeneration).await;
-        let result = client.request(GetContent).await;
+        let result = document.generate().await?;
 
         // Store the document
-        self.documents.insert(file_uri, client);
+        self.documents.insert(file_uri, document);
 
         Ok(result)
     }

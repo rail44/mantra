@@ -1,7 +1,6 @@
 use anyhow::Result;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::editor::crdt::CrdtEditor;
 use crate::llm::{CompletionRequest, LLMClient, Message};
 use crate::parser::target::Target;
 
@@ -9,34 +8,16 @@ use crate::parser::target::Target;
 pub struct ApplyGeneration {
     pub checksum: u64,
     pub new_body: String,
-    pub snapshot: CrdtEditor,
 }
 
 /// Spawn a generation task that will send results back to the document service
-pub async fn spawn_generation_task<F>(
+pub async fn spawn_generation_task(
     checksum: u64,
     target: Target,
-    snapshot: CrdtEditor,
     llm_client: LLMClient,
-    on_complete: F,
-) where
-    F: FnOnce(ApplyGeneration) -> futures::future::BoxFuture<'static, ()> + Send + 'static,
-{
-    tokio::spawn(async move {
-        match generate_for_target(&llm_client, &target).await {
-            Ok(new_body) => {
-                let result = ApplyGeneration {
-                    checksum,
-                    new_body,
-                    snapshot,
-                };
-                on_complete(result).await;
-            }
-            Err(e) => {
-                error!("Failed to generate for {}: {}", target.name, e);
-            }
-        }
-    });
+) -> Result<ApplyGeneration> {
+    let new_body = generate_for_target(&llm_client, &target).await?;
+    Ok(ApplyGeneration { checksum, new_body })
 }
 
 /// Generate code for a specific target using LLM
