@@ -80,29 +80,42 @@ impl Document {
                     msg.checksum
                 ));
             };
-            // Get function body node
-            let body_node = node.child_by_field_name("body");
-            let body_start = body_node
-                .as_ref()
-                .map(|n| n.start_byte())
-                .unwrap_or(node.end_byte());
-            let body_end = body_node
-                .as_ref()
-                .map(|n| n.end_byte())
-                .unwrap_or(node.end_byte());
 
-            let body = format!("{{\n{}\n}}", msg.new_body.trim());
+            // Get the function start and end for full replacement
+            let func_start_byte = node.start_byte();
+            let func_end_byte = node.end_byte();
 
-            // Create text edit
-            let start_pos = self.editor.byte_to_lsp_position(body_start);
-            let end_pos = self.editor.byte_to_lsp_position(body_end);
-            let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
+            // Extract signature (everything before the body)
+            let func_text = &source[func_start_byte..func_end_byte];
+            let func_signature = if let Some(brace_pos) = func_text.find('{') {
+                &func_text[..brace_pos]
+            } else {
+                func_text
+            };
+
+            // Create replacement with checksum comment
+            let replacement = format!(
+                "// mantra:checksum:{:x}\n{} {{\n{}\n}}",
+                msg.checksum,
+                func_signature.trim_end(),
+                msg.new_body.trim()
+            );
+
+            // Create text edit for full function replacement
+            let start_pos = self.editor.byte_to_lsp_position(func_start_byte);
+            let end_pos = self.editor.byte_to_lsp_position(func_end_byte);
+            let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), replacement);
             let snapshot = self.editor.fork();
 
             // Apply edit using CRDT
             self.editor.apply_text_edit(text_edit, snapshot);
-            Ok(())
         }
+
+        // Re-parse the document after modification
+        let new_source = self.editor.get_text();
+        self.tree = self.parser.parse(&new_source)?;
+
+        Ok(())
     }
 
     /// Apply an edit event
