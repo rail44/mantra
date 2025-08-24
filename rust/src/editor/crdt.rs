@@ -70,8 +70,8 @@ pub struct CrdtEditor {
     snapshot: Snapshot,
     /// Go parser for maintaining AST
     parser: GoParser,
-    /// Current syntax tree
-    tree: Tree,
+    /// Current syntax tree (None before first parse)
+    tree: Option<Tree>,
 }
 
 impl CrdtEditor {
@@ -82,15 +82,17 @@ impl CrdtEditor {
             rope: Rope::from(initial_text),
             version: 0,
         };
-        
-        let mut parser = GoParser::new()?;
-        let tree = Self::parse_snapshot(&mut parser, &snapshot, None)?;
-        
-        Ok(Self {
+
+        let parser = GoParser::new()?;
+
+        let mut editor = Self {
             snapshot,
             parser,
-            tree,
-        })
+            tree: None,
+        };
+
+        editor.reparse()?; // Initial parse
+        Ok(editor)
     }
 
     /// Generate a unique replica ID using fast random number generation
@@ -104,43 +106,33 @@ impl CrdtEditor {
         self.snapshot.rope.to_string()
     }
 
-    /// Get the byte length of the rope
-    pub fn rope_len_bytes(&self) -> usize {
-        self.snapshot.rope.byte_len()
-    }
-
-    /// Get a chunk of text starting from the given byte offset
-    pub fn rope_chunk_at(&self, byte_offset: usize) -> Option<&str> {
-        if byte_offset >= self.snapshot.rope.byte_len() {
-            return None;
-        }
-
-        let slice = self.snapshot.rope.byte_slice(byte_offset..);
-        slice.chunks().next()
-    }
-    
     /// Get the current syntax tree
-    pub fn tree(&self) -> &Tree {
-        &self.tree
-    }
-    
-    /// Parse a snapshot to create a syntax tree
-    fn parse_snapshot(
-        parser: &mut GoParser,
-        snapshot: &Snapshot,
-        old_tree: Option<&Tree>,
-    ) -> Result<Tree> {
-        parser.parse_with_callback(
-            |byte_offset, _position| {
-                if byte_offset >= snapshot.rope.byte_len() {
-                    return "";
-                }
-                snapshot.rope.byte_slice(byte_offset..).chunks().next().unwrap_or("")
-            },
-            old_tree,
-        ).map_err(|e| anyhow::anyhow!("Failed to parse: {}", e))
+    pub fn tree(&self) -> Option<&Tree> {
+        self.tree.as_ref()
     }
 
+    /// Re-parse the current snapshot
+    fn reparse(&mut self) -> Result<()> {
+        self.tree = Some(
+            self.parser
+                .parse_with_callback(
+                    |byte_offset, _position| {
+                        if byte_offset >= self.snapshot.rope.byte_len() {
+                            return "";
+                        }
+                        self.snapshot
+                            .rope
+                            .byte_slice(byte_offset..)
+                            .chunks()
+                            .next()
+                            .unwrap_or("")
+                    },
+                    None, // Currentrly, full re-parse (no incremental parsing)
+                )
+                .map_err(|e| anyhow::anyhow!("Failed to parse: {}", e))?,
+        );
+        Ok(())
+    }
 
     fn lsp_position_to_byte_with_rope(position: Position, rope: &Rope) -> usize {
         let line_start_byte = rope.byte_of_line(position.line as usize);
@@ -161,7 +153,8 @@ impl CrdtEditor {
         // Convert byte offset within line to UTF-16 character offset
         let byte_offset = byte_pos - line_start_byte;
         let line_start_utf16 = self.snapshot.rope.utf16_code_unit_of_byte(line_start_byte);
-        let target_utf16 = self.snapshot
+        let target_utf16 = self
+            .snapshot
             .rope
             .utf16_code_unit_of_byte(line_start_byte + byte_offset);
         let utf16_col = target_utf16 - line_start_utf16;
@@ -204,7 +197,8 @@ impl CrdtEditor {
         edit: &TextEdit,
         edit_snapshot: &mut Snapshot,
     ) -> Result<TextDocumentContentChangeEvent> {
-        let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &edit_snapshot.rope);
+        let start_byte =
+            Self::lsp_position_to_byte_with_rope(edit.range.start, &edit_snapshot.rope);
         let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &edit_snapshot.rope);
 
         // Convert byte positions to LSP positions BEFORE any changes
@@ -213,12 +207,14 @@ impl CrdtEditor {
 
         // Apply deletion if needed
         if start_byte < end_byte {
-            self.snapshot.apply_deletion(edit_snapshot, start_byte, end_byte);
+            self.snapshot
+                .apply_deletion(edit_snapshot, start_byte, end_byte);
         }
 
         // Apply insertion if needed
         if !edit.new_text.is_empty() {
-            self.snapshot.apply_insertion(edit_snapshot, start_byte, &edit.new_text);
+            self.snapshot
+                .apply_insertion(edit_snapshot, start_byte, &edit.new_text);
         }
 
         // Return the change event
@@ -241,8 +237,8 @@ impl CrdtEditor {
         }
 
         // Re-parse after edits
-        self.tree = Self::parse_snapshot(&mut self.parser, &self.snapshot, Some(&self.tree))?;
-        
+        self.reparse()?;
+
         self.increment_version();
         changes.reverse(); // Reverse to restore original order
         Ok(changes)
@@ -255,10 +251,10 @@ impl CrdtEditor {
         mut snapshot: Snapshot,
     ) -> Result<TextDocumentContentChangeEvent> {
         let change = self.apply_single_edit(&edit, &mut snapshot)?;
-        
+
         // Re-parse after edit
-        self.tree = Self::parse_snapshot(&mut self.parser, &self.snapshot, Some(&self.tree))?;
-        
+        self.reparse()?;
+
         self.increment_version();
         Ok(change)
     }

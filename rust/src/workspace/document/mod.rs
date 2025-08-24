@@ -8,20 +8,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::task::JoinSet;
 use tracing::error;
-use tree_sitter::Tree;
 
 use crate::editor::crdt::CrdtEditor;
 use crate::generation::{spawn_generation_task, ApplyGeneration, EditEvent};
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
-use crate::parser::{target::Target, target_map::TargetMap, GoParser};
+use crate::parser::{target::Target, target_map::TargetMap};
 
 /// Document managing a single document's state with CRDT support
 pub struct Document {
     pub uri: String,
     pub file_path: PathBuf,
-    pub parser: GoParser,
-    pub tree: Tree,
     pub editor: CrdtEditor,
 }
 
@@ -31,14 +28,10 @@ impl Document {
             .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
 
         let editor = CrdtEditor::new(&content)?;
-        let parser = GoParser::new()?;
-        let tree = editor.tree().clone();
 
         Ok(Self {
             uri,
             file_path,
-            parser,
-            tree,
             editor,
         })
     }
@@ -46,7 +39,12 @@ impl Document {
     /// Get targets for generation
     pub fn find_targets(&self) -> Result<Vec<(u64, Target, usize, usize)>> {
         let source = self.editor.get_text();
-        let target_map = TargetMap::build(&self.tree, &source)?;
+        let tree = self
+            .editor
+            .tree()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
+            .clone();
+        let target_map = TargetMap::build(&tree, &source)?;
 
         let mut targets = Vec::new();
         for (checksum, (target, node)) in target_map.iter() {
@@ -69,7 +67,12 @@ impl Document {
 
         // Get body positions and apply edit
         let changes = {
-            let target_map = TargetMap::build(&self.tree, &source)?;
+            let tree = self
+                .editor
+                .tree()
+                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
+                .clone();
+            let target_map = TargetMap::build(&tree, &source)?;
 
             let Some((_target, node)) = target_map.get(msg.checksum) else {
                 return Err(anyhow::anyhow!(
@@ -108,9 +111,6 @@ impl Document {
             self.editor.apply_text_edits(&[text_edit], snapshot)?
         };
 
-        // Tree is already updated in CrdtEditor
-        self.tree = self.editor.tree().clone();
-
         Ok(changes)
     }
 
@@ -121,7 +121,12 @@ impl Document {
 
         // Get body positions and apply edit
         let changes = {
-            let target_map = TargetMap::build(&self.tree, &source)?;
+            let tree = self
+                .editor
+                .tree()
+                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
+                .clone();
+            let target_map = TargetMap::build(&tree, &source)?;
 
             if let Some((_target, node)) = target_map.get(edit.checksum) {
                 // Get function body node
@@ -144,18 +149,17 @@ impl Document {
 
                 // Apply edit using CRDT and get changes
                 let snapshot = self.editor.fork();
-                self.editor.apply_text_edits(&[text_edit], snapshot).unwrap_or_else(|e| {
-                    error!("Failed to apply edit: {}", e);
-                    vec![]
-                })
+                self.editor
+                    .apply_text_edits(&[text_edit], snapshot)
+                    .unwrap_or_else(|e| {
+                        error!("Failed to apply edit: {}", e);
+                        vec![]
+                    })
             } else {
                 error!("Function with checksum {:x} not found", edit.checksum);
                 vec![]
             }
         };
-
-        // Tree is already updated in CrdtEditor
-        self.tree = self.editor.tree().clone();
 
         Ok(changes)
     }
@@ -332,12 +336,7 @@ impl DocumentService {
                         .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
                     tracing::debug!("Applying {} formatting edits", edits.len());
                     let snapshot = doc.editor.fork();
-                    let changes = doc.editor.apply_text_edits(&edits, snapshot)?;
-
-                    // Tree is already updated in CrdtEditor
-                    doc.tree = doc.editor.tree().clone();
-
-                    changes
+                    doc.editor.apply_text_edits(&edits, snapshot)?
                 };
                 // Send incremental changes to LSP
                 self.send_did_change(changes).await?;
