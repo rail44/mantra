@@ -64,12 +64,15 @@ impl Document {
         Ok(targets)
     }
 
-    pub fn apply_generation(&mut self, msg: ApplyGeneration) -> Result<()> {
+    pub fn apply_generation(
+        &mut self,
+        msg: ApplyGeneration,
+    ) -> Result<Vec<TextDocumentContentChangeEvent>> {
         // Find the function in the current tree
         let source = self.editor.get_text();
 
         // Get body positions and apply edit
-        {
+        let changes = {
             let target_map = TargetMap::build(&self.tree, &source)?;
 
             let Some((_target, node)) = target_map.get(msg.checksum) else {
@@ -103,26 +106,26 @@ impl Document {
             let start_pos = self.editor.byte_to_lsp_position(func_start_byte);
             let end_pos = self.editor.byte_to_lsp_position(func_end_byte);
             let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), replacement);
-            let snapshot = self.editor.fork();
 
-            // Apply edit using CRDT
-            self.editor.apply_text_edit(text_edit, snapshot);
-        }
+            // Apply edit using CRDT and get changes
+            let snapshot = self.editor.fork();
+            self.editor.apply_text_edits(&[text_edit], snapshot)
+        };
 
         // Re-parse the document after modification
         let new_source = self.editor.get_text();
         self.tree = self.parser.parse(&new_source)?;
 
-        Ok(())
+        Ok(changes)
     }
 
     /// Apply an edit event
-    pub fn apply_edit(&mut self, edit: EditEvent) -> Result<()> {
+    pub fn apply_edit(&mut self, edit: EditEvent) -> Result<Vec<TextDocumentContentChangeEvent>> {
         // Find the function in the current tree
         let source = self.editor.get_text();
 
         // Get body positions and apply edit
-        {
+        let changes = {
             let target_map = TargetMap::build(&self.tree, &source)?;
 
             if let Some((_target, node)) = target_map.get(edit.checksum) {
@@ -144,19 +147,20 @@ impl Document {
                 let end_pos = self.editor.byte_to_lsp_position(body_end);
                 let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
 
-                // Apply edit using CRDT
-                self.editor.apply_text_edit(text_edit, edit.snapshot);
+                // Apply edit using CRDT and get changes
+                let snapshot = self.editor.fork();
+                self.editor.apply_text_edits(&[text_edit], snapshot)
             } else {
                 error!("Function with checksum {:x} not found", edit.checksum);
-                return Ok(());
+                vec![]
             }
-        }
+        };
 
         // Re-parse the document after target_map is dropped
         let new_source = self.editor.get_text();
         self.tree = self.parser.parse(&new_source)?;
 
-        Ok(())
+        Ok(changes)
     }
 
     /// Get text content
@@ -224,44 +228,47 @@ impl DocumentService {
     }
 
     async fn apply_generation(&self, msg: ApplyGeneration) -> Result<()> {
-        self.document.write().unwrap().apply_generation(msg)?;
-        self.send_did_change().await?;
+        let changes = self.document.write().unwrap().apply_generation(msg)?;
+        self.send_did_change(changes).await?;
         self.format_document().await?;
         Ok(())
     }
 
-    async fn send_did_change(&self) -> Result<()> {
-        let (current_version, uri, content) = {
+    async fn send_did_change(&self, changes: Vec<TextDocumentContentChangeEvent>) -> Result<()> {
+        let (current_version, uri) = {
             let doc = self.document.read().unwrap();
             let current_version = doc.editor.get_version();
             let uri: lsp_types::Uri = doc.uri.parse()?;
-            let content = doc.get_text();
-            (current_version, uri, content)
+            (current_version, uri)
         };
 
-        // Send full document update
-        let params = DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier {
-                uri,
-                version: current_version,
-            },
-            content_changes: vec![TextDocumentContentChangeEvent {
+        // Send incremental or full document update
+        let content_changes = if changes.is_empty() {
+            // Fallback to full document if no changes tracked
+            let content = self.document.read().unwrap().get_text();
+            vec![TextDocumentContentChangeEvent {
                 range: None,
                 range_length: None,
                 text: content,
-            }],
+            }]
+        } else {
+            changes
+        };
+
+        let params = DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: current_version,
+            },
+            content_changes,
         };
 
         self.lsp_client.did_change(params).await?;
 
-        // Update LSP snapshot
-        let uri = {
-            let doc = self.document.read().unwrap();
-            doc.uri.clone()
-        };
-
+        // Wait for diagnostics
+        let uri_str = self.document.read().unwrap().uri.clone();
         self.lsp_client
-            .wait_for_diagnostics_timeout(&uri, std::time::Duration::from_secs(2))
+            .wait_for_diagnostics_timeout(&uri_str, std::time::Duration::from_secs(2))
             .await?;
 
         Ok(())
@@ -283,10 +290,6 @@ impl DocumentService {
             trim_final_newlines: Some(true),
             properties: Default::default(),
         };
-        let snapshot = {
-            let doc = self.document.read().unwrap();
-            doc.editor.fork()
-        };
 
         if let Some(edits) = self
             .lsp_client
@@ -297,18 +300,20 @@ impl DocumentService {
             .await?
         {
             if !edits.is_empty() {
-                {
+                let changes = {
                     let mut doc = self.document.write().unwrap();
                     tracing::debug!("Applying {} formatting edits", edits.len());
-                    doc.editor.apply_text_edits(&edits, snapshot);
+                    let snapshot = doc.editor.fork();
+                    let changes = doc.editor.apply_text_edits(&edits, snapshot);
 
                     // Re-parse after formatting
                     let new_source = doc.get_text();
                     doc.tree = doc.parser.parse(&new_source)?;
 
-                    // Send updated content to LSP
-                }
-                self.send_did_change().await?;
+                    changes
+                };
+                // Send incremental changes to LSP
+                self.send_did_change(changes).await?;
             }
         }
 

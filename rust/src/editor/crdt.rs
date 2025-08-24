@@ -1,6 +1,6 @@
 use cola::{Replica, ReplicaId};
 use crop::Rope;
-use lsp_types::{Position, TextEdit};
+use lsp_types::{Position, Range, TextDocumentContentChangeEvent, TextEdit};
 
 /// CRDT-based collaborative text editor using cola and crop
 #[derive(Debug, Clone)]
@@ -38,16 +38,45 @@ impl CrdtEditor {
         self.rope.to_string()
     }
 
-    /// Apply insertion to rope at given position with text
-    fn apply_insertion_to_rope(&mut self, position: usize, text: &str) {
-        self.rope.insert(position, text);
-    }
+    /// Apply deletion and return the deleted range (start, end)
+    fn apply_deletion(
+        &mut self,
+        snapshot: &mut Self,
+        start: usize,
+        end: usize,
+    ) -> Option<(usize, usize)> {
+        let deletion = snapshot.replica.deleted(start..end);
+        let ranges = self.replica.integrate_deletion(&deletion);
 
-    /// Apply deletions to rope for given ranges
-    fn apply_deletions_to_rope(&mut self, ranges: &[std::ops::Range<usize>]) {
-        // Apply deletions in reverse order to maintain position validity
+        if ranges.is_empty() {
+            return None;
+        }
+
+        let first_start = ranges.first().unwrap().start;
+        let last_end = ranges.last().unwrap().end;
+
+        // Apply deletions to rope in reverse order
         for range in ranges.iter().rev() {
             self.rope.delete(range.clone());
+        }
+
+        Some((first_start, last_end))
+    }
+
+    /// Apply insertion and return the actual insertion position
+    fn apply_insertion(
+        &mut self,
+        snapshot: &mut Self,
+        position: usize,
+        text: &str,
+    ) -> Option<usize> {
+        let insertion = snapshot.replica.inserted(position, text.len());
+
+        if let Some(actual_pos) = self.replica.integrate_insertion(&insertion) {
+            self.rope.insert(actual_pos, text);
+            Some(actual_pos)
+        } else {
+            None
         }
     }
 
@@ -111,36 +140,59 @@ impl CrdtEditor {
         }
     }
 
-    pub fn apply_text_edits(&mut self, edits: &[TextEdit], mut snapshot: Self) {
-        // Apply each edit in sequence
+    /// Apply a single TextEdit and return the change event
+    fn apply_single_edit(
+        &mut self,
+        edit: &TextEdit,
+        snapshot: &mut Self,
+    ) -> TextDocumentContentChangeEvent {
+        let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
+        let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
+
+        // Convert byte positions to LSP positions BEFORE any changes
+        let start_pos = self.byte_to_lsp_position(start_byte);
+        let end_pos = self.byte_to_lsp_position(end_byte);
+
+        // Apply deletion if needed
+        if start_byte < end_byte {
+            self.apply_deletion(snapshot, start_byte, end_byte);
+        }
+
+        // Apply insertion if needed
+        if !edit.new_text.is_empty() {
+            self.apply_insertion(snapshot, start_byte, &edit.new_text);
+        }
+
+        // Return the change event
+        TextDocumentContentChangeEvent {
+            range: Some(Range::new(start_pos, end_pos)),
+            range_length: None,
+            text: edit.new_text.clone(),
+        }
+    }
+
+    pub fn apply_text_edits(
+        &mut self,
+        edits: &[TextEdit],
+        mut snapshot: Self,
+    ) -> Vec<TextDocumentContentChangeEvent> {
+        let mut changes = Vec::new();
+
         for edit in edits.iter().rev() {
-            // Convert LSP positions to byte positions using snapshot's rope
-            let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
-            let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
-
-            // Positions calculated from snapshot
-
-            // Handle deletion if needed
-            if start_byte < end_byte {
-                let deletion = snapshot.replica.deleted(start_byte..end_byte);
-                let ranges = self.replica.integrate_deletion(&deletion);
-                self.apply_deletions_to_rope(&ranges);
-            }
-
-            // Handle insertion if needed
-            if !edit.new_text.is_empty() {
-                let insertion = snapshot.replica.inserted(start_byte, edit.new_text.len());
-                if let Some(position) = self.replica.integrate_insertion(&insertion) {
-                    self.apply_insertion_to_rope(position, &edit.new_text);
-                }
-            }
+            changes.push(self.apply_single_edit(edit, &mut snapshot));
         }
 
         self.increment_version();
+        changes.reverse(); // Reverse to restore original order
+        changes
     }
 
-    /// Apply a TextEdit from a snapshot and return a new snapshot
-    pub fn apply_text_edit(&mut self, edit: TextEdit, snapshot: Self) {
+    /// Apply a single TextEdit from a snapshot
+    pub fn apply_text_edit(
+        &mut self,
+        edit: TextEdit,
+        snapshot: Self,
+    ) -> Vec<TextDocumentContentChangeEvent> {
         self.apply_text_edits(&[edit], snapshot)
     }
 }
@@ -155,7 +207,6 @@ mod tests {
         let mut editor = CrdtEditor::new("Hello, world!");
 
         // Test insertion using apply_text_edit
-        let snapshot = editor.fork();
         let insert_edit = TextEdit {
             range: Range {
                 start: Position {
@@ -169,11 +220,11 @@ mod tests {
             },
             new_text: "beautiful ".to_string(),
         };
+        let snapshot = editor.fork();
         editor.apply_text_edit(insert_edit, snapshot);
         assert_eq!(editor.get_text(), "Hello, beautiful world!");
 
         // Test deletion using apply_text_edit
-        let snapshot = editor.fork();
         let delete_edit = TextEdit {
             range: Range {
                 start: Position {
@@ -187,11 +238,11 @@ mod tests {
             },
             new_text: String::new(),
         };
+        let snapshot = editor.fork();
         editor.apply_text_edit(delete_edit, snapshot);
         assert_eq!(editor.get_text(), "Hello, world!");
 
         // Test replacement using apply_text_edit
-        let snapshot = editor.fork();
         let edit = TextEdit {
             range: Range {
                 start: Position {
@@ -205,6 +256,7 @@ mod tests {
             },
             new_text: "Rust".to_string(),
         };
+        let snapshot = editor.fork();
         editor.apply_text_edit(edit, snapshot);
         assert_eq!(editor.get_text(), "Hello, Rust!");
     }
@@ -226,7 +278,6 @@ mod tests {
         // Japanese characters handling
 
         // Replace with emoji using apply_text_edit
-        let snapshot = editor.fork();
         let edit = TextEdit {
             range: Range {
                 start: Position {
@@ -240,7 +291,63 @@ mod tests {
             },
             new_text: "🦀".to_string(),
         };
+        let snapshot = editor.fork();
         editor.apply_text_edit(edit, snapshot);
         assert_eq!(editor.get_text(), "こん🦀ちは");
+    }
+
+    #[test]
+    fn test_apply_text_edit_returns_changes() {
+        let mut editor = CrdtEditor::new("Hello, world!");
+
+        // Test insertion
+        let insert_edit = TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 7,
+                },
+                end: Position {
+                    line: 0,
+                    character: 7,
+                },
+            },
+            new_text: "beautiful ".to_string(),
+        };
+
+        let snapshot = editor.fork();
+        let changes = editor.apply_text_edit(insert_edit, snapshot);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].text, "beautiful ");
+        assert!(changes[0].range.is_some());
+        assert_eq!(editor.get_text(), "Hello, beautiful world!");
+    }
+
+    #[test]
+    fn test_apply_replacement_returns_changes() {
+        let mut editor = CrdtEditor::new("Hello, world!");
+
+        // Test replacement (delete + insert)
+        let replace_edit = TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 7,
+                },
+                end: Position {
+                    line: 0,
+                    character: 12,
+                },
+            },
+            new_text: "Rust".to_string(),
+        };
+
+        let snapshot = editor.fork();
+        let changes = editor.apply_text_edit(replace_edit, snapshot);
+
+        // Replacement should produce 1 change event
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].text, "Rust");
+        assert_eq!(editor.get_text(), "Hello, Rust!");
     }
 }
