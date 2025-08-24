@@ -3,11 +3,11 @@ use lsp_types::{
     DidChangeTextDocumentParams, Range, TextDocumentContentChangeEvent,
     VersionedTextDocumentIdentifier,
 };
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::task::JoinSet;
-use tracing::error;
 
 use crate::editor::crdt::CrdtEditor;
 use crate::generation::{spawn_generation_task, ApplyGeneration, EditEvent};
@@ -20,6 +20,8 @@ pub struct Document {
     pub uri: String,
     pub file_path: PathBuf,
     pub editor: CrdtEditor,
+    /// Set of checksums for currently pending generation tasks
+    pending_generations: HashSet<u64>,
 }
 
 impl Document {
@@ -33,6 +35,7 @@ impl Document {
             uri,
             file_path,
             editor,
+            pending_generations: HashSet::new(),
         })
     }
 
@@ -120,46 +123,41 @@ impl Document {
         let source = self.editor.get_text();
 
         // Get body positions and apply edit
-        let changes = {
-            let tree = self
-                .editor
-                .tree()
-                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
-                .clone();
-            let target_map = TargetMap::build(&tree, &source)?;
+        let tree = self
+            .editor
+            .tree()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
+            .clone();
+        let target_map = TargetMap::build(&tree, &source)?;
 
-            if let Some((_target, node)) = target_map.get(edit.checksum) {
-                // Get function body node
-                let body_node = node.child_by_field_name("body");
-                let body_start = body_node
-                    .as_ref()
-                    .map(|n| n.start_byte())
-                    .unwrap_or(node.end_byte());
-                let body_end = body_node
-                    .as_ref()
-                    .map(|n| n.end_byte())
-                    .unwrap_or(node.end_byte());
-
-                let body = format!("{{\n{}\n}}", edit.new_body.trim());
-
-                // Create text edit
-                let start_pos = self.editor.byte_to_lsp_position(body_start);
-                let end_pos = self.editor.byte_to_lsp_position(body_end);
-                let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
-
-                // Apply edit using CRDT and get changes
-                let snapshot = self.editor.fork();
-                self.editor
-                    .apply_text_edits(&[text_edit], snapshot)
-                    .unwrap_or_else(|e| {
-                        error!("Failed to apply edit: {}", e);
-                        vec![]
-                    })
-            } else {
-                error!("Function with checksum {:x} not found", edit.checksum);
-                vec![]
-            }
+        let Some((_target, node)) = target_map.get(edit.checksum) else {
+            return Err(anyhow::anyhow!(
+                "Function with checksum {:x} not found",
+                edit.checksum
+            ));
         };
+
+        // Get function body node
+        let body_node = node.child_by_field_name("body");
+        let body_start = body_node
+            .as_ref()
+            .map(|n| n.start_byte())
+            .unwrap_or(node.end_byte());
+        let body_end = body_node
+            .as_ref()
+            .map(|n| n.end_byte())
+            .unwrap_or(node.end_byte());
+
+        let body = format!("{{\n{}\n}}", edit.new_body.trim());
+
+        // Create text edit
+        let start_pos = self.editor.byte_to_lsp_position(body_start);
+        let end_pos = self.editor.byte_to_lsp_position(body_end);
+        let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
+
+        // Apply edit using CRDT and get changes
+        let snapshot = self.editor.fork();
+        let changes = self.editor.apply_text_edits(&[text_edit], snapshot)?;
 
         Ok(changes)
     }
@@ -177,6 +175,21 @@ impl Document {
     /// Get the file path
     pub fn file_path(&self) -> &PathBuf {
         &self.file_path
+    }
+
+    /// Start tracking a generation task
+    pub fn start_generation(&mut self, checksum: u64) {
+        self.pending_generations.insert(checksum);
+    }
+
+    /// Complete a generation task
+    pub fn complete_generation(&mut self, checksum: u64) {
+        self.pending_generations.remove(&checksum);
+    }
+
+    /// Check if formatting should be applied
+    pub fn should_format(&self) -> bool {
+        self.pending_generations.is_empty()
     }
 }
 
@@ -199,15 +212,21 @@ impl DocumentService {
 
     pub async fn generate(&self) -> Result<String> {
         let targets = {
-            let document = self
+            let mut document = self
                 .document
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+                .write()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
             let targets = document.find_targets()?;
 
             if targets.is_empty() {
                 return Ok(document.get_text());
             }
+
+            // Mark all generations as pending
+            for (checksum, _, _, _) in &targets {
+                document.start_generation(*checksum);
+            }
+
             targets
         };
 
@@ -236,13 +255,35 @@ impl DocumentService {
     }
 
     async fn apply_generation(&self, msg: ApplyGeneration) -> Result<()> {
-        let changes = self
-            .document
-            .write()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?
-            .apply_generation(msg)?;
+        let checksum = msg.checksum;
+        tracing::debug!("Applying generation for checksum {:x}", checksum);
+
+        let changes = {
+            let mut doc = self
+                .document
+                .write()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
+            let version_before = doc.editor.get_version();
+            let changes = doc.apply_generation(msg)?;
+            // Mark this generation as complete
+            doc.complete_generation(checksum);
+            let version_after = doc.editor.get_version();
+
+            tracing::debug!(
+                "Generation applied for checksum {:x} (version: {} -> {})",
+                checksum,
+                version_before,
+                version_after
+            );
+
+            changes
+        };
+
         self.send_did_change(changes).await?;
-        self.format_document().await?;
+
+        // Check if we should format after this generation completes
+        self.format_if_needed().await?;
+
         Ok(())
     }
 
@@ -259,6 +300,10 @@ impl DocumentService {
 
         // Send incremental or full document update
         let content_changes = if changes.is_empty() {
+            tracing::debug!(
+                "Sending full document update (version: {})",
+                current_version
+            );
             // Fallback to full document if no changes tracked
             let content = self
                 .document
@@ -271,6 +316,11 @@ impl DocumentService {
                 text: content,
             }]
         } else {
+            tracing::debug!(
+                "Sending {} incremental changes (version: {})",
+                changes.len(),
+                current_version
+            );
             changes
         };
 
@@ -284,16 +334,23 @@ impl DocumentService {
 
         self.lsp_client.did_change(params).await?;
 
-        // Wait for diagnostics
-        let uri_str = self
-            .document
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
-            .uri
-            .clone();
-        self.lsp_client
-            .wait_for_diagnostics_timeout(&uri_str, std::time::Duration::from_secs(2))
-            .await?;
+        Ok(())
+    }
+
+    /// Format document if needed (when all generations are complete)
+    async fn format_if_needed(&self) -> Result<()> {
+        let should_format = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+            doc.should_format()
+        };
+
+        if should_format {
+            tracing::debug!("All generations complete, formatting document");
+            self.format_document().await?;
+        }
 
         Ok(())
     }
@@ -305,12 +362,21 @@ impl DocumentService {
             return Ok(());
         }
 
-        let uri: lsp_types::Uri = self
-            .document
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
-            .uri
-            .parse()?;
+        let (uri_str, version) = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+            (doc.uri.clone(), doc.editor.get_version())
+        };
+
+        let uri: lsp_types::Uri = uri_str.parse()?;
+        tracing::debug!(
+            "Requesting formatting for {} (version: {})",
+            uri_str,
+            version
+        );
+
         let formatting_options = lsp_types::FormattingOptions {
             tab_size: 4,
             insert_spaces: false,
@@ -320,7 +386,7 @@ impl DocumentService {
             properties: Default::default(),
         };
 
-        if let Some(edits) = self
+        match self
             .lsp_client
             .format_document(
                 lsp_types::TextDocumentIdentifier { uri },
@@ -328,18 +394,31 @@ impl DocumentService {
             )
             .await?
         {
-            if !edits.is_empty() {
+            Some(edits) if !edits.is_empty() => {
                 let changes = {
                     let mut doc = self
                         .document
                         .write()
                         .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
-                    tracing::debug!("Applying {} formatting edits", edits.len());
+                    let current_version = doc.editor.get_version();
+                    tracing::debug!(
+                        "Applying {} formatting edits (version: {} -> {})",
+                        edits.len(),
+                        version,
+                        current_version
+                    );
                     let snapshot = doc.editor.fork();
                     doc.editor.apply_text_edits(&edits, snapshot)?
                 };
                 // Send incremental changes to LSP
                 self.send_did_change(changes).await?;
+                tracing::debug!("Formatting applied successfully");
+            }
+            Some(_) => {
+                tracing::debug!("Formatting returned empty edits");
+            }
+            None => {
+                tracing::debug!("Formatting returned None");
             }
         }
 

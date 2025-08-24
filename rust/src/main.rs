@@ -37,8 +37,9 @@ async fn main() -> Result<()> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mantra=info"));
 
-    // Configure structured logging
+    // Configure structured logging (explicitly output to stderr)
     let format_layer = fmt::layer()
+        .with_writer(std::io::stderr)
         .with_target(true)
         .with_thread_ids(false)
         .with_thread_names(false)

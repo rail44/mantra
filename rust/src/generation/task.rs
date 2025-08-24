@@ -15,7 +15,9 @@ pub async fn spawn_generation_task(
     target: Target,
     llm_client: LLMClient,
 ) -> Result<ApplyGeneration> {
+    tracing::debug!("Starting generation task for checksum {:x}", checksum);
     let new_body = generate_for_target(&llm_client, &target).await?;
+    tracing::debug!("Completed generation task for checksum {:x}", checksum);
     Ok(ApplyGeneration { checksum, new_body })
 }
 
