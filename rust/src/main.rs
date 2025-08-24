@@ -29,12 +29,17 @@ async fn main() -> Result<()> {
 
     // Setup structured logging with RUST_LOG environment variable
     // Default to "warn" if RUST_LOG is not set
+    // Examples:
+    //   RUST_LOG=mantra=debug                    - all mantra debug logs
+    //   RUST_LOG=mantra::lsp=trace               - LSP trace logs
+    //   RUST_LOG=mantra::editor=debug            - editor debug logs
+    //   RUST_LOG=warn,mantra::generation=info    - warnings + generation info
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mantra=info"));
 
     // Configure structured logging
     let format_layer = fmt::layer()
-        .with_target(false)
+        .with_target(true)
         .with_thread_ids(false)
         .with_thread_names(false)
         .with_file(true)

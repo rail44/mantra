@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-use tracing::debug;
+use tracing::warn;
 
 use crate::lsp::NotificationHandler;
 
@@ -49,7 +49,6 @@ impl StdioSender {
             .await
             .map_err(|e| TransportError(format!("Failed to flush: {}", e)))?;
 
-        debug!("Sent LSP message: {}", msg);
         Ok(())
     }
 }
@@ -121,8 +120,6 @@ impl StdioReceiver {
             .await
             .map_err(|e| TransportError(format!("Failed to read message body: {}", e)))?;
 
-        debug!("Received LSP message: {}", String::from_utf8_lossy(&buffer));
-
         // 通知ハンドラーがある場合、notificationをチェック
         if let Some(handler) = &self.notification_handler {
             if let Ok(msg) = serde_json::from_slice::<Value>(&buffer) {
@@ -139,7 +136,7 @@ impl StdioReceiver {
                         // 非同期でハンドラーに渡す（ブロッキングを避ける）
                         tokio::spawn(async move {
                             if let Err(e) = handler.handle_notification(&method, params).await {
-                                debug!("Failed to handle notification: {}", e);
+                                warn!("Failed to handle notification for {}: {}", method, e);
                             }
                         });
                     }

@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::task::JoinSet;
-use tracing::{debug, error};
+use tracing::error;
 use tree_sitter::Tree;
 
 use crate::editor::crdt::CrdtEditor;
@@ -65,8 +65,6 @@ impl Document {
     }
 
     pub fn apply_generation(&mut self, msg: ApplyGeneration) -> Result<()> {
-        debug!("ApplyGeneration: checksum={:x}", msg.checksum);
-
         // Find the function in the current tree
         let source = self.editor.get_text();
 
@@ -120,8 +118,6 @@ impl Document {
 
     /// Apply an edit event
     pub fn apply_edit(&mut self, edit: EditEvent) -> Result<()> {
-        debug!("ApplyEdit: checksum={:x}", edit.checksum);
-
         // Find the function in the current tree
         let source = self.editor.get_text();
 
@@ -228,8 +224,6 @@ impl DocumentService {
     }
 
     async fn apply_generation(&self, msg: ApplyGeneration) -> Result<()> {
-        debug!("ApplyGeneration: checksum={:x}", msg.checksum);
-
         self.document.write().unwrap().apply_generation(msg)?;
         self.send_did_change().await?;
         self.format_document().await?;
@@ -276,7 +270,7 @@ impl DocumentService {
     /// Format document using LSP
     async fn format_document(&self) -> Result<()> {
         if !self.lsp_client.supports_document_formatting().await {
-            debug!("Document formatting not supported");
+            tracing::trace!("Document formatting not supported");
             return Ok(());
         }
 
@@ -305,7 +299,7 @@ impl DocumentService {
             if !edits.is_empty() {
                 {
                     let mut doc = self.document.write().unwrap();
-                    debug!("Applying {} formatting edits", edits.len());
+                    tracing::debug!("Applying {} formatting edits", edits.len());
                     doc.editor.apply_text_edits(&edits, snapshot);
 
                     // Re-parse after formatting

@@ -112,32 +112,18 @@ impl CrdtEditor {
     }
 
     pub fn apply_text_edits(&mut self, edits: &[TextEdit], mut snapshot: Self) {
-        use tracing::debug;
-
         // Apply each edit in sequence
         for edit in edits {
-            use tracing::debug;
-
             // Convert LSP positions to byte positions using snapshot's rope
             let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
             let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
 
-            debug!(
-                "CRDT apply_text_edit: start_byte={}, end_byte={}, new_text.len()={}",
-                start_byte,
-                end_byte,
-                edit.new_text.len()
-            );
-            debug!(
-                "CRDT snapshot version: {}, current version: {}",
-                snapshot.version, self.version
-            );
+            // Positions calculated from snapshot
 
             // Handle deletion if needed
             if start_byte < end_byte {
                 let deletion = snapshot.replica.deleted(start_byte..end_byte);
                 let ranges = self.replica.integrate_deletion(&deletion);
-                debug!("CRDT deletion ranges: {:?}", ranges);
                 self.apply_deletions_to_rope(&ranges);
             }
 
@@ -145,10 +131,7 @@ impl CrdtEditor {
             if !edit.new_text.is_empty() {
                 let insertion = snapshot.replica.inserted(start_byte, edit.new_text.len());
                 if let Some(position) = self.replica.integrate_insertion(&insertion) {
-                    debug!("CRDT insertion at position: {}", position);
                     self.apply_insertion_to_rope(position, &edit.new_text);
-                } else {
-                    debug!("CRDT insertion returned None - edit was ignored or conflicted");
                 }
             }
         }

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use tracing::debug;
 
 use crate::llm::{CompletionRequest, LLMClient, Message};
 use crate::parser::target::Target;
@@ -22,8 +21,6 @@ pub async fn spawn_generation_task(
 
 /// Generate code for a specific target using LLM
 async fn generate_for_target(llm_client: &LLMClient, target: &Target) -> Result<String> {
-    debug!("Generating for target: {}", target.name);
-
     // Build prompt
     let prompt = super::build_prompt(target);
 

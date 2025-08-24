@@ -5,7 +5,7 @@ pub use self::document::{Document, DocumentService};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::config::Config;
 use crate::llm::LLMClient;
@@ -57,8 +57,6 @@ impl Workspace {
 
     /// Generate code for a file
     pub async fn generate_file(&mut self, file_path: PathBuf) -> Result<String> {
-        debug!("GenerateFile: {}", file_path.display());
-
         // Convert file path to absolute
         let absolute_path = if file_path.is_absolute() {
             file_path
