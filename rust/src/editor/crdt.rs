@@ -106,6 +106,11 @@ impl CrdtEditor {
         self.snapshot.rope.to_string()
     }
 
+    /// Get a String for a byte range without allocating the full document
+    pub fn get_text_range(&self, start: usize, end: usize) -> String {
+        self.snapshot.rope.byte_slice(start..end).to_string()
+    }
+
     /// Get the current syntax tree
     pub fn tree(&self) -> Option<&Tree> {
         self.tree.as_ref()

@@ -65,7 +65,7 @@ impl Document {
         &mut self,
         msg: ApplyGeneration,
     ) -> Result<Vec<TextDocumentContentChangeEvent>> {
-        // Find the function in the current tree
+        // Find the function in the current tree (source used only for TargetMap)
         let source = self.editor.get_text();
 
         // Get body positions and apply edit
@@ -88,12 +88,12 @@ impl Document {
             let func_start_byte = node.start_byte();
             let func_end_byte = node.end_byte();
 
-            // Extract signature (everything before the body)
-            let func_text = &source[func_start_byte..func_end_byte];
+            // Extract signature (everything before the body) using rope slice
+            let func_text = self.editor.get_text_range(func_start_byte, func_end_byte);
             let func_signature = if let Some(brace_pos) = func_text.find('{') {
                 &func_text[..brace_pos]
             } else {
-                func_text
+                &func_text
             };
 
             // Create replacement with checksum comment
