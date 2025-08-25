@@ -57,8 +57,7 @@ mod tests {
                 rope: crop::Rope::new(),
                 version: 0,
             },
-            start_byte: 0,
-            end_byte: 0,
+            byte_range: 0..0,
         };
 
         let prompt = build_prompt(&target);

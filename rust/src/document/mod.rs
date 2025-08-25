@@ -95,8 +95,7 @@ impl Document {
                             signature: signature.clone(),
                             checksum: 0, // Will be calculated next
                             snapshot: snapshot.clone(),
-                            start_byte: node.start_byte(),
-                            end_byte: node.end_byte(),
+                            byte_range: node.start_byte()..node.end_byte(),
                         };
 
                         // Calculate checksum based on name, instruction, and signature
@@ -137,12 +136,9 @@ impl Document {
         );
 
         // Apply edit using byte offsets directly with a forked snapshot
-        let change = self.editor.apply_byte_edit(
-            target.start_byte,
-            target.end_byte,
-            replacement,
-            target.snapshot.fork(),
-        )?;
+        let change =
+            self.editor
+                .apply_byte_edit(&target.byte_range, replacement, target.snapshot.fork())?;
 
         Ok(vec![change])
     }

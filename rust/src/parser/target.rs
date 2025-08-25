@@ -1,4 +1,5 @@
 use crate::editor::crdt::Snapshot;
+use std::ops::Range;
 
 /// Target function or method to generate
 #[derive(Debug, Clone)]
@@ -8,8 +9,7 @@ pub struct Target {
     pub signature: String,
     pub checksum: u64,
     pub snapshot: Snapshot,
-    pub start_byte: usize,
-    pub end_byte: usize,
+    pub byte_range: Range<usize>,
 }
 
 impl Target {}

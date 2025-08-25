@@ -2,6 +2,7 @@ use anyhow::Result;
 use cola::{Replica, ReplicaId};
 use crop::Rope;
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent, TextEdit};
+use std::ops::Range as StdRange;
 use tree_sitter::Tree;
 
 use crate::parser::GoParser;
@@ -9,8 +10,7 @@ use crate::parser::GoParser;
 /// Result of a deletion operation
 #[derive(Debug)]
 pub struct DeletionResult {
-    pub byte_start: usize,
-    pub byte_end: usize,
+    pub byte_range: StdRange<usize>,
     pub lsp_range: Range,
 }
 
@@ -65,10 +65,9 @@ impl Snapshot {
     pub fn apply_deletion(
         &mut self,
         edit_snapshot: &mut Snapshot,
-        start: usize,
-        end: usize,
+        range: &StdRange<usize>,
     ) -> Option<DeletionResult> {
-        let deletion = edit_snapshot.replica.deleted(start..end);
+        let deletion = edit_snapshot.replica.deleted(range.clone());
         let ranges = self.replica.integrate_deletion(&deletion);
 
         if ranges.is_empty() {
@@ -78,12 +77,11 @@ impl Snapshot {
         // Safe to unwrap because we checked ranges is not empty
         let first_range = ranges.first().expect("ranges should not be empty");
         let last_range = ranges.last().expect("ranges should not be empty");
-        let byte_start = first_range.start;
-        let byte_end = last_range.end;
+        let byte_range = first_range.start..last_range.end;
 
         // Calculate LSP positions before deletion
-        let start_pos = self.byte_to_lsp_position(byte_start);
-        let end_pos = self.byte_to_lsp_position(byte_end);
+        let start_pos = self.byte_to_lsp_position(byte_range.start);
+        let end_pos = self.byte_to_lsp_position(byte_range.end);
 
         // Apply deletions to rope in reverse order
         for range in ranges.iter().rev() {
@@ -91,8 +89,7 @@ impl Snapshot {
         }
 
         Some(DeletionResult {
-            byte_start,
-            byte_end,
+            byte_range,
             lsp_range: Range::new(start_pos, end_pos),
         })
     }
@@ -162,11 +159,6 @@ impl CrdtEditor {
     /// Get the current text content
     pub fn get_text(&self) -> String {
         self.snapshot.rope.to_string()
-    }
-
-    /// Get a String for a byte range without allocating the full document
-    pub fn get_text_range(&self, start: usize, end: usize) -> String {
-        self.snapshot.rope.byte_slice(start..end).to_string()
     }
 
     /// Get a reference to the internal rope for efficient text access
@@ -262,35 +254,31 @@ impl CrdtEditor {
     /// Internal byte edit without version increment
     fn apply_byte_edit_internal(
         &mut self,
-        start_byte: usize,
-        end_byte: usize,
+        byte_range: &StdRange<usize>,
         new_text: &str,
         edit_snapshot: &mut Snapshot,
     ) -> Result<TextDocumentContentChangeEvent> {
         // Get LSP range from deletion (if any)
-        let lsp_range = if start_byte < end_byte {
+        let lsp_range = if byte_range.start < byte_range.end {
             // Apply deletion and get the LSP range
-            if let Some(deletion_result) =
-                self.snapshot
-                    .apply_deletion(edit_snapshot, start_byte, end_byte)
-            {
+            if let Some(deletion_result) = self.snapshot.apply_deletion(edit_snapshot, byte_range) {
                 deletion_result.lsp_range
             } else {
                 // No actual deletion occurred, use original positions
-                let start_pos = self.byte_to_lsp_position(start_byte);
-                let end_pos = self.byte_to_lsp_position(end_byte);
+                let start_pos = self.byte_to_lsp_position(byte_range.start);
+                let end_pos = self.byte_to_lsp_position(byte_range.end);
                 Range::new(start_pos, end_pos)
             }
         } else {
             // Pure insertion - use the insertion point
-            let pos = self.byte_to_lsp_position(start_byte);
+            let pos = self.byte_to_lsp_position(byte_range.start);
             Range::new(pos, pos)
         };
 
         // Apply insertion if needed
         if !new_text.is_empty() {
             self.snapshot
-                .apply_insertion(edit_snapshot, start_byte, new_text);
+                .apply_insertion(edit_snapshot, byte_range.start, new_text);
         }
 
         // Re-parse after edit
@@ -306,13 +294,11 @@ impl CrdtEditor {
     /// Apply an edit using byte offsets directly
     pub fn apply_byte_edit(
         &mut self,
-        start_byte: usize,
-        end_byte: usize,
+        byte_range: &StdRange<usize>,
         new_text: String,
         mut snapshot: Snapshot,
     ) -> Result<TextDocumentContentChangeEvent> {
-        let result =
-            self.apply_byte_edit_internal(start_byte, end_byte, &new_text, &mut snapshot)?;
+        let result = self.apply_byte_edit_internal(byte_range, &new_text, &mut snapshot)?;
         self.increment_version();
         Ok(result)
     }
@@ -329,8 +315,7 @@ impl CrdtEditor {
             let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
 
             changes.push(self.apply_byte_edit_internal(
-                start_byte,
-                end_byte,
+                &(start_byte..end_byte),
                 &edit.new_text,
                 &mut snapshot,
             )?);
@@ -351,7 +336,7 @@ impl CrdtEditor {
         let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
 
         let change =
-            self.apply_byte_edit_internal(start_byte, end_byte, &edit.new_text, &mut snapshot)?;
+            self.apply_byte_edit_internal(&(start_byte..end_byte), &edit.new_text, &mut snapshot)?;
 
         self.increment_version();
         Ok(change)

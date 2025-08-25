@@ -19,10 +19,6 @@ pub enum MantraError {
     #[error(transparent)]
     Llm(#[from] crate::llm::error::LlmError),
 
-    /// Actor system errors
-    #[error("Actor system error: {0}")]
-    Actor(String),
-
     /// Generic I/O errors not covered by specific layers
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -62,14 +58,6 @@ impl MantraError {
 
     pub fn tree_sitter(_msg: impl Into<String>) -> Self {
         MantraError::Parse(crate::parser::error::ParseError::ParseFailed)
-    }
-
-    pub fn actor(msg: impl Into<String>) -> Self {
-        MantraError::Actor(msg.into())
-    }
-
-    pub fn validation(msg: impl Into<String>) -> Self {
-        MantraError::Config(crate::config::error::ConfigError::Invalid(msg.into()))
     }
 
     pub fn not_found(msg: impl Into<String>) -> Self {

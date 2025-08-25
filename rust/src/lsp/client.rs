@@ -3,10 +3,9 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
-    ClientCapabilities, DidChangeTextDocumentParams, DocumentFormattingParams,
-    DocumentRangeFormattingParams, FormattingOptions, GotoCapability, Hover,
-    HoverClientCapabilities, InitializeResult, MarkupKind, Position, PublishDiagnosticsParams,
-    Range, TextDocumentClientCapabilities, TextDocumentIdentifier,
+    ClientCapabilities, DidChangeTextDocumentParams, DocumentFormattingParams, FormattingOptions,
+    GotoCapability, HoverClientCapabilities, InitializeResult, MarkupKind,
+    PublishDiagnosticsParams, TextDocumentClientCapabilities, TextDocumentIdentifier,
     TextDocumentSyncClientCapabilities, TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
 };
 use serde::de::Error;
@@ -61,26 +60,6 @@ impl ToRpcParams for InitializeParams {
             .map_err(|e| serde_json::Error::custom(e.to_string()))?;
         params
             .insert("workspaceFolders", self.workspace_folders)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params.to_rpc_params()
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HoverParams {
-    text_document: TextDocumentIdentifier,
-    position: Position,
-}
-
-impl ToRpcParams for HoverParams {
-    fn to_rpc_params(self) -> Result<Option<Box<serde_json::value::RawValue>>, serde_json::Error> {
-        let mut params = ObjectParams::new();
-        params
-            .insert("textDocument", self.text_document)
-            .map_err(|e| serde_json::Error::custom(e.to_string()))?;
-        params
-            .insert("position", self.position)
             .map_err(|e| serde_json::Error::custom(e.to_string()))?;
         params.to_rpc_params()
     }
@@ -235,48 +214,6 @@ impl Client {
         }
     }
 
-    /// Get hover information at a position
-    pub async fn hover(
-        &self,
-        text_document: TextDocumentIdentifier,
-        position: Position,
-    ) -> Result<Option<Hover>> {
-        let params = HoverParams {
-            text_document,
-            position,
-        };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/hover", params)
-            .await?;
-
-        // Handle null response as None
-        if result.is_null() {
-            Ok(None)
-        } else {
-            Ok(Some(serde_json::from_value(result)?))
-        }
-    }
-
-    /// Check if the server supports range formatting
-    pub async fn supports_range_formatting(&self) -> bool {
-        let capabilities = self.server_capabilities.read().await;
-        if let Some(caps) = capabilities.as_ref() {
-            if let Some(doc_formatting) = &caps.document_range_formatting_provider {
-                match doc_formatting {
-                    lsp_types::OneOf::Left(supported) => *supported,
-                    lsp_types::OneOf::Right(_) => true,
-                }
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-
     /// Check if the server supports document formatting
     pub async fn supports_document_formatting(&self) -> bool {
         let capabilities = self.server_capabilities.read().await;
@@ -312,36 +249,6 @@ impl Client {
             .connection
             .client
             .request("textDocument/formatting", params.to_object_params()?)
-            .await?;
-
-        // Handle null response as None
-        if result.is_null() {
-            Ok(None)
-        } else {
-            Ok(Some(serde_json::from_value(result)?))
-        }
-    }
-
-    /// Format a range of a document using LSP
-    pub async fn range_formatting(
-        &self,
-        text_document: TextDocumentIdentifier,
-        range: Range,
-        options: FormattingOptions,
-    ) -> Result<Option<Vec<TextEdit>>> {
-        let params = DocumentRangeFormattingParams {
-            text_document,
-            range,
-            options,
-            work_done_progress_params: WorkDoneProgressParams {
-                work_done_token: None,
-            },
-        };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/rangeFormatting", params.to_object_params()?)
             .await?;
 
         // Handle null response as None

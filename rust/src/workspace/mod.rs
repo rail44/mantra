@@ -1,6 +1,4 @@
-pub mod document;
-
-pub use self::document::{Document, DocumentService};
+pub use crate::document::{Document, DocumentService};
 
 use anyhow::Result;
 use std::collections::HashMap;

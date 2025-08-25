@@ -1,4 +1,5 @@
 use crate::editor::crdt::Snapshot;
+use std::ops::Range;
 
 /// Edit event that describes a change to apply to the source
 /// Uses mantra checksum as a stable identifier
@@ -16,11 +17,8 @@ pub struct EditEvent {
     /// Snapshot of the document when generation task started
     pub snapshot: Snapshot,
 
-    /// Function start position (byte offset)
-    pub start_byte: usize,
-
-    /// Function end position (byte offset)
-    pub end_byte: usize,
+    /// Function byte range
+    pub byte_range: Range<usize>,
 }
 
 impl EditEvent {
@@ -29,16 +27,14 @@ impl EditEvent {
         signature: String,
         new_body: String,
         snapshot: Snapshot,
-        start_byte: usize,
-        end_byte: usize,
+        byte_range: Range<usize>,
     ) -> Self {
         Self {
             checksum,
             signature,
             new_body,
             snapshot,
-            start_byte,
-            end_byte,
+            byte_range,
         }
     }
 }
