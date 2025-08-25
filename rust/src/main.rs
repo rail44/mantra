@@ -1,10 +1,19 @@
-use mantra::config;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+mod config;
+mod core;
+mod document;
+mod editor;
+mod generation;
+mod language;
+mod llm;
+mod lsp;
+mod parser;
+mod workspace;
 
 /// Mantra - AI-powered Go code generation tool
 #[derive(Parser, Debug)]
@@ -60,8 +69,8 @@ async fn main() -> Result<()> {
 }
 
 async fn generate_command(file: PathBuf) -> Result<()> {
-    use mantra::core::metrics::Timer;
-    use mantra::workspace::Workspace;
+    use crate::core::metrics::Timer;
+    use crate::workspace::Workspace;
 
     let total_timer = Timer::start("total_generation");
 
