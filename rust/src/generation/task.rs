@@ -3,22 +3,18 @@ use anyhow::Result;
 use crate::llm::{CompletionRequest, LLMClient, Message};
 use crate::parser::target::Target;
 
-/// Message to apply a generation result
-pub struct ApplyGeneration {
-    pub checksum: u64,
-    pub new_body: String,
-}
-
 /// Spawn a generation task that will send results back to the document service
-pub async fn spawn_generation_task(
-    checksum: u64,
-    target: Target,
-    llm_client: LLMClient,
-) -> Result<ApplyGeneration> {
-    tracing::debug!("Starting generation task for checksum {:x}", checksum);
-    let new_body = generate_for_target(&llm_client, &target).await?;
-    tracing::debug!("Completed generation task for checksum {:x}", checksum);
-    Ok(ApplyGeneration { checksum, new_body })
+pub async fn spawn_generation_task(target: &Target, llm_client: LLMClient) -> Result<String> {
+    tracing::debug!(
+        "Starting generation task for checksum {:x}",
+        target.checksum
+    );
+    let new_body = generate_for_target(&llm_client, target).await?;
+    tracing::debug!(
+        "Completed generation task for checksum {:x}",
+        target.checksum
+    );
+    Ok(new_body)
 }
 
 /// Generate code for a specific target using LLM

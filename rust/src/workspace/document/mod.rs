@@ -10,10 +10,10 @@ use std::sync::{Arc, RwLock};
 use tokio::task::JoinSet;
 
 use crate::editor::crdt::CrdtEditor;
-use crate::generation::{spawn_generation_task, ApplyGeneration, EditEvent};
+use crate::generation::spawn_generation_task;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
-use crate::parser::{target::Target, target_map::TargetMap};
+use crate::parser::{checksum::calculate_checksum, target::Target};
 
 /// Document managing a single document's state with CRDT support
 pub struct Document {
@@ -40,127 +40,116 @@ impl Document {
     }
 
     /// Get targets for generation
-    pub fn find_targets(&self) -> Result<Vec<(u64, Target, usize, usize)>> {
-        let source = self.editor.get_text();
+    pub fn find_targets(&self) -> Result<Vec<Target>> {
         let tree = self
             .editor
             .tree()
             .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
             .clone();
-        let target_map = TargetMap::build(&tree, &source)?;
 
+        let rope = self.editor.rope();
+        let snapshot = self.editor.fork();
         let mut targets = Vec::new();
-        for (checksum, (target, node)) in target_map.iter() {
-            targets.push((
-                *checksum,
-                target.clone(),
-                node.start_byte(),
-                node.end_byte(),
-            ));
+
+        // Find all mantra comments and their associated functions
+        let mut pending_instruction: Option<String> = None;
+        let mut stack = vec![tree.root_node()];
+
+        while let Some(node) = stack.pop() {
+            match node.kind() {
+                "comment" => {
+                    let text = rope
+                        .byte_slice(node.start_byte()..node.end_byte())
+                        .to_string();
+                    let text = text.trim();
+                    if text.starts_with("// mantra:") {
+                        let instruction = text.strip_prefix("// mantra:").unwrap().trim();
+                        pending_instruction = Some(instruction.to_string());
+                    }
+                }
+
+                "function_declaration" | "method_declaration" => {
+                    if let Some(instruction) = pending_instruction.take() {
+                        // Extract function name
+                        let name = node
+                            .child_by_field_name("name")
+                            .map(|n| rope.byte_slice(n.start_byte()..n.end_byte()).to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+
+                        // Extract signature
+                        let signature = if let Some(body_node) = node.child_by_field_name("body") {
+                            let sig_start = node.start_byte();
+                            let sig_end = body_node.start_byte();
+                            rope.byte_slice(sig_start..sig_end)
+                                .to_string()
+                                .trim()
+                                .to_string()
+                        } else {
+                            rope.byte_slice(node.start_byte()..node.end_byte())
+                                .to_string()
+                        };
+
+                        // Create the base target for checksum calculation
+                        let base_target = Target {
+                            name: name.clone(),
+                            instruction: instruction.clone(),
+                            signature: signature.clone(),
+                            checksum: 0, // Will be calculated next
+                            snapshot: snapshot.clone(),
+                            start_byte: node.start_byte(),
+                            end_byte: node.end_byte(),
+                        };
+
+                        // Calculate checksum based on name, instruction, and signature
+                        let checksum = calculate_checksum(&base_target);
+
+                        targets.push(Target {
+                            checksum,
+                            ..base_target
+                        });
+                    }
+                }
+
+                _ => {}
+            }
+
+            // Add children to stack in reverse order for depth-first traversal
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                stack.push(child);
+            }
         }
+
         Ok(targets)
     }
 
     pub fn apply_generation(
         &mut self,
-        msg: ApplyGeneration,
+        target: &Target,
+        new_body: String,
     ) -> Result<Vec<TextDocumentContentChangeEvent>> {
-        // Find the function in the current tree (source used only for TargetMap)
-        let source = self.editor.get_text();
+        // Create replacement with checksum comment using the signature from Target
+        let replacement = format!(
+            "// mantra:checksum:{:x}\n{} {{\n{}\n}}",
+            target.checksum,
+            target.signature.trim_end(),
+            new_body.trim()
+        );
 
-        // Get body positions and apply edit
-        let changes = {
-            let tree = self
-                .editor
-                .tree()
-                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
-                .clone();
-            let target_map = TargetMap::build(&tree, &source)?;
+        // Apply edit using byte offsets directly with a forked snapshot
+        let change = self.editor.apply_byte_edit(
+            target.start_byte,
+            target.end_byte,
+            replacement,
+            target.snapshot.fork(),
+        )?;
 
-            let Some((_target, node)) = target_map.get(msg.checksum) else {
-                return Err(anyhow::anyhow!(
-                    "Function with checksum {:x} not found",
-                    msg.checksum
-                ));
-            };
-
-            // Get the function start and end for full replacement
-            let func_start_byte = node.start_byte();
-            let func_end_byte = node.end_byte();
-
-            // Extract signature (everything before the body) using rope slice
-            let func_text = self.editor.get_text_range(func_start_byte, func_end_byte);
-            let func_signature = if let Some(brace_pos) = func_text.find('{') {
-                &func_text[..brace_pos]
-            } else {
-                &func_text
-            };
-
-            // Create replacement with checksum comment
-            let replacement = format!(
-                "// mantra:checksum:{:x}\n{} {{\n{}\n}}",
-                msg.checksum,
-                func_signature.trim_end(),
-                msg.new_body.trim()
-            );
-
-            // Create text edit for full function replacement
-            let start_pos = self.editor.byte_to_lsp_position(func_start_byte);
-            let end_pos = self.editor.byte_to_lsp_position(func_end_byte);
-            let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), replacement);
-
-            // Apply edit using CRDT and get changes
-            let snapshot = self.editor.fork();
-            self.editor.apply_text_edits(&[text_edit], snapshot)?
-        };
-
-        Ok(changes)
+        Ok(vec![change])
     }
 
-    /// Apply an edit event
-    pub fn apply_edit(&mut self, edit: EditEvent) -> Result<Vec<TextDocumentContentChangeEvent>> {
-        // Find the function in the current tree
-        let source = self.editor.get_text();
-
-        // Get body positions and apply edit
-        let tree = self
-            .editor
-            .tree()
-            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
-            .clone();
-        let target_map = TargetMap::build(&tree, &source)?;
-
-        let Some((_target, node)) = target_map.get(edit.checksum) else {
-            return Err(anyhow::anyhow!(
-                "Function with checksum {:x} not found",
-                edit.checksum
-            ));
-        };
-
-        // Get function body node
-        let body_node = node.child_by_field_name("body");
-        let body_start = body_node
-            .as_ref()
-            .map(|n| n.start_byte())
-            .unwrap_or(node.end_byte());
-        let body_end = body_node
-            .as_ref()
-            .map(|n| n.end_byte())
-            .unwrap_or(node.end_byte());
-
-        let body = format!("{{\n{}\n}}", edit.new_body.trim());
-
-        // Create text edit
-        let start_pos = self.editor.byte_to_lsp_position(body_start);
-        let end_pos = self.editor.byte_to_lsp_position(body_end);
-        let text_edit = lsp_types::TextEdit::new(Range::new(start_pos, end_pos), body);
-
-        // Apply edit using CRDT and get changes
-        let snapshot = self.editor.fork();
-        let changes = self.editor.apply_text_edits(&[text_edit], snapshot)?;
-
-        Ok(changes)
-    }
+    // NOTE: apply_edit is deprecated - use apply_generation instead
+    // It's kept for backward compatibility but should be removed in the future
 
     /// Get text content
     pub fn get_text(&self) -> String {
@@ -223,8 +212,8 @@ impl DocumentService {
             }
 
             // Mark all generations as pending
-            for (checksum, _, _, _) in &targets {
-                document.start_generation(*checksum);
+            for target in &targets {
+                document.start_generation(target.checksum);
             }
 
             targets
@@ -232,13 +221,13 @@ impl DocumentService {
 
         // Spawn generation tasks
         let mut set: JoinSet<Result<()>> = JoinSet::new();
-        for (checksum, target, _, _) in targets {
+        for target in targets {
             let llm_client = self.llm_client.clone();
 
             let clone = self.clone();
             set.spawn(Box::pin(async move {
-                let result = spawn_generation_task(checksum, target, llm_client).await?;
-                clone.apply_generation(result).await?;
+                let new_body = spawn_generation_task(&target, llm_client).await?;
+                clone.apply_generation(target, new_body).await?;
                 Ok(())
             }));
         }
@@ -254,8 +243,8 @@ impl DocumentService {
             .get_text())
     }
 
-    async fn apply_generation(&self, msg: ApplyGeneration) -> Result<()> {
-        let checksum = msg.checksum;
+    async fn apply_generation(&self, target: Target, new_body: String) -> Result<()> {
+        let checksum = target.checksum;
         tracing::debug!("Applying generation for checksum {:x}", checksum);
 
         let changes = {
@@ -264,7 +253,7 @@ impl DocumentService {
                 .write()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
             let version_before = doc.editor.get_version();
-            let changes = doc.apply_generation(msg)?;
+            let changes = doc.apply_generation(&target, new_body)?;
             // Mark this generation as complete
             doc.complete_generation(checksum);
             let version_after = doc.editor.get_version();
@@ -362,12 +351,13 @@ impl DocumentService {
             return Ok(());
         }
 
-        let (uri_str, version) = {
+        let (uri_str, version, snapshot) = {
             let doc = self
                 .document
                 .read()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
-            (doc.uri.clone(), doc.editor.get_version())
+            let snapshot = doc.editor.fork();
+            (doc.uri.clone(), doc.editor.get_version(), snapshot)
         };
 
         let uri: lsp_types::Uri = uri_str.parse()?;
@@ -407,7 +397,6 @@ impl DocumentService {
                         version,
                         current_version
                     );
-                    let snapshot = doc.editor.fork();
                     doc.editor.apply_text_edits(&edits, snapshot)?
                 };
                 // Send incremental changes to LSP

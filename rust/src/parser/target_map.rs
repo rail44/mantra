@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crop::Rope;
 use hashbrown::HashMap;
 use tree_sitter::{Node, Tree};
 
@@ -11,13 +12,11 @@ pub struct TargetMap<'a> {
     map: HashMap<u64, (Target, Node<'a>)>,
     /// Package name
     package_name: String,
-    /// The source code
-    source: &'a str,
 }
 
 impl<'a> TargetMap<'a> {
     /// Build a target map from a tree with a single traversal
-    pub fn build(tree: &'a Tree, source: &'a str) -> Result<Self> {
+    pub fn build(tree: &'a Tree, rope: &Rope) -> Result<Self> {
         let mut map = HashMap::new();
         let mut package_name = String::new();
 
@@ -30,18 +29,19 @@ impl<'a> TargetMap<'a> {
                 // Extract package name
                 "package_clause" => {
                     if package_name.is_empty() {
-                        package_name = extract_package_name(&node, source)?;
+                        package_name = extract_package_name(&node, rope)?;
                     }
                 }
 
                 // Check for mantra comment
                 "comment" => {
-                    if let Ok(text) = node.utf8_text(source.as_bytes()) {
-                        let text = text.trim();
-                        if text.starts_with("// mantra:") {
-                            let instruction = text.strip_prefix("// mantra:").unwrap().trim();
-                            pending_instruction = Some(instruction.to_string());
-                        }
+                    let text = rope
+                        .byte_slice(node.start_byte()..node.end_byte())
+                        .to_string();
+                    let text = text.trim();
+                    if text.starts_with("// mantra:") {
+                        let instruction = text.strip_prefix("// mantra:").unwrap().trim();
+                        pending_instruction = Some(instruction.to_string());
                     }
                 }
 
@@ -49,7 +49,7 @@ impl<'a> TargetMap<'a> {
                 "function_declaration" | "method_declaration" => {
                     // If we have a pending mantra instruction, this function is a target
                     if let Some(instruction) = pending_instruction.take() {
-                        if let Ok(target) = parse_function_as_target(&node, source, instruction) {
+                        if let Ok(target) = parse_function_as_target(&node, rope, instruction) {
                             let checksum = calculate_checksum(&target);
                             map.insert(checksum, (target, node));
                         }
@@ -67,11 +67,7 @@ impl<'a> TargetMap<'a> {
             }
         }
 
-        Ok(Self {
-            map,
-            package_name,
-            source,
-        })
+        Ok(Self { map, package_name })
     }
 
     /// Get a target and its node by checksum
@@ -109,11 +105,6 @@ impl<'a> TargetMap<'a> {
         self.map.is_empty()
     }
 
-    /// Get source code
-    pub fn source(&self) -> &'a str {
-        self.source
-    }
-
     /// Get package name
     pub fn package_name(&self) -> &str {
         &self.package_name
@@ -129,46 +120,49 @@ impl<'a> TargetMap<'a> {
 }
 
 /// Extract package name from package clause node
-fn extract_package_name(node: &Node, source: &str) -> Result<String> {
+fn extract_package_name(node: &Node, rope: &Rope) -> Result<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "package_identifier" {
-            return Ok(child.utf8_text(source.as_bytes())?.to_string());
+            let text = rope
+                .byte_slice(child.start_byte()..child.end_byte())
+                .to_string();
+            return Ok(text);
         }
     }
     anyhow::bail!("Package name not found")
 }
 
 /// Parse a function/method declaration as a Target
-fn parse_function_as_target(node: &Node, source: &str, instruction: String) -> Result<Target> {
+fn parse_function_as_target(node: &Node, rope: &Rope, instruction: String) -> Result<Target> {
     // Extract function name
     let name = node
         .child_by_field_name("name")
-        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-        .unwrap_or("unknown")
-        .to_string();
+        .map(|n| rope.byte_slice(n.start_byte()..n.end_byte()).to_string())
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Extract function signature
-    let signature = extract_function_signature(node, source)?;
+    let signature = extract_function_signature(node, rope)?;
 
-    Ok(Target {
-        name,
-        instruction,
-        signature,
-    })
+    // This is legacy code - should not be used
+    // TODO: Remove TargetMap when no longer needed
+    panic!("TargetMap is deprecated - use Document::find_targets instead")
 }
 
 /// Extract the full function signature
-fn extract_function_signature(node: &Node, source: &str) -> Result<String> {
+fn extract_function_signature(node: &Node, rope: &Rope) -> Result<String> {
     // Get the text from function start to body start
     if let Some(body_node) = node.child_by_field_name("body") {
         let sig_start = node.start_byte();
         let sig_end = body_node.start_byte();
-        let signature = &source[sig_start..sig_end];
+        let signature = rope.byte_slice(sig_start..sig_end).to_string();
         Ok(signature.trim().to_string())
     } else {
         // If no body, get the entire function declaration
-        Ok(node.utf8_text(source.as_bytes())?.to_string())
+        let text = rope
+            .byte_slice(node.start_byte()..node.end_byte())
+            .to_string();
+        Ok(text)
     }
 }
 
@@ -198,8 +192,9 @@ func Multiply(x, y int) int {
 
         let mut parser = GoParser::new().unwrap();
         let tree = parser.parse(source).unwrap();
+        let rope = Rope::from(source);
 
-        let target_map = TargetMap::build(&tree, source).unwrap();
+        let target_map = TargetMap::build(&tree, &rope).unwrap();
 
         assert_eq!(target_map.len(), 2);
         assert_eq!(target_map.package_name(), "main");
@@ -231,8 +226,9 @@ func (s *Service) Process(data string) error {
 
         let mut parser = GoParser::new().unwrap();
         let tree = parser.parse(source).unwrap();
+        let rope = Rope::from(source);
 
-        let target_map = TargetMap::build(&tree, source).unwrap();
+        let target_map = TargetMap::build(&tree, &rope).unwrap();
 
         assert_eq!(target_map.len(), 1);
         assert_eq!(target_map.package_name(), "service");

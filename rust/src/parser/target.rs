@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tree_sitter::{Node, Tree, TreeCursor};
 
+use crate::editor::crdt::Snapshot;
 use crate::language::{go::Go, LanguageSupport};
 
 /// Maximum allowed gap between a mantra comment and its target function
@@ -29,6 +30,10 @@ pub struct Target {
     pub name: String,
     pub instruction: String,
     pub signature: String,
+    pub checksum: u64,
+    pub snapshot: Snapshot,
+    pub start_byte: usize,
+    pub end_byte: usize,
 }
 
 impl Target {}
@@ -247,11 +252,9 @@ fn parse_function_as_target(
     // Build signature directly from node
     let signature = extract_signature(node, source);
 
-    Ok(Target {
-        name,
-        instruction,
-        signature,
-    })
+    // This is legacy code - should not be used
+    // TODO: Remove this function when parse_file is removed
+    panic!("parse_function_as_target is deprecated - use Document::find_targets instead")
 }
 
 /// Extract signature directly from source
