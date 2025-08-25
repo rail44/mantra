@@ -20,20 +20,6 @@ impl GoParser {
         Ok(Self { parser })
     }
 
-    /// Parse Go source code
-    pub fn parse(&mut self, source: &str) -> Result<Tree> {
-        self.parser
-            .parse(source, None)
-            .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
-    }
-
-    /// Parse Go source code with optional old tree for incremental parsing
-    pub fn parse_incremental(&mut self, source: &str, old_tree: Option<&Tree>) -> Result<Tree> {
-        self.parser
-            .parse(source, old_tree)
-            .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
-    }
-
     /// Parse using a callback to read text chunks
     pub fn parse_with_callback<T, F>(
         &mut self,

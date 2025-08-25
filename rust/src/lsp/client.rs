@@ -5,8 +5,8 @@ use jsonrpsee::core::traits::ToRpcParams;
 use lsp_types::{
     ClientCapabilities, DidChangeTextDocumentParams, DocumentFormattingParams, FormattingOptions,
     GotoCapability, HoverClientCapabilities, InitializeResult, MarkupKind,
-    PublishDiagnosticsParams, TextDocumentClientCapabilities, TextDocumentIdentifier,
-    TextDocumentSyncClientCapabilities, TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
+    TextDocumentClientCapabilities, TextDocumentIdentifier, TextDocumentSyncClientCapabilities,
+    TextEdit, Uri, WorkDoneProgressParams, WorkspaceFolder,
 };
 use serde::de::Error;
 use serde::Serialize;
@@ -179,26 +179,6 @@ impl Client {
             .notification("initialized", params)
             .await?;
         Ok(())
-    }
-
-    /// Wait for diagnostics for a specific URI
-    pub async fn wait_for_diagnostics(&self, uri: &str) -> Result<PublishDiagnosticsParams> {
-        self.connection
-            .notification_handler
-            .wait_for_diagnostics(uri)
-            .await
-    }
-
-    /// Wait for diagnostics with a timeout
-    pub async fn wait_for_diagnostics_timeout(
-        &self,
-        uri: &str,
-        timeout: std::time::Duration,
-    ) -> Result<PublishDiagnosticsParams> {
-        self.connection
-            .notification_handler
-            .wait_for_diagnostics_timeout(uri, timeout)
-            .await
     }
 
     /// Shutdown the LSP server (consumes self)

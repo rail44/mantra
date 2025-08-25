@@ -1,13 +1,11 @@
-use crate::lsp::rpc::PublishDiagnosticsParams;
 use anyhow::Result;
+use lsp_types::PublishDiagnosticsParams;
 use serde_json::Value;
-use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 
 /// LSP通知ハンドラー
 pub struct NotificationHandler {
     diagnostics_tx: broadcast::Sender<PublishDiagnosticsParams>,
-    diagnostics_rx: Arc<Mutex<broadcast::Receiver<PublishDiagnosticsParams>>>,
 }
 
 impl std::fmt::Debug for NotificationHandler {
@@ -20,11 +18,8 @@ impl std::fmt::Debug for NotificationHandler {
 
 impl Default for NotificationHandler {
     fn default() -> Self {
-        let (tx, rx) = broadcast::channel(100);
-        Self {
-            diagnostics_tx: tx,
-            diagnostics_rx: Arc::new(Mutex::new(rx)),
-        }
+        let (tx, _rx) = broadcast::channel(100);
+        Self { diagnostics_tx: tx }
     }
 }
 
@@ -50,42 +45,5 @@ impl NotificationHandler {
             }
         }
         Ok(())
-    }
-
-    /// 診断情報の受信を待機
-    pub async fn wait_for_diagnostics(&self, uri: &str) -> Result<PublishDiagnosticsParams> {
-        let mut rx = self.diagnostics_rx.lock().await;
-        loop {
-            match rx.recv().await {
-                Ok(diagnostics) => {
-                    if diagnostics.uri.as_str() == uri {
-                        return Ok(diagnostics);
-                    }
-                    // 他のURIの診断は無視して待機を続ける
-                    tracing::trace!(
-                        "Skipping diagnostics for different URI: {} (waiting for: {})",
-                        diagnostics.uri.as_str(),
-                        uri
-                    );
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("Missed {} diagnostics notifications", n);
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("Failed to receive diagnostics: {}", e));
-                }
-            }
-        }
-    }
-
-    /// タイムアウト付きで診断情報を待機
-    pub async fn wait_for_diagnostics_timeout(
-        &self,
-        uri: &str,
-        timeout: std::time::Duration,
-    ) -> Result<PublishDiagnosticsParams> {
-        tokio::time::timeout(timeout, self.wait_for_diagnostics(uri))
-            .await
-            .map_err(|_| anyhow::anyhow!("Timeout waiting for diagnostics"))?
     }
 }

@@ -17,7 +17,6 @@ use crate::parser::{checksum::calculate_checksum, target::Target};
 /// Document managing a single document's state with CRDT support
 pub struct Document {
     pub uri: String,
-    pub file_path: PathBuf,
     pub editor: CrdtEditor,
     /// Set of checksums for currently pending generation tasks
     pending_generations: HashSet<u64>,
@@ -32,7 +31,6 @@ impl Document {
 
         Ok(Self {
             uri,
-            file_path,
             editor,
             pending_generations: HashSet::new(),
         })
@@ -69,12 +67,6 @@ impl Document {
 
                 "function_declaration" | "method_declaration" => {
                     if let Some(instruction) = pending_instruction.take() {
-                        // Extract function name
-                        let name = node
-                            .child_by_field_name("name")
-                            .map(|n| rope.byte_slice(n.start_byte()..n.end_byte()).to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-
                         // Extract signature
                         let signature = if let Some(body_node) = node.child_by_field_name("body") {
                             let sig_start = node.start_byte();
@@ -90,7 +82,6 @@ impl Document {
 
                         // Create the base target for checksum calculation
                         let base_target = Target {
-                            name: name.clone(),
                             instruction: instruction.clone(),
                             signature: signature.clone(),
                             checksum: 0, // Will be calculated next
@@ -146,16 +137,6 @@ impl Document {
     /// Get text content
     pub fn get_text(&self) -> String {
         self.editor.get_text()
-    }
-
-    /// Get the file URI
-    pub fn uri(&self) -> &str {
-        &self.uri
-    }
-
-    /// Get the file path
-    pub fn file_path(&self) -> &PathBuf {
-        &self.file_path
     }
 
     /// Start tracking a generation task

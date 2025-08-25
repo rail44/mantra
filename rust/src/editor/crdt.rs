@@ -10,14 +10,13 @@ use crate::parser::GoParser;
 /// Result of a deletion operation
 #[derive(Debug)]
 pub struct DeletionResult {
-    pub byte_range: StdRange<usize>,
     pub lsp_range: Range,
 }
 
 /// Result of an insertion operation
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct InsertionResult {
-    pub byte_pos: usize,
     pub lsp_pos: Position,
 }
 
@@ -89,7 +88,6 @@ impl Snapshot {
         }
 
         Some(DeletionResult {
-            byte_range,
             lsp_range: Range::new(start_pos, end_pos),
         })
     }
@@ -109,10 +107,7 @@ impl Snapshot {
 
             self.rope.insert(actual_pos, text);
 
-            Some(InsertionResult {
-                byte_pos: actual_pos,
-                lsp_pos,
-            })
+            Some(InsertionResult { lsp_pos })
         } else {
             None
         }
@@ -225,12 +220,6 @@ impl CrdtEditor {
         }
     }
 
-    /// Convert line/column to byte position
-    pub fn line_col_to_byte(&self, line: usize, col: usize) -> usize {
-        let line_start = self.snapshot.rope.byte_of_line(line);
-        line_start + col.min(self.snapshot.rope.line(line).byte_len())
-    }
-
     /// Get the current document version
     pub fn get_version(&self) -> i32 {
         self.snapshot.version
@@ -325,22 +314,6 @@ impl CrdtEditor {
         changes.reverse(); // Reverse to restore original order
         Ok(changes)
     }
-
-    /// Apply a single TextEdit from a snapshot
-    pub fn apply_text_edit(
-        &mut self,
-        edit: TextEdit,
-        mut snapshot: Snapshot,
-    ) -> Result<TextDocumentContentChangeEvent> {
-        let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
-        let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
-
-        let change =
-            self.apply_byte_edit_internal(&(start_byte..end_byte), &edit.new_text, &mut snapshot)?;
-
-        self.increment_version();
-        Ok(change)
-    }
 }
 
 #[cfg(test)]
@@ -352,58 +325,25 @@ mod tests {
     fn test_basic_operations() {
         let mut editor = CrdtEditor::new("Hello, world!").unwrap();
 
-        // Test insertion using apply_text_edit
-        let insert_edit = TextEdit {
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 7,
-                },
-            },
-            new_text: "beautiful ".to_string(),
-        };
+        // Test insertion using apply_byte_edit
         let snapshot = editor.fork();
-        editor.apply_text_edit(insert_edit, snapshot).unwrap();
+        editor
+            .apply_byte_edit(&(7..7), "beautiful ".to_string(), snapshot)
+            .unwrap();
         assert_eq!(editor.get_text(), "Hello, beautiful world!");
 
-        // Test deletion using apply_text_edit
-        let delete_edit = TextEdit {
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 17,
-                },
-            },
-            new_text: String::new(),
-        };
+        // Test deletion using apply_byte_edit
         let snapshot = editor.fork();
-        editor.apply_text_edit(delete_edit, snapshot).unwrap();
+        editor
+            .apply_byte_edit(&(7..17), String::new(), snapshot)
+            .unwrap();
         assert_eq!(editor.get_text(), "Hello, world!");
 
-        // Test replacement using apply_text_edit
-        let edit = TextEdit {
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 12,
-                },
-            },
-            new_text: "Rust".to_string(),
-        };
+        // Test replacement using apply_byte_edit
         let snapshot = editor.fork();
-        editor.apply_text_edit(edit, snapshot).unwrap();
+        editor
+            .apply_byte_edit(&(7..12), "Rust".to_string(), snapshot)
+            .unwrap();
         assert_eq!(editor.get_text(), "Hello, Rust!");
     }
 

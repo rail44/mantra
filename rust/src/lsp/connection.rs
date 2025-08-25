@@ -13,7 +13,6 @@ use crate::lsp::NotificationHandler;
 pub struct LspConnection {
     pub client: RpcClient,
     pub process: Child,
-    pub notification_handler: Arc<NotificationHandler>,
 }
 
 impl LspConnection {
@@ -48,11 +47,7 @@ impl LspConnection {
         // Build the RPC client
         let client = ClientBuilder::default().build_with_tokio(sender, receiver);
 
-        Ok(Self {
-            client,
-            process,
-            notification_handler,
-        })
+        Ok(Self { client, process })
     }
 
     /// Shutdown the LSP process

@@ -48,19 +48,11 @@ impl MantraError {
         MantraError::Parse(crate::parser::error::ParseError::ParseFailed)
     }
 
-    pub fn lsp(msg: impl Into<String>) -> Self {
-        MantraError::Lsp(crate::lsp::error::LspError::InvalidResponse(msg.into()))
-    }
-
     pub fn llm(msg: impl Into<String>) -> Self {
         MantraError::Llm(crate::llm::error::LlmError::InvalidResponse(msg.into()))
     }
 
     pub fn tree_sitter(_msg: impl Into<String>) -> Self {
         MantraError::Parse(crate::parser::error::ParseError::ParseFailed)
-    }
-
-    pub fn not_found(msg: impl Into<String>) -> Self {
-        MantraError::Config(crate::config::error::ConfigError::NotFound(msg.into()))
     }
 }

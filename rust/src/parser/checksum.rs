@@ -23,7 +23,6 @@ mod tests {
     #[test]
     fn test_checksum_changes_with_signature() {
         let mut target = Target {
-            name: "TestFunc".to_string(),
             instruction: "Test instruction".to_string(),
             signature: "func TestFunc(id string)".to_string(),
             checksum: 0,
@@ -50,7 +49,6 @@ mod tests {
     #[test]
     fn test_checksum_changes_with_instruction() {
         let mut target = Target {
-            name: "TestFunc".to_string(),
             instruction: "Original instruction".to_string(),
             signature: "func TestFunc()".to_string(),
             checksum: 0,
@@ -77,7 +75,6 @@ mod tests {
     #[test]
     fn test_checksum_stable() {
         let target = Target {
-            name: "TestFunc".to_string(),
             instruction: "Test instruction".to_string(),
             signature: "func TestFunc()".to_string(),
             checksum: 0,

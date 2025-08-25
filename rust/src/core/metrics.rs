@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::{debug, info, Level};
 
 /// Performance timer for measuring operation durations
@@ -16,20 +16,6 @@ impl Timer {
             start: Instant::now(),
             log_level: Level::INFO,
         }
-    }
-
-    /// Start a new timer with debug level logging
-    pub fn start_debug(operation: impl Into<String>) -> Self {
-        Self {
-            operation: operation.into(),
-            start: Instant::now(),
-            log_level: Level::DEBUG,
-        }
-    }
-
-    /// Get elapsed time without stopping the timer
-    pub fn elapsed(&self) -> Duration {
-        self.start.elapsed()
     }
 
     /// Stop the timer and log the duration
@@ -106,17 +92,6 @@ macro_rules! time_operation {
     }};
 }
 
-/// Macro for timing a block of code with debug level
-#[macro_export]
-macro_rules! time_debug {
-    ($operation:expr, $block:block) => {{
-        let _timer = $crate::core::metrics::Timer::start_debug($operation);
-        let result = $block;
-        _timer.stop();
-        result
-    }};
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +102,6 @@ mod tests {
     fn test_timer_basic() {
         let timer = Timer::start("test_operation");
         thread::sleep(Duration::from_millis(10));
-        assert!(timer.elapsed().as_millis() >= 10);
         timer.stop();
     }
 
@@ -136,13 +110,6 @@ mod tests {
         let timer = Timer::start("test_operation");
         thread::sleep(Duration::from_millis(10));
         timer.stop_with_message("Test completed successfully");
-    }
-
-    #[test]
-    fn test_timer_debug_level() {
-        let timer = Timer::start_debug("debug_operation");
-        thread::sleep(Duration::from_millis(10));
-        timer.stop();
     }
 
     #[test]

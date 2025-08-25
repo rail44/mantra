@@ -30,21 +30,7 @@ pub struct DidOpenTextDocumentParams {
     pub text_document: TextDocumentItem,
 }
 
-// Use lsp-types version
-pub type InitializeResult = lsp_types::InitializeResult;
-
-// Use lsp-types version
-pub type ServerCapabilities = lsp_types::ServerCapabilities;
-pub type ServerInfo = lsp_types::ServerInfo;
-
-// Use lsp-types version
-pub type Hover = lsp_types::Hover;
-pub type MarkupContent = lsp_types::MarkupContent;
-
-// Use lsp-types versions
-pub type Diagnostic = lsp_types::Diagnostic;
-pub type DiagnosticRelatedInformation = lsp_types::DiagnosticRelatedInformation;
-pub type PublishDiagnosticsParams = lsp_types::PublishDiagnosticsParams;
+// Use lsp-types directly in function signatures
 
 /// Define LSP RPC interface using proc macro
 /// This generates type-safe client methods automatically
@@ -58,7 +44,7 @@ pub trait LspRpc {
         root_uri: Option<String>,
         capabilities: Value,
         workspace_folders: Option<Vec<Value>>,
-    ) -> Result<InitializeResult, jsonrpsee::core::Error>;
+    ) -> Result<lsp_types::InitializeResult, jsonrpsee::core::Error>;
 
     /// Send initialized notification (no return = notification in LSP spec)
     #[method(name = "initialized", param_kind = map)]
@@ -70,7 +56,7 @@ pub trait LspRpc {
         &self,
         text_document: TextDocumentIdentifier,
         position: Position,
-    ) -> Result<Option<Hover>, jsonrpsee::core::Error>;
+    ) -> Result<Option<lsp_types::Hover>, jsonrpsee::core::Error>;
 
     /// Open a text document notification (no return = notification in LSP spec)
     #[method(name = "textDocument/didOpen", param_kind = map)]
