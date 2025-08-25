@@ -51,6 +51,14 @@ mod tests {
             name: "Add".to_string(),
             signature: "func Add(a, b int) int".to_string(),
             instruction: "Add two numbers and return the result".to_string(),
+            checksum: 0,
+            snapshot: crate::editor::crdt::Snapshot {
+                replica: cola::Replica::new(1, 0),
+                rope: crop::Rope::new(),
+                version: 0,
+            },
+            start_byte: 0,
+            end_byte: 0,
         };
 
         let prompt = build_prompt(&target);

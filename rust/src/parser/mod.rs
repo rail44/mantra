@@ -1,10 +1,8 @@
 pub mod checksum;
 pub mod error;
 pub mod target;
-pub mod target_map;
 
 use crate::core::{MantraError, Result};
-use std::path::Path;
 use tree_sitter::{Parser, Tree};
 
 /// Go language parser using tree-sitter
@@ -49,24 +47,6 @@ impl GoParser {
         self.parser
             .parse_with_options(&mut callback, old_tree, None)
             .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
-    }
-
-    /// Parse a Go file and extract targets
-    pub fn parse_file(&mut self, path: &Path) -> Result<target::FileInfo> {
-        let timer =
-            crate::core::metrics::Timer::start_debug(format!("parse_file:{}", path.display()));
-
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            MantraError::parse(format!("Failed to read file {}: {}", path.display(), e))
-        })?;
-
-        let tree = self.parse(&source)?;
-
-        // Extract file information
-        let file_info = target::extract_file_info(path, &source, tree)?;
-
-        timer.stop_with_message(&format!("Found {} targets", file_info.targets.len()));
-        Ok(file_info)
     }
 }
 
@@ -121,46 +101,5 @@ func main() {
         let tree2 = parser.parse_incremental(source2, Some(&tree1)).unwrap();
 
         assert!(!tree2.root_node().has_error());
-    }
-
-    #[test]
-    fn test_parse_file() {
-        let mut parser = GoParser::new().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.go");
-
-        let source = r#"
-package main
-
-import "fmt"
-
-// mantra: Say hello
-func SayHello(name string) {
-    panic("not implemented")
-}
-
-func helper() {
-    // This function has no mantra comment
-}
-"#;
-
-        fs::write(&file_path, source).unwrap();
-
-        let file_info = parser.parse_file(&file_path).unwrap();
-
-        assert_eq!(file_info.package_name, "main");
-        assert_eq!(file_info.imports.len(), 1);
-        assert_eq!(file_info.imports[0].path, "fmt");
-        assert_eq!(file_info.targets.len(), 1);
-        assert_eq!(file_info.targets[0].name, "SayHello");
-        assert_eq!(file_info.targets[0].instruction, "Say hello");
-    }
-
-    #[test]
-    fn test_parse_file_not_found() {
-        let mut parser = GoParser::new().unwrap();
-        let result = parser.parse_file(Path::new("/nonexistent/file.go"));
-        assert!(result.is_err());
-        // Just verify it's an error - the specific message may vary
     }
 }

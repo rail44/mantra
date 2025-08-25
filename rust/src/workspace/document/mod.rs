@@ -1,7 +1,6 @@
 use anyhow::Result;
 use lsp_types::{
-    DidChangeTextDocumentParams, Range, TextDocumentContentChangeEvent,
-    VersionedTextDocumentIdentifier,
+    DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
 };
 use std::collections::HashSet;
 use std::fs;

@@ -26,6 +26,14 @@ mod tests {
             name: "TestFunc".to_string(),
             instruction: "Test instruction".to_string(),
             signature: "func TestFunc(id string)".to_string(),
+            checksum: 0,
+            snapshot: crate::editor::crdt::Snapshot {
+                replica: cola::Replica::new(1, 0),
+                rope: crop::Rope::new(),
+                version: 0,
+            },
+            start_byte: 0,
+            end_byte: 0,
         };
 
         let checksum1 = calculate_checksum(&target);
@@ -46,6 +54,14 @@ mod tests {
             name: "TestFunc".to_string(),
             instruction: "Original instruction".to_string(),
             signature: "func TestFunc()".to_string(),
+            checksum: 0,
+            snapshot: crate::editor::crdt::Snapshot {
+                replica: cola::Replica::new(1, 0),
+                rope: crop::Rope::new(),
+                version: 0,
+            },
+            start_byte: 0,
+            end_byte: 0,
         };
 
         let checksum1 = calculate_checksum(&target);
@@ -66,6 +82,14 @@ mod tests {
             name: "TestFunc".to_string(),
             instruction: "Test instruction".to_string(),
             signature: "func TestFunc()".to_string(),
+            checksum: 0,
+            snapshot: crate::editor::crdt::Snapshot {
+                replica: cola::Replica::new(1, 0),
+                rope: crop::Rope::new(),
+                version: 0,
+            },
+            start_byte: 0,
+            end_byte: 0,
         };
 
         let checksum1 = calculate_checksum(&target);
