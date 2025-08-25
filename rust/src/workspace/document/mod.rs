@@ -147,9 +147,6 @@ impl Document {
         Ok(vec![change])
     }
 
-    // NOTE: apply_edit is deprecated - use apply_generation instead
-    // It's kept for backward compatibility but should be removed in the future
-
     /// Get text content
     pub fn get_text(&self) -> String {
         self.editor.get_text()
