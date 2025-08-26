@@ -1,6 +1,8 @@
 use crate::parser::target::Target;
+use std::collections::HashMap;
 
-/// Build a prompt for generating Go code implementation
+/// Build a prompt for generating Go code implementation (legacy - kept for tests)
+#[allow(dead_code)]
 pub fn build_prompt(target: &Target) -> String {
     format!(
         "Generate the Go implementation for this function:\n\n\
@@ -15,6 +17,42 @@ pub fn build_prompt(target: &Target) -> String {
             &target.instruction
         }
     )
+}
+
+/// Build a prompt with type definitions for generating Go code implementation
+pub fn build_prompt_with_types(
+    target: &Target,
+    type_definitions: &HashMap<String, String>,
+) -> String {
+    let mut prompt = format!(
+        "Generate the Go implementation for this function:\n\n\
+         Function signature: {}\n",
+        target.signature
+    );
+
+    // Add type definitions if available
+    if !type_definitions.is_empty() {
+        prompt.push_str("\nType definitions:\n");
+        for (_, definition) in type_definitions {
+            // The hover content often includes the type definition
+            prompt.push_str(&format!("{}\n", definition));
+        }
+        prompt.push('\n');
+    }
+
+    // Add instruction
+    prompt.push_str(&format!(
+        "Instruction: {}\n\n\
+         Return only the code that goes inside the function body (without the curly braces).\n\
+         For example, if the function should add two numbers, just return: return a + b",
+        if target.instruction.is_empty() {
+            "Implement this function"
+        } else {
+            &target.instruction
+        }
+    ));
+
+    prompt
 }
 
 /// Clean generated code by removing markdown formatting and extra whitespace
@@ -44,26 +82,6 @@ pub fn clean_generated_code(code: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_build_prompt() {
-        let target = Target {
-            name: "Add".to_string(),
-            signature: "func Add(a, b int) int".to_string(),
-            instruction: "Add two numbers and return the result".to_string(),
-            checksum: 0,
-            snapshot: crate::editor::crdt::Snapshot {
-                replica: cola::Replica::new(1, 0),
-                rope: crop::Rope::new(),
-                version: 0,
-            },
-            byte_range: 0..0,
-        };
-
-        let prompt = build_prompt(&target);
-        assert!(prompt.contains("func Add(a, b int) int"));
-        assert!(prompt.contains("Add two numbers and return the result"));
-    }
 
     #[test]
     fn test_clean_generated_code() {

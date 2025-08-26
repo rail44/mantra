@@ -257,4 +257,36 @@ impl Client {
             .await?;
         Ok(())
     }
+
+    /// Get hover information at a position
+    pub async fn hover(
+        &self,
+        text_document: TextDocumentIdentifier,
+        position: lsp_types::Position,
+    ) -> Result<Option<lsp_types::Hover>> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct HoverParams {
+            text_document: TextDocumentIdentifier,
+            position: lsp_types::Position,
+        }
+
+        let params = HoverParams {
+            text_document,
+            position,
+        };
+
+        let result: Value = self
+            .connection
+            .client
+            .request("textDocument/hover", params.to_object_params()?)
+            .await?;
+
+        // Handle null response as None
+        if result.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(serde_json::from_value(result)?))
+        }
+    }
 }

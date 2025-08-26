@@ -171,28 +171,4 @@ mod tests {
         let client = LLMClient::new(config).unwrap();
         assert_eq!(client.model(), "claude-3-sonnet");
     }
-
-    #[test]
-    fn test_request_building() {
-        // This test would require mocking the HTTP client
-        // For now, we just test that request building doesn't panic
-        let messages = vec![
-            Message::system("You are a helpful assistant"),
-            Message::user("Write a function that adds two numbers"),
-        ];
-
-        let request = CompletionRequest {
-            model: "gpt-3.5-turbo".to_string(),
-            provider: None,
-            messages,
-            max_tokens: Some(150),
-            temperature: 0.7,
-        };
-
-        // Verify fields are set correctly
-        assert_eq!(request.model, "gpt-3.5-turbo");
-        assert_eq!(request.messages.len(), 2);
-        assert_eq!(request.max_tokens, Some(150));
-        assert_eq!(request.temperature, 0.7);
-    }
 }

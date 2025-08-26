@@ -80,6 +80,9 @@ impl Document {
                                 .to_string()
                         };
 
+                        // Collect type references
+                        let type_references = collect_type_references(&node, &tree.root_node());
+
                         // Create the base target for checksum calculation
                         let base_target = Target {
                             instruction: instruction.clone(),
@@ -87,6 +90,7 @@ impl Document {
                             checksum: 0, // Will be calculated next
                             snapshot: snapshot.clone(),
                             byte_range: node.start_byte()..node.end_byte(),
+                            type_references,
                         };
 
                         // Calculate checksum based on name, instruction, and signature
@@ -196,10 +200,11 @@ impl DocumentService {
         let mut set: JoinSet<Result<()>> = JoinSet::new();
         for target in targets {
             let llm_client = self.llm_client.clone();
+            let document_service = self.clone();
 
             let clone = self.clone();
             set.spawn(Box::pin(async move {
-                let new_body = spawn_generation_task(&target, llm_client).await?;
+                let new_body = spawn_generation_task(&target, llm_client, document_service).await?;
                 clone.apply_generation(target, new_body).await?;
                 Ok(())
             }));
@@ -385,5 +390,137 @@ impl DocumentService {
         }
 
         Ok(())
+    }
+
+    /// Get hover information for a type at a given AST path
+    pub async fn get_hover_for_path(
+        &self,
+        ast_path: &[crate::parser::target::PathSegment],
+    ) -> Result<Option<String>> {
+        use crate::parser::ast_utils::find_node_by_path;
+
+        tracing::trace!("Getting hover for path: {:?}", ast_path);
+
+        // Get current document state
+        let (tree, uri, snapshot) = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+
+            let tree = doc
+                .editor
+                .tree()
+                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
+                .clone();
+
+            let uri = doc.uri.clone();
+            let snapshot = doc.editor.fork();
+
+            (tree, uri, snapshot)
+        };
+
+        // Find node by path
+        if let Some(node) = find_node_by_path(&tree.root_node(), ast_path) {
+            // Convert byte position to LSP position
+            let position = snapshot.byte_to_lsp_position(node.start_byte());
+
+            // Request hover from LSP
+            let text_document = lsp_types::TextDocumentIdentifier { uri: uri.parse()? };
+
+            if let Some(hover) = self.lsp_client.hover(text_document, position).await? {
+                // Extract hover content
+                return Ok(Some(extract_hover_content(hover)));
+            }
+        }
+
+        Ok(None)
+    }
+}
+
+/// Collect type references from a function/method declaration
+fn collect_type_references(
+    func_node: &tree_sitter::Node,
+    root_node: &tree_sitter::Node,
+) -> Vec<Vec<crate::parser::target::PathSegment>> {
+    let mut type_references = Vec::new();
+
+    // For method declarations, collect receiver type
+    if func_node.kind() == "method_declaration" {
+        if let Some(receiver_list) = func_node.child_by_field_name("receiver") {
+            collect_types_from_node(&receiver_list, root_node, &mut type_references);
+        }
+    }
+
+    // Collect parameter types
+    if let Some(params) = func_node.child_by_field_name("parameters") {
+        collect_types_from_node(&params, root_node, &mut type_references);
+    }
+
+    // Collect return types
+    if let Some(result) = func_node.child_by_field_name("result") {
+        collect_types_from_node(&result, root_node, &mut type_references);
+    }
+
+    type_references
+}
+
+/// Recursively collect type_identifier nodes
+fn collect_types_from_node(
+    node: &tree_sitter::Node,
+    root_node: &tree_sitter::Node,
+    type_references: &mut Vec<Vec<crate::parser::target::PathSegment>>,
+) {
+    use crate::parser::ast_utils::build_path_to_node;
+
+    match node.kind() {
+        "type_identifier" => {
+            // Build path from root to this type node
+            let path = build_path_to_node(node, root_node);
+            type_references.push(path);
+        }
+        "qualified_type" => {
+            // For qualified types like time.Duration, find the last type_identifier
+            let mut cursor = node.walk();
+            let mut last_type_identifier = None;
+            for child in node.children(&mut cursor) {
+                if child.kind() == "type_identifier" {
+                    last_type_identifier = Some(child);
+                }
+            }
+
+            if let Some(type_node) = last_type_identifier {
+                let path = build_path_to_node(&type_node, root_node);
+                type_references.push(path);
+            }
+        }
+        _ => {
+            // Recursively check children for other node types
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_types_from_node(&child, root_node, type_references);
+            }
+        }
+    }
+}
+
+/// Extract hover content as a string
+fn extract_hover_content(hover: lsp_types::Hover) -> String {
+    use lsp_types::{HoverContents, MarkedString};
+
+    match hover.contents {
+        HoverContents::Scalar(scalar) => match scalar {
+            MarkedString::String(s) => s,
+            MarkedString::LanguageString(ls) => ls.value,
+        },
+        HoverContents::Array(array) => array
+            .into_iter()
+            .filter_map(|ms| match ms {
+                MarkedString::String(s) => Some(s),
+                MarkedString::LanguageString(ls) => Some(ls.value),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        HoverContents::Markup(markup) => markup.value,
     }
 }

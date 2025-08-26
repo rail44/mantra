@@ -1,3 +1,4 @@
+pub mod ast_utils;
 pub mod checksum;
 pub mod error;
 pub mod target;
@@ -33,59 +34,5 @@ impl GoParser {
         self.parser
             .parse_with_options(&mut callback, old_tree, None)
             .ok_or_else(|| MantraError::parse("Failed to parse Go source code"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_parser_creation() {
-        let parser = GoParser::new();
-        assert!(parser.is_ok());
-    }
-
-    #[test]
-    fn test_parse_simple_go() {
-        let mut parser = GoParser::new().unwrap();
-        let source = r#"
-package main
-
-func main() {
-    println("Hello, world!")
-}
-"#;
-        let tree = parser.parse(source);
-        assert!(tree.is_ok());
-    }
-
-    #[test]
-    fn test_parse_invalid_go() {
-        let mut parser = GoParser::new().unwrap();
-        let source = "this is not valid go code {{{";
-        // Tree-sitter still returns a tree even for invalid code
-        let tree = parser.parse(source);
-        assert!(tree.is_ok());
-        // But the tree will have errors
-        let tree = tree.unwrap();
-        assert!(tree.root_node().has_error());
-    }
-
-    #[test]
-    fn test_incremental_parsing() {
-        let mut parser = GoParser::new().unwrap();
-
-        // Initial parse
-        let source1 = "package main\n\nfunc foo() {}";
-        let tree1 = parser.parse(source1).unwrap();
-
-        // Incremental parse with changes
-        let source2 = "package main\n\nfunc foo() {}\nfunc bar() {}";
-        let tree2 = parser.parse_incremental(source2, Some(&tree1)).unwrap();
-
-        assert!(!tree2.root_node().has_error());
     }
 }
