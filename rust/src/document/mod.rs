@@ -515,9 +515,9 @@ fn extract_hover_content(hover: lsp_types::Hover) -> String {
         },
         HoverContents::Array(array) => array
             .into_iter()
-            .filter_map(|ms| match ms {
-                MarkedString::String(s) => Some(s),
-                MarkedString::LanguageString(ls) => Some(ls.value),
+            .map(|ms| match ms {
+                MarkedString::String(s) => s,
+                MarkedString::LanguageString(ls) => ls.value,
             })
             .collect::<Vec<_>>()
             .join("\n"),

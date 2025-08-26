@@ -95,7 +95,6 @@ impl LLMClient {
 mod tests {
     use super::*;
     use crate::config::OpenRouterConfig;
-    use crate::llm::Message;
 
     #[test]
     fn test_client_creation() {

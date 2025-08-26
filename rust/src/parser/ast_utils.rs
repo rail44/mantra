@@ -62,13 +62,10 @@ fn find_nth_child_of_kind<'a>(
 /// Find the first child node of a specific kind
 fn find_first_child_of_kind<'a>(parent: &Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = parent.walk();
-
-    for child in parent.children(&mut cursor) {
-        if child.kind() == kind {
-            return Some(child);
-        }
-    }
-    None
+    let result = parent
+        .children(&mut cursor)
+        .find(|child| child.kind() == kind);
+    result
 }
 
 /// Build a path from root to a given node

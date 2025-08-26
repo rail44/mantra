@@ -1,24 +1,6 @@
 use crate::parser::target::Target;
 use std::collections::HashMap;
 
-/// Build a prompt for generating Go code implementation (legacy - kept for tests)
-#[allow(dead_code)]
-pub fn build_prompt(target: &Target) -> String {
-    format!(
-        "Generate the Go implementation for this function:\n\n\
-         Function signature: {}\n\
-         Instruction: {}\n\n\
-         Return only the code that goes inside the function body (without the curly braces).\n\
-         For example, if the function should add two numbers, just return: return a + b",
-        target.signature,
-        if target.instruction.is_empty() {
-            "Implement this function"
-        } else {
-            &target.instruction
-        }
-    )
-}
-
 /// Build a prompt with type definitions for generating Go code implementation
 pub fn build_prompt_with_types(
     target: &Target,
@@ -33,7 +15,7 @@ pub fn build_prompt_with_types(
     // Add type definitions if available
     if !type_definitions.is_empty() {
         prompt.push_str("\nType definitions:\n");
-        for (_, definition) in type_definitions {
+        for definition in type_definitions.values() {
             // The hover content often includes the type definition
             prompt.push_str(&format!("{}\n", definition));
         }

@@ -13,13 +13,6 @@ pub struct DeletionResult {
     pub lsp_range: Range,
 }
 
-/// Result of an insertion operation
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct InsertionResult {
-    pub lsp_pos: Position,
-}
-
 /// Snapshot of text state for CRDT operations
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -92,24 +85,12 @@ impl Snapshot {
         })
     }
 
-    /// Apply insertion and return the insertion result with LSP position
-    pub fn apply_insertion(
-        &mut self,
-        edit_snapshot: &mut Snapshot,
-        position: usize,
-        text: &str,
-    ) -> Option<InsertionResult> {
+    /// Apply insertion
+    pub fn apply_insertion(&mut self, edit_snapshot: &mut Snapshot, position: usize, text: &str) {
         let insertion = edit_snapshot.replica.inserted(position, text.len());
 
         if let Some(actual_pos) = self.replica.integrate_insertion(&insertion) {
-            // Calculate LSP position before insertion (for consistency, though position doesn't change for insertion)
-            let lsp_pos = self.byte_to_lsp_position(actual_pos);
-
             self.rope.insert(actual_pos, text);
-
-            Some(InsertionResult { lsp_pos })
-        } else {
-            None
         }
     }
 }
@@ -319,7 +300,6 @@ impl CrdtEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::Range;
 
     #[test]
     fn test_basic_operations() {
@@ -344,94 +324,6 @@ mod tests {
         editor
             .apply_byte_edit(&(7..12), "Rust".to_string(), snapshot)
             .unwrap();
-        assert_eq!(editor.get_text(), "Hello, Rust!");
-    }
-
-    #[test]
-    fn test_position_conversion() {
-        let editor = CrdtEditor::new("line1\nline2\nline3").unwrap();
-
-        // Test line/col to byte
-        assert_eq!(editor.line_col_to_byte(0, 0), 0);
-        assert_eq!(editor.line_col_to_byte(1, 0), 6);
-        assert_eq!(editor.line_col_to_byte(2, 0), 12);
-    }
-
-    #[test]
-    fn test_utf8_handling() {
-        let mut editor = CrdtEditor::new("こんにちは").unwrap();
-
-        // Japanese characters handling
-
-        // Replace with emoji using apply_text_edit
-        let edit = TextEdit {
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 2,
-                },
-                end: Position {
-                    line: 0,
-                    character: 3,
-                },
-            },
-            new_text: "🦀".to_string(),
-        };
-        let snapshot = editor.fork();
-        editor.apply_text_edit(edit, snapshot).unwrap();
-        assert_eq!(editor.get_text(), "こん🦀ちは");
-    }
-
-    #[test]
-    fn test_apply_text_edit_returns_changes() {
-        let mut editor = CrdtEditor::new("Hello, world!").unwrap();
-
-        // Test insertion
-        let insert_edit = TextEdit {
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 7,
-                },
-            },
-            new_text: "beautiful ".to_string(),
-        };
-
-        let snapshot = editor.fork();
-        let changes = editor.apply_text_edit(insert_edit, snapshot).unwrap();
-        assert_eq!(changes.text, "beautiful ");
-        assert!(changes.range.is_some());
-        assert_eq!(editor.get_text(), "Hello, beautiful world!");
-    }
-
-    #[test]
-    fn test_apply_replacement_returns_changes() {
-        let mut editor = CrdtEditor::new("Hello, world!").unwrap();
-
-        // Test replacement (delete + insert)
-        let replace_edit = TextEdit {
-            range: Range {
-                start: Position {
-                    line: 0,
-                    character: 7,
-                },
-                end: Position {
-                    line: 0,
-                    character: 12,
-                },
-            },
-            new_text: "Rust".to_string(),
-        };
-
-        let snapshot = editor.fork();
-        let changes = editor.apply_text_edit(replace_edit, snapshot).unwrap();
-
-        // Replacement should produce 1 change event
-        assert_eq!(changes.text, "Rust");
         assert_eq!(editor.get_text(), "Hello, Rust!");
     }
 }

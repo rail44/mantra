@@ -196,15 +196,14 @@ mod tests {
         )?;
 
         // Should find config in same directory
-        let found = find_config_file(temp_dir.path())
-            .ok_or_else(|| MantraError::not_found("Config file not found"))?;
+        let found = find_config_file(temp_dir.path()).expect("Config file should be found");
         assert_eq!(found.canonicalize()?, config_path.canonicalize()?);
 
         // Should find config from subdirectory
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir)?;
-        let found = find_config_file(&sub_dir)
-            .ok_or_else(|| MantraError::not_found("Config file not found"))?;
+        let found =
+            find_config_file(&sub_dir).expect("Config file should be found from subdirectory");
         assert_eq!(found.canonicalize()?, config_path.canonicalize()?);
 
         Ok(())
