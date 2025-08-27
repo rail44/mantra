@@ -103,6 +103,53 @@ impl Workspace {
         Ok(result)
     }
 
+    /// Open a document by URI, reusing existing if already open
+    pub async fn open_document(&mut self, uri: &str) -> Result<&mut DocumentService> {
+        // Check if document already exists
+        if self.documents.contains_key(uri) {
+            return Ok(self.documents.get_mut(uri).unwrap());
+        }
+
+        // Parse URI to get file path
+        let parsed_uri: lsp_types::Uri = uri.parse()?;
+
+        // Extract path from file:// URI
+        let path_str = parsed_uri
+            .as_str()
+            .strip_prefix("file://")
+            .ok_or_else(|| anyhow::anyhow!("URI must be a file:// URI: {}", uri))?;
+
+        let path = PathBuf::from(path_str);
+
+        // Validate file exists
+        if !path.exists() {
+            return Err(anyhow::anyhow!("File does not exist: {}", path.display()));
+        }
+
+        // Read file content
+        let source = tokio::fs::read_to_string(&path).await?;
+
+        // Open document in LSP
+        self.lsp_client
+            .did_open(lsp_types::TextDocumentItem {
+                uri: parsed_uri,
+                language_id: "go".to_string(),
+                version: 1,
+                text: source,
+            })
+            .await?;
+
+        // Create document service
+        let d = Document::new(path, uri.to_string())?;
+        let document = DocumentService::new(d, self.lsp_client.clone(), self.llm_client.clone());
+
+        // Store the document
+        self.documents.insert(uri.to_string(), document);
+
+        // Return mutable reference
+        Ok(self.documents.get_mut(uri).unwrap())
+    }
+
     /// Shutdown the workspace
     pub async fn shutdown(self) -> Result<()> {
         info!("Shutting down Workspace");
