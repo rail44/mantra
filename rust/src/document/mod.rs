@@ -322,6 +322,68 @@ impl DocumentService {
         Ok(())
     }
 
+    /// Get content at a specific range (currently returns whole lines)
+    pub fn get_content_at_range(&self, range: &lsp_types::Range) -> Result<String> {
+        let doc = self
+            .document
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+
+        let rope = doc.editor.rope();
+
+        // TODO: Handle exact character positions with UTF-16
+        // For MVP, get the whole line(s) covered by the range
+        let start_line = range.start.line as usize;
+        let end_line = range.end.line as usize;
+
+        let start_byte = rope.byte_of_line(start_line);
+        let end_byte = if end_line + 1 < rope.line_len() {
+            rope.byte_of_line(end_line + 1)
+        } else {
+            rope.byte_len()
+        };
+
+        Ok(rope.byte_slice(start_byte..end_byte).to_string())
+    }
+
+    /// Get definition location for a node at the given AST path
+    pub async fn get_definition_at_path(
+        &self,
+        ast_path: &[crate::parser::target::PathSegment],
+    ) -> Result<Option<lsp_types::GotoDefinitionResponse>> {
+        use crate::parser::ast_utils::find_node_by_path;
+
+        // Get tree and snapshot
+        let (tree, snapshot, uri) = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+
+            let tree = doc
+                .editor
+                .tree()
+                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
+                .clone();
+
+            let snapshot = doc.editor.fork();
+            let uri = doc.uri.clone();
+
+            (tree, snapshot, uri)
+        };
+
+        // Find node by path
+        let node = find_node_by_path(&tree.root_node(), ast_path)
+            .ok_or_else(|| anyhow::anyhow!("Node not found at path"))?;
+
+        // Convert byte position to LSP position
+        let position = snapshot.byte_to_lsp_position(node.start_byte());
+
+        // Request definition from LSP
+        let text_document = lsp_types::TextDocumentIdentifier { uri: uri.parse()? };
+        self.lsp_client.definition(text_document, position).await
+    }
+
     /// Format document using LSP
     async fn format_document(&self) -> Result<()> {
         if !self.lsp_client.supports_document_formatting().await {

@@ -9,6 +9,7 @@ mod core;
 mod document;
 mod editor;
 mod generation;
+mod inspector;
 mod language;
 mod llm;
 mod lsp;
