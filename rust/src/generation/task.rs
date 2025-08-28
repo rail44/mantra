@@ -63,7 +63,10 @@ async fn generate_for_target(
     tracing::debug!("Generated prompt:\n{}", prompt);
 
     // Generate using LLM with tool support
-    let tools = vec![crate::llm::create_dummy_tool()];
+    let tools = vec![
+        crate::llm::create_dummy_tool(),
+        crate::llm::create_inspect_tool(),
+    ];
 
     // Handle conversation with tool calls
     let mut messages = vec![Message::user(prompt)];
@@ -99,7 +102,7 @@ async fn generate_for_target(
 
                 // Execute each tool call and add results
                 for tool_call in tool_calls {
-                    match crate::llm::execute_tool_call(tool_call) {
+                    match crate::llm::execute_tool_call(tool_call).await {
                         Ok(result) => {
                             tracing::debug!(
                                 "Tool call executed: {} -> {}",
