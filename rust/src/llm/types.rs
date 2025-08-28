@@ -1,12 +1,14 @@
+use crate::llm::tools::{Tool, ToolCall};
 use serde::{Deserialize, Serialize};
 
 /// Role in the message
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
     User,
     Assistant,
+    Tool,
 }
 
 /// Message in the conversation
@@ -14,6 +16,10 @@ pub enum Role {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
@@ -21,6 +27,26 @@ impl Message {
         Self {
             role: Role::User,
             content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 }
@@ -42,6 +68,8 @@ pub struct CompletionRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
 }
 
 /// Response from completion API - only fields we actually use

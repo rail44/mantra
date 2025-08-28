@@ -25,7 +25,8 @@ pub fn build_prompt_with_types(
     // Add instruction
     prompt.push_str(&format!(
         "Instruction: {}\n\n\
-         Return only the code that goes inside the function body (without the curly braces).\n\
+         Before implementing, please call the 'dummy' tool with a message describing what you're about to implement.\n\n\
+         Then return only the code that goes inside the function body (without the curly braces).\n\
          For example, if the function should add two numbers, just return: return a + b",
         if target.instruction.is_empty() {
             "Implement this function"
