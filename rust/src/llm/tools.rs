@@ -65,31 +65,10 @@ pub fn create_inspect_tool() -> Tool {
     }
 }
 
-/// Create a dummy no-op tool for testing
-pub fn create_dummy_tool() -> Tool {
-    Tool {
-        tool_type: "function".to_string(),
-        function: ToolFunction {
-            name: "dummy".to_string(),
-            description: "A dummy tool that does nothing, for testing tool calls".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "Any message to echo back"
-                    }
-                },
-                "required": []
-            }),
-        },
-    }
-}
 
 /// Execute tool call (dispatcher)
 pub async fn execute_tool_call(tool_call: &ToolCall) -> anyhow::Result<ToolCallResult> {
     match tool_call.function.name.as_str() {
-        "dummy" => execute_dummy_tool(tool_call),
         "inspect" => execute_inspect_tool(tool_call).await,
         _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_call.function.name)),
     }
@@ -126,17 +105,3 @@ async fn execute_inspect_tool(tool_call: &ToolCall) -> anyhow::Result<ToolCallRe
     })
 }
 
-/// Execute dummy tool
-fn execute_dummy_tool(tool_call: &ToolCall) -> anyhow::Result<ToolCallResult> {
-    let args: Value = serde_json::from_str(&tool_call.function.arguments)?;
-    let message = args
-        .get("message")
-        .and_then(|m| m.as_str())
-        .unwrap_or("No message provided");
-
-    Ok(ToolCallResult {
-        tool_call_id: tool_call.id.clone(),
-        role: "tool".to_string(),
-        content: format!("Dummy tool executed with message: {}", message),
-    })
-}

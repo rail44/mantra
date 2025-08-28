@@ -8,6 +8,6 @@ mod response_test;
 
 pub use client::LLMClient;
 pub use tools::{
-    create_dummy_tool, create_inspect_tool, execute_tool_call, Tool, ToolCall, ToolCallResult,
+    create_inspect_tool, execute_tool_call, Tool, ToolCall, ToolCallResult,
 };
 pub use types::{CompletionRequest, Message, ProviderSpec};
