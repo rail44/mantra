@@ -1,7 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
-use crate::document::DocumentService;
 use crate::inspector::SymbolInspector;
 use crate::llm::{CompletionRequest, LLMClient, Message};
 use crate::parser::target::Target;
@@ -11,14 +10,13 @@ use crate::workspace::WorkspaceService;
 pub async fn spawn_generation_task(
     target: &Target,
     llm_client: LLMClient,
-    document_service: DocumentService,
     workspace: &WorkspaceService,
 ) -> Result<String> {
     tracing::debug!(
         "Starting generation task for checksum {:x}",
         target.checksum
     );
-    let new_body = generate_for_target(&llm_client, target, &document_service, workspace).await?;
+    let new_body = generate_for_target(&llm_client, target, workspace).await?;
     tracing::debug!(
         "Completed generation task for checksum {:x}",
         target.checksum
@@ -30,7 +28,6 @@ pub async fn spawn_generation_task(
 async fn generate_for_target(
     llm_client: &LLMClient,
     target: &Target,
-    document_service: &DocumentService,
     workspace: &WorkspaceService,
 ) -> Result<String> {
     // Collect detailed type definitions using SymbolInspector

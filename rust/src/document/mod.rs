@@ -209,14 +209,11 @@ impl DocumentService {
         let mut set: JoinSet<Result<()>> = JoinSet::new();
         for target in targets {
             let llm_client = self.llm_client.clone();
-            let document_service = self.clone();
             let workspace = self.workspace.clone();
 
             let clone = self.clone();
             set.spawn(Box::pin(async move {
-                let new_body =
-                    spawn_generation_task(&target, llm_client, document_service, &workspace)
-                        .await?;
+                let new_body = spawn_generation_task(&target, llm_client, &workspace).await?;
                 clone.apply_generation(target, new_body).await?;
                 Ok(())
             }));
@@ -277,41 +274,17 @@ impl DocumentService {
             (current_version, uri)
         };
 
-        // Send incremental or full document update
-        let content_changes = if changes.is_empty() {
-            tracing::debug!(
-                "Sending full document update (version: {})",
-                current_version
-            );
-            // Fallback to full document if no changes tracked
-            let content = self
-                .document
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
-                .get_text();
-            vec![TextDocumentContentChangeEvent {
-                range: None,
-                range_length: None,
-                text: content,
-            }]
-        } else {
-            tracing::debug!(
-                "Sending {} incremental changes (version: {})",
-                changes.len(),
-                current_version
-            );
-            changes
-        };
+        if !changes.is_empty() {
+            let params = DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version: current_version,
+                },
+                content_changes: changes,
+            };
 
-        let params = DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier {
-                uri: uri.clone(),
-                version: current_version,
-            },
-            content_changes,
-        };
-
-        self.lsp_client.did_change(params).await?;
+            self.lsp_client.did_change(params).await?;
+        }
 
         Ok(())
     }
@@ -334,21 +307,9 @@ impl DocumentService {
         Ok(())
     }
 
-    /// Get the full definition at a location using tree-sitter
-    pub async fn get_full_definition_at(&self, location: &lsp_types::Location) -> Result<String> {
-        // Check if this is for the current document
-        let doc_uri = self.document.read().unwrap().uri.clone();
-        if location.uri.as_str() != doc_uri {
-            tracing::trace!(
-                "get_full_definition_at called for external file: {}",
-                location.uri.as_str()
-            );
-            return Err(anyhow::anyhow!(
-                "External file definitions not yet supported"
-            ));
-        }
-
-        // For the current document, use the existing tree
+    /// Get the full definition at a range using tree-sitter
+    pub async fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<String> {
+        // Use the existing tree from this document
         let doc = self.document.read().unwrap();
         let tree = doc
             .editor
@@ -357,10 +318,10 @@ impl DocumentService {
         let rope = doc.editor.rope();
 
         // Calculate byte position from LSP position
-        let line = location.range.start.line as usize;
+        let line = range.start.line as usize;
         let line_start_byte = rope.byte_of_line(line);
         // Approximate character position (not handling UTF-16 properly yet)
-        let byte_pos = line_start_byte + location.range.start.character as usize;
+        let byte_pos = line_start_byte + range.start.character as usize;
 
         // Find the node at this position
         let root = tree.root_node();
