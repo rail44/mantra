@@ -94,11 +94,13 @@ impl WorkspaceService {
         let file_uri = format!("file://{}", absolute_path.display());
 
         // Check if document already exists
-        {
-            let mut workspace = self.workspace.write().unwrap();
-            if let Some(document) = workspace.documents.get_mut(&file_uri) {
-                return document.generate().await;
-            }
+        let existing_doc = {
+            let workspace = self.workspace.read().unwrap();
+            workspace.documents.get(&file_uri).cloned()
+        };
+
+        if let Some(document) = existing_doc {
+            return document.generate().await;
         }
 
         // Read file content

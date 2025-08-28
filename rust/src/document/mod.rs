@@ -329,34 +329,73 @@ impl DocumentService {
             .descendant_for_byte_range(byte_pos, byte_pos)
             .ok_or_else(|| anyhow::anyhow!("No node at position"))?;
 
-        // Walk up the tree to find type_spec
+        // Walk up the tree to find a definition node
+        // In Go, we're looking for type_spec, const_spec, var_spec, function_declaration, method_declaration
+        let mut definition_range = None;
         let mut current = Some(node);
-        let mut type_spec_range = None;
 
         while let Some(n) = current {
-            if n.kind() == "type_spec" {
-                type_spec_range = Some((n.start_byte(), n.end_byte()));
-                break;
+            match n.kind() {
+                // Type definitions
+                "type_spec" | "type_declaration" => {
+                    definition_range = Some((n.start_byte(), n.end_byte()));
+                    break;
+                }
+                // Constant definitions
+                "const_spec" | "const_declaration" => {
+                    definition_range = Some((n.start_byte(), n.end_byte()));
+                    break;
+                }
+                // Variable definitions
+                "var_spec" | "var_declaration" => {
+                    definition_range = Some((n.start_byte(), n.end_byte()));
+                    break;
+                }
+                // Function/method definitions
+                "function_declaration" | "method_declaration" => {
+                    // For functions, we typically want just the signature, not the body
+                    if let Some(params) = n.child_by_field_name("parameters") {
+                        // Get from start of function to end of parameters
+                        definition_range = Some((n.start_byte(), params.end_byte()));
+                    } else {
+                        definition_range = Some((n.start_byte(), n.end_byte()));
+                    }
+                    break;
+                }
+                // Interface method specifications
+                "method_spec" => {
+                    definition_range = Some((n.start_byte(), n.end_byte()));
+                    break;
+                }
+                // Field declarations in structs
+                "field_declaration" => {
+                    definition_range = Some((n.start_byte(), n.end_byte()));
+                    break;
+                }
+                _ => {
+                    current = n.parent();
+                }
             }
-            current = n.parent();
         }
 
-        // If we found a type_spec, return its content
-        if let Some((start, end)) = type_spec_range {
-            return Ok(rope.byte_slice(start..end).to_string());
-        }
-
-        // Fallback: return the line
-        let line_end = if line + 1 < rope.line_len() {
-            rope.byte_of_line(line + 1)
+        // If we found a definition, return its content
+        if let Some((start, end)) = definition_range {
+            Ok(rope.byte_slice(start..end).to_string())
         } else {
-            rope.byte_len()
-        };
-        Ok(rope
-            .byte_slice(line_start_byte..line_end)
-            .to_string()
-            .trim()
-            .to_string())
+            // If we couldn't find a definition node, the position might be pointing
+            // to an identifier that is the definition itself
+            if node.kind() == "type_identifier" || node.kind() == "identifier" {
+                // Return just the identifier
+                Ok(rope
+                    .byte_slice(node.start_byte()..node.end_byte())
+                    .to_string())
+            } else {
+                Err(anyhow::anyhow!(
+                    "Could not find definition node at position. Found '{}' instead",
+                    node.kind()
+                ))
+            }
+        }
     }
 
     /// Get content at a specific range (currently returns whole lines)
