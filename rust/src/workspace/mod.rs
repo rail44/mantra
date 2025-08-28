@@ -3,26 +3,42 @@ pub use crate::document::{Document, DocumentService};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tracing::{error, info};
 
 use crate::config::Config;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 
-/// Workspace managing documents and services
+/// Workspace managing documents (state only)
 pub struct Workspace {
     /// Documents by file URI
     documents: HashMap<String, DocumentService>,
+}
+
+/// Service wrapper for Workspace with external dependencies  
+#[derive(Clone)]
+pub struct WorkspaceService {
+    workspace: Arc<RwLock<Workspace>>,
     /// LSP client
     lsp_client: LspClient,
     /// LLM client
     llm_client: LLMClient,
-    /// Configuration (kept for potential future use)
-    _config: Config,
+    /// Configuration
+    config: Config,
 }
 
 impl Workspace {
-    /// Create a new workspace
+    /// Create a new empty workspace
+    pub fn new() -> Self {
+        Self {
+            documents: HashMap::new(),
+        }
+    }
+}
+
+impl WorkspaceService {
+    /// Create a new workspace service
     pub async fn new(root_dir: PathBuf, config: Config) -> Result<Self> {
         // Initialize LSP client
         let lsp_client = LspClient::new("gopls", &[]).await?;
@@ -45,16 +61,21 @@ impl Workspace {
         // Create LLM client
         let llm_client = LLMClient::new(config.clone())?;
 
+        // Create workspace
+        let workspace = Workspace::new();
+
         Ok(Self {
-            documents: HashMap::new(),
+            workspace: Arc::new(RwLock::new(workspace)),
             lsp_client,
             llm_client,
-            _config: config,
+            config,
         })
     }
+}
 
+impl WorkspaceService {
     /// Generate code for a file
-    pub async fn generate_file(&mut self, file_path: PathBuf) -> Result<String> {
+    pub async fn generate_file(&self, file_path: PathBuf) -> Result<String> {
         // Convert file path to absolute
         let absolute_path = if file_path.is_absolute() {
             file_path
@@ -73,8 +94,11 @@ impl Workspace {
         let file_uri = format!("file://{}", absolute_path.display());
 
         // Check if document already exists
-        if let Some(document) = self.documents.get_mut(&file_uri) {
-            return document.generate().await;
+        {
+            let mut workspace = self.workspace.write().unwrap();
+            if let Some(document) = workspace.documents.get_mut(&file_uri) {
+                return document.generate().await;
+            }
         }
 
         // Read file content
@@ -93,21 +117,32 @@ impl Workspace {
 
         // Create document service
         let d = Document::new(absolute_path.clone(), file_uri.clone())?;
-        let document = DocumentService::new(d, self.lsp_client.clone(), self.llm_client.clone());
+        let document = DocumentService::new(
+            d,
+            self.lsp_client.clone(),
+            self.llm_client.clone(),
+            self.clone(),
+        );
 
         let result = document.generate().await?;
 
         // Store the document
-        self.documents.insert(file_uri, document);
+        {
+            let mut workspace = self.workspace.write().unwrap();
+            workspace.documents.insert(file_uri, document);
+        }
 
         Ok(result)
     }
 
     /// Open a document by URI, reusing existing if already open
-    pub async fn open_document(&mut self, uri: &str) -> Result<&mut DocumentService> {
+    pub async fn open_document(&self, uri: &str) -> Result<DocumentService> {
         // Check if document already exists
-        if self.documents.contains_key(uri) {
-            return Ok(self.documents.get_mut(uri).unwrap());
+        {
+            let workspace = self.workspace.read().unwrap();
+            if let Some(document) = workspace.documents.get(uri) {
+                return Ok(document.clone());
+            }
         }
 
         // Parse URI to get file path
@@ -141,13 +176,22 @@ impl Workspace {
 
         // Create document service
         let d = Document::new(path, uri.to_string())?;
-        let document = DocumentService::new(d, self.lsp_client.clone(), self.llm_client.clone());
+        let document = DocumentService::new(
+            d,
+            self.lsp_client.clone(),
+            self.llm_client.clone(),
+            self.clone(),
+        );
 
         // Store the document
-        self.documents.insert(uri.to_string(), document);
+        {
+            let mut workspace = self.workspace.write().unwrap();
+            workspace
+                .documents
+                .insert(uri.to_string(), document.clone());
+        }
 
-        // Return mutable reference
-        Ok(self.documents.get_mut(uri).unwrap())
+        Ok(document)
     }
 
     /// Shutdown the workspace
@@ -155,7 +199,7 @@ impl Workspace {
         info!("Shutting down Workspace");
 
         // Clear all documents
-        drop(self.documents);
+        drop(self.workspace);
 
         // Small delay to ensure documents have released their references
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

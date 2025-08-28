@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
 async fn generate_command(file: PathBuf) -> Result<()> {
     use crate::core::metrics::Timer;
-    use crate::workspace::Workspace;
+    use crate::workspace::WorkspaceService;
 
     let total_timer = Timer::start("total_generation");
 
@@ -88,7 +88,7 @@ async fn generate_command(file: PathBuf) -> Result<()> {
         .to_path_buf();
 
     // Create workspace
-    let mut workspace = Workspace::new(workspace_root, config).await?;
+    let workspace = WorkspaceService::new(workspace_root, config).await?;
 
     // Generate code
     let result = workspace.generate_file(file).await?;

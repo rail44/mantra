@@ -15,6 +15,7 @@ pub struct PathSegment {
 /// Target function or method to generate
 #[derive(Debug, Clone)]
 pub struct Target {
+    pub uri: String,
     pub instruction: String,
     pub signature: String,
     pub checksum: u64,

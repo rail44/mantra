@@ -2,20 +2,23 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::document::DocumentService;
+use crate::inspector::SymbolInspector;
 use crate::llm::{CompletionRequest, LLMClient, Message};
 use crate::parser::target::Target;
+use crate::workspace::WorkspaceService;
 
 /// Spawn a generation task that will send results back to the document service
 pub async fn spawn_generation_task(
     target: &Target,
     llm_client: LLMClient,
     document_service: DocumentService,
+    workspace: &WorkspaceService,
 ) -> Result<String> {
     tracing::debug!(
         "Starting generation task for checksum {:x}",
         target.checksum
     );
-    let new_body = generate_for_target(&llm_client, target, &document_service).await?;
+    let new_body = generate_for_target(&llm_client, target, &document_service, workspace).await?;
     tracing::debug!(
         "Completed generation task for checksum {:x}",
         target.checksum
@@ -28,15 +31,24 @@ async fn generate_for_target(
     llm_client: &LLMClient,
     target: &Target,
     document_service: &DocumentService,
+    workspace: &WorkspaceService,
 ) -> Result<String> {
-    // Collect type definitions
+    // Collect detailed type definitions using SymbolInspector
+    let inspector = SymbolInspector::new(workspace);
     let mut type_definitions = HashMap::new();
+
     for (i, type_path) in target.type_references.iter().enumerate() {
-        if let Some(hover_content) = document_service.get_hover_for_path(type_path).await? {
-            // Use index as key since we can't extract actual type name from path
-            let key = format!("type_{}", i);
-            tracing::debug!("Found type definition: {}", hover_content);
-            type_definitions.insert(key, hover_content);
+        match inspector.inspect_by_path(&target.uri, type_path).await {
+            Ok(scoped_code) => {
+                let key = format!("type_{}", i);
+                tracing::debug!("Found detailed type definition: {}", scoped_code.content);
+                // Use the full type definition content instead of hover info
+                type_definitions.insert(key, scoped_code.content);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to inspect type at path {:?}: {}", type_path, e);
+                // Skip external types for now - they shouldn't be needed for basic generation
+            }
         }
     }
 

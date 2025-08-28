@@ -1,9 +1,8 @@
 use anyhow::Result;
-use lsp_types::{GotoDefinitionResponse, Position, TextDocumentIdentifier};
+use lsp_types::GotoDefinitionResponse;
 
-use crate::parser::ast_utils::find_node_by_path;
 use crate::parser::target::PathSegment;
-use crate::workspace::Workspace;
+use crate::workspace::WorkspaceService;
 
 /// Scoped code information with AST path
 #[derive(Debug, Clone)]
@@ -18,21 +17,17 @@ pub struct ScopedCode {
 
 /// Symbol inspector for type investigation
 pub struct SymbolInspector<'a> {
-    workspace: &'a mut Workspace,
+    workspace: &'a WorkspaceService,
 }
 
 impl<'a> SymbolInspector<'a> {
     /// Create a new symbol inspector
-    pub fn new(workspace: &'a mut Workspace) -> Self {
+    pub fn new(workspace: &'a WorkspaceService) -> Self {
         Self { workspace }
     }
 
     /// Inspect a symbol by its AST path
-    pub async fn inspect_by_path(
-        &mut self,
-        uri: &str,
-        ast_path: &[PathSegment],
-    ) -> Result<ScopedCode> {
+    pub async fn inspect_by_path(&self, uri: &str, ast_path: &[PathSegment]) -> Result<ScopedCode> {
         // 1. Open document
         let doc_service = self.workspace.open_document(uri).await?;
 
@@ -51,9 +46,8 @@ impl<'a> SymbolInspector<'a> {
             doc_service
         };
 
-        // 5. Get content at target location
-        // TODO: Handle potential position drift in async updates
-        let content = target_doc.get_content_at_range(&target_location.range)?;
+        // 5. Get the full definition using tree-sitter
+        let content = target_doc.get_full_definition_at(&target_location).await?;
 
         Ok(ScopedCode {
             ast_path: ast_path.to_vec(),
@@ -127,10 +121,10 @@ api_key = "test-key"
 
         // Setup workspace
         let config = Config::load(&test_file)?;
-        let mut workspace = Workspace::new(test_dir.clone(), config).await?;
+        let workspace = WorkspaceService::new(test_dir.clone(), config).await?;
 
         // Create inspector
-        let mut inspector = SymbolInspector::new(&mut workspace);
+        let inspector = SymbolInspector::new(&workspace);
 
         // Test case: Inspect a type reference in parameter
         let ast_path = vec![

@@ -13,6 +13,7 @@ use crate::generation::spawn_generation_task;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::parser::{checksum::calculate_checksum, target::Target};
+use crate::workspace::WorkspaceService;
 
 /// Document managing a single document's state with CRDT support
 pub struct Document {
@@ -85,6 +86,7 @@ impl Document {
 
                         // Create the base target for checksum calculation
                         let base_target = Target {
+                            uri: self.uri.clone(),
                             instruction: instruction.clone(),
                             signature: signature.clone(),
                             checksum: 0, // Will be calculated next
@@ -165,14 +167,21 @@ pub struct DocumentService {
     document: Arc<RwLock<Document>>,
     lsp_client: LspClient,
     llm_client: LLMClient,
+    workspace: WorkspaceService,
 }
 
 impl DocumentService {
-    pub fn new(document: Document, lsp_client: LspClient, llm_client: LLMClient) -> Self {
+    pub fn new(
+        document: Document,
+        lsp_client: LspClient,
+        llm_client: LLMClient,
+        workspace: WorkspaceService,
+    ) -> Self {
         Self {
             document: Arc::new(RwLock::new(document)),
             llm_client,
             lsp_client,
+            workspace,
         }
     }
 
@@ -201,10 +210,13 @@ impl DocumentService {
         for target in targets {
             let llm_client = self.llm_client.clone();
             let document_service = self.clone();
+            let workspace = self.workspace.clone();
 
             let clone = self.clone();
             set.spawn(Box::pin(async move {
-                let new_body = spawn_generation_task(&target, llm_client, document_service).await?;
+                let new_body =
+                    spawn_generation_task(&target, llm_client, document_service, &workspace)
+                        .await?;
                 clone.apply_generation(target, new_body).await?;
                 Ok(())
             }));
@@ -320,6 +332,70 @@ impl DocumentService {
         }
 
         Ok(())
+    }
+
+    /// Get the full definition at a location using tree-sitter
+    pub async fn get_full_definition_at(&self, location: &lsp_types::Location) -> Result<String> {
+        // Check if this is for the current document
+        let doc_uri = self.document.read().unwrap().uri.clone();
+        if location.uri.as_str() != doc_uri {
+            tracing::trace!(
+                "get_full_definition_at called for external file: {}",
+                location.uri.as_str()
+            );
+            return Err(anyhow::anyhow!(
+                "External file definitions not yet supported"
+            ));
+        }
+
+        // For the current document, use the existing tree
+        let doc = self.document.read().unwrap();
+        let tree = doc
+            .editor
+            .tree()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
+        let rope = doc.editor.rope();
+
+        // Calculate byte position from LSP position
+        let line = location.range.start.line as usize;
+        let line_start_byte = rope.byte_of_line(line);
+        // Approximate character position (not handling UTF-16 properly yet)
+        let byte_pos = line_start_byte + location.range.start.character as usize;
+
+        // Find the node at this position
+        let root = tree.root_node();
+        let node = root
+            .descendant_for_byte_range(byte_pos, byte_pos)
+            .ok_or_else(|| anyhow::anyhow!("No node at position"))?;
+
+        // Walk up the tree to find type_spec
+        let mut current = Some(node);
+        let mut type_spec_range = None;
+
+        while let Some(n) = current {
+            if n.kind() == "type_spec" {
+                type_spec_range = Some((n.start_byte(), n.end_byte()));
+                break;
+            }
+            current = n.parent();
+        }
+
+        // If we found a type_spec, return its content
+        if let Some((start, end)) = type_spec_range {
+            return Ok(rope.byte_slice(start..end).to_string());
+        }
+
+        // Fallback: return the line
+        let line_end = if line + 1 < rope.line_len() {
+            rope.byte_of_line(line + 1)
+        } else {
+            rope.byte_len()
+        };
+        Ok(rope
+            .byte_slice(line_start_byte..line_end)
+            .to_string()
+            .trim()
+            .to_string())
     }
 
     /// Get content at a specific range (currently returns whole lines)
