@@ -94,7 +94,7 @@ async fn generate_command(file: PathBuf) -> Result<()> {
     let result = workspace.generate_file(file).await?;
 
     // Output to stdout
-    print!("{}", result);
+    print!("{result}");
 
     // Shutdown workspace
     workspace.shutdown().await?;

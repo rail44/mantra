@@ -185,12 +185,9 @@ impl Client {
     /// Note: Because the client is Clone, ensure all clones are dropped before shutdown
     pub async fn shutdown(self) -> Result<()> {
         // Try to get the inner connection if this is the last reference
-        match Arc::try_unwrap(self.connection) {
-            Ok(connection) => connection.shutdown().await,
-            Err(_) => {
-                tracing::warn!("Cannot shutdown LSP server: other references still exist");
-                Ok(())
-            }
+        if let Ok(connection) = Arc::try_unwrap(self.connection) { connection.shutdown().await } else {
+            tracing::warn!("Cannot shutdown LSP server: other references still exist");
+            Ok(())
         }
     }
 
@@ -324,8 +321,8 @@ impl Client {
     }
 }
 
-/// Parse GotoDefinitionResponse from a JSON value
-/// Handles the three possible formats: Location, Location[], LocationLink[]
+/// Parse `GotoDefinitionResponse` from a JSON value
+/// Handles the three possible formats: Location, Location[], `LocationLink`[]
 fn parse_goto_definition_response(value: Value) -> Result<GotoDefinitionResponse> {
     // First try to parse as a single Location
     if let Ok(location) = serde_json::from_value::<Location>(value.clone()) {

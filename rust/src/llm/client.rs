@@ -24,8 +24,8 @@ impl LLMClient {
         if let Some(api_key) = &config.api_key {
             headers.insert(
                 header::AUTHORIZATION,
-                header::HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .map_err(|e| MantraError::config(format!("Invalid API key format: {}", e)))?,
+                header::HeaderValue::from_str(&format!("Bearer {api_key}"))
+                    .map_err(|e| MantraError::config(format!("Invalid API key format: {e}")))?,
             );
         }
 
@@ -41,7 +41,7 @@ impl LLMClient {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(120))
             .build()
-            .map_err(|e| MantraError::llm(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| MantraError::llm(format!("Failed to build HTTP client: {e}")))?;
 
         Ok(Self { client, config })
     }
@@ -51,7 +51,7 @@ impl LLMClient {
         &self.config.model
     }
 
-    /// Get OpenRouter configuration if available
+    /// Get `OpenRouter` configuration if available
     pub fn openrouter_config(&self) -> Option<&crate::config::OpenRouterConfig> {
         self.config.openrouter.as_ref()
     }
@@ -67,7 +67,7 @@ impl LLMClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| MantraError::llm(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| MantraError::llm(format!("Failed to send request: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -76,15 +76,14 @@ impl LLMClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(MantraError::llm(format!(
-                "API request failed with status {}: {}",
-                status, error_text
+                "API request failed with status {status}: {error_text}"
             )));
         }
 
         let completion = response
             .json::<CompletionResponse>()
             .await
-            .map_err(|e| MantraError::llm(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| MantraError::llm(format!("Failed to parse response: {e}")))?;
 
         timer.stop_with_message("Response received");
         Ok(completion)

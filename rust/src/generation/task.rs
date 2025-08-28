@@ -37,7 +37,7 @@ async fn generate_for_target(
     for (i, type_path) in target.type_references.iter().enumerate() {
         match inspector.inspect_by_path(&target.uri, type_path).await {
             Ok(scoped_code) => {
-                let key = format!("type_{}", i);
+                let key = format!("type_{i}");
                 tracing::debug!("Found detailed type definition: {}", scoped_code.content);
                 // Use the full type definition content instead of hover info
                 type_definitions.insert(key, scoped_code.content);

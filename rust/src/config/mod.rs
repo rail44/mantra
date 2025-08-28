@@ -57,7 +57,7 @@ impl Config {
 
         // Parse TOML
         let mut config: Config = toml::from_str(&config_data)
-            .map_err(|e| MantraError::config(format!("Failed to parse mantra.toml: {}", e)))?;
+            .map_err(|e| MantraError::config(format!("Failed to parse mantra.toml: {e}")))?;
 
         // Warn about hardcoded API keys
         if let Some(api_key) = &config.api_key {
@@ -126,7 +126,7 @@ fn find_config_file(start_path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Expand environment variable in the format ${VAR_NAME}
+/// Expand environment variable in the format ${`VAR_NAME`}
 fn expand_env_var(value: &str) -> Option<String> {
     // Check for ${...} pattern
     if value.starts_with("${") && value.ends_with('}') {

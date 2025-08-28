@@ -109,7 +109,7 @@ pub fn build_path_to_node(target: &Node, root: &Node) -> Vec<PathSegment> {
 
             path.push(PathSegment {
                 node_kind: node.kind().to_string(),
-                field_name: found_field.map(|s| s.to_string()),
+                field_name: found_field.map(std::string::ToString::to_string),
                 index: same_kind_index,
             });
         }

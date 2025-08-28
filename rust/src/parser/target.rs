@@ -4,7 +4,7 @@ use std::ops::Range;
 /// A segment in an AST path for locating a node
 #[derive(Debug, Clone)]
 pub struct PathSegment {
-    /// The kind of node (e.g., "type_identifier", "parameter_list")
+    /// The kind of node (e.g., "`type_identifier`", "`parameter_list`")
     pub node_kind: String,
     /// Optional field name if this node is accessed by field
     pub field_name: Option<String>,

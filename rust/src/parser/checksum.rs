@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use super::target::Target;
 
 /// Calculate checksum for a target to detect changes
-/// Uses FxHasher for fast, deterministic hashing
+/// Uses `FxHasher` for fast, deterministic hashing
 pub fn calculate_checksum(target: &Target) -> u64 {
     let mut hasher = FxHasher::default();
 

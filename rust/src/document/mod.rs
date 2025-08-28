@@ -603,7 +603,7 @@ fn collect_type_references(
     type_references
 }
 
-/// Recursively collect type_identifier nodes
+/// Recursively collect `type_identifier` nodes
 fn collect_types_from_node(
     node: &tree_sitter::Node,
     root_node: &tree_sitter::Node,

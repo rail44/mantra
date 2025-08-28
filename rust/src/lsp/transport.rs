@@ -34,20 +34,20 @@ impl StdioSender {
 
     async fn send_impl(&mut self, msg: String) -> Result<(), TransportError> {
         let content_length = msg.len();
-        let header = format!("Content-Length: {}\r\n\r\n", content_length);
+        let header = format!("Content-Length: {content_length}\r\n\r\n");
 
         self.stdin
             .write_all(header.as_bytes())
             .await
-            .map_err(|e| TransportError(format!("Failed to write header: {}", e)))?;
+            .map_err(|e| TransportError(format!("Failed to write header: {e}")))?;
         self.stdin
             .write_all(msg.as_bytes())
             .await
-            .map_err(|e| TransportError(format!("Failed to write message: {}", e)))?;
+            .map_err(|e| TransportError(format!("Failed to write message: {e}")))?;
         self.stdin
             .flush()
             .await
-            .map_err(|e| TransportError(format!("Failed to flush: {}", e)))?;
+            .map_err(|e| TransportError(format!("Failed to flush: {e}")))?;
 
         Ok(())
     }
@@ -90,7 +90,7 @@ impl StdioReceiver {
             self.stdout
                 .read_line(&mut line)
                 .await
-                .map_err(|e| TransportError(format!("Failed to read line: {}", e)))?;
+                .map_err(|e| TransportError(format!("Failed to read line: {e}")))?;
 
             if line == "\r\n" || line == "\n" {
                 break;
@@ -104,7 +104,7 @@ impl StdioReceiver {
             if header.starts_with("Content-Length: ") {
                 let len_str = header.trim_start_matches("Content-Length: ").trim();
                 content_length = Some(len_str.parse::<usize>().map_err(|e| {
-                    TransportError(format!("Failed to parse content length: {}", e))
+                    TransportError(format!("Failed to parse content length: {e}"))
                 })?);
                 break;
             }
@@ -118,7 +118,7 @@ impl StdioReceiver {
         self.stdout
             .read_exact(&mut buffer)
             .await
-            .map_err(|e| TransportError(format!("Failed to read message body: {}", e)))?;
+            .map_err(|e| TransportError(format!("Failed to read message body: {e}")))?;
 
         // 通知ハンドラーがある場合、notificationをチェック
         if let Some(handler) = &self.notification_handler {

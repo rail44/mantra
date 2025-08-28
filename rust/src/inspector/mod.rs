@@ -38,12 +38,12 @@ impl<'a> SymbolInspector<'a> {
         let target_location = extract_first_location(definition_response)?;
 
         // 4. Open target document if different
-        let target_doc = if target_location.uri.as_str() != uri {
+        let target_doc = if target_location.uri.as_str() == uri {
+            doc_service
+        } else {
             self.workspace
                 .open_document(target_location.uri.as_str())
                 .await?
-        } else {
-            doc_service
         };
 
         // 5. Get the full definition using tree-sitter
@@ -59,7 +59,7 @@ impl<'a> SymbolInspector<'a> {
     }
 }
 
-/// Extract the first location from a GotoDefinitionResponse
+/// Extract the first location from a `GotoDefinitionResponse`
 fn extract_first_location(response: Option<GotoDefinitionResponse>) -> Result<lsp_types::Location> {
     match response {
         Some(GotoDefinitionResponse::Scalar(location)) => Ok(location),

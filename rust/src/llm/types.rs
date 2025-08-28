@@ -25,7 +25,7 @@ impl Message {
     }
 }
 
-/// Provider specification for OpenRouter
+/// Provider specification for `OpenRouter`
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderSpec {
     #[serde(skip_serializing_if = "Option::is_none")]

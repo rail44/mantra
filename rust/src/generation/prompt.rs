@@ -17,7 +17,7 @@ pub fn build_prompt_with_types(
         prompt.push_str("\nType definitions:\n");
         for definition in type_definitions.values() {
             // The hover content often includes the type definition
-            prompt.push_str(&format!("{}\n", definition));
+            prompt.push_str(&format!("{definition}\n"));
         }
         prompt.push('\n');
     }
