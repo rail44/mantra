@@ -203,13 +203,8 @@ impl WorkspaceService {
         // Clear all documents
         drop(self.workspace);
 
-        // Small delay to ensure documents have released their references
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        // Shutdown LSP client
-        if let Err(e) = self.lsp_client.shutdown().await {
-            error!("Failed to shutdown LSP client: {}", e);
-        }
+        // LSP server will be automatically terminated when the process exits
+        // No need for explicit shutdown
 
         Ok(())
     }

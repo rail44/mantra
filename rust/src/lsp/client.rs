@@ -185,7 +185,9 @@ impl Client {
     /// Note: Because the client is Clone, ensure all clones are dropped before shutdown
     pub async fn shutdown(self) -> Result<()> {
         // Try to get the inner connection if this is the last reference
-        if let Ok(connection) = Arc::try_unwrap(self.connection) { connection.shutdown().await } else {
+        if let Ok(connection) = Arc::try_unwrap(self.connection) {
+            connection.shutdown().await
+        } else {
             tracing::warn!("Cannot shutdown LSP server: other references still exist");
             Ok(())
         }

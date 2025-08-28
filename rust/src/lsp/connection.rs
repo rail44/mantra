@@ -1,12 +1,10 @@
 use anyhow::Result;
 use jsonrpsee::core::client::{Client as RpcClient, ClientBuilder};
-use std::sync::Arc;
 use tokio::io::BufReader as AsyncBufReader;
 use tokio::process::{Child, Command};
 use tracing::info;
 
 use crate::lsp::transport::{StdioReceiver, StdioSender};
-use crate::lsp::NotificationHandler;
 
 /// LSP connection that manages the process and RPC client
 #[derive(Debug)]
@@ -34,15 +32,9 @@ impl LspConnection {
         let stdin = process.stdin.take().expect("Failed to get stdin");
         let stdout = process.stdout.take().expect("Failed to get stdout");
 
-        // Create notification handler
-        let notification_handler = Arc::new(NotificationHandler::new());
-
-        // Create transport components with notification handler
+        // Create transport components
         let sender = StdioSender::new(stdin);
-        let receiver = StdioReceiver::with_notification_handler(
-            AsyncBufReader::new(stdout),
-            notification_handler.clone(),
-        );
+        let receiver = StdioReceiver::new(AsyncBufReader::new(stdout));
 
         // Build the RPC client
         let client = ClientBuilder::default().build_with_tokio(sender, receiver);

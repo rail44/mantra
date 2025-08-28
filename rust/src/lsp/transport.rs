@@ -1,14 +1,9 @@
 use jsonrpsee::core::client::{ReceivedMessage, TransportReceiverT, TransportSenderT};
-use serde_json::Value;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-use tracing::warn;
-
-use crate::lsp::NotificationHandler;
 
 /// Error type for LSP transport operations
 #[derive(Debug)]
@@ -68,18 +63,11 @@ impl TransportSenderT for StdioSender {
 /// Handles receiving LSP messages from stdout
 pub struct StdioReceiver {
     stdout: AsyncBufReader<ChildStdout>,
-    notification_handler: Option<Arc<NotificationHandler>>,
 }
 
 impl StdioReceiver {
-    pub fn with_notification_handler(
-        stdout: AsyncBufReader<ChildStdout>,
-        handler: Arc<NotificationHandler>,
-    ) -> Self {
-        Self {
-            stdout,
-            notification_handler: Some(handler),
-        }
+    pub fn new(stdout: AsyncBufReader<ChildStdout>) -> Self {
+        Self { stdout }
     }
 
     async fn receive_impl(&mut self) -> Result<ReceivedMessage, TransportError> {
@@ -103,9 +91,10 @@ impl StdioReceiver {
         for header in &headers {
             if header.starts_with("Content-Length: ") {
                 let len_str = header.trim_start_matches("Content-Length: ").trim();
-                content_length = Some(len_str.parse::<usize>().map_err(|e| {
-                    TransportError(format!("Failed to parse content length: {e}"))
-                })?);
+                content_length =
+                    Some(len_str.parse::<usize>().map_err(|e| {
+                        TransportError(format!("Failed to parse content length: {e}"))
+                    })?);
                 break;
             }
         }
@@ -119,30 +108,6 @@ impl StdioReceiver {
             .read_exact(&mut buffer)
             .await
             .map_err(|e| TransportError(format!("Failed to read message body: {e}")))?;
-
-        // 通知ハンドラーがある場合、notificationをチェック
-        if let Some(handler) = &self.notification_handler {
-            if let Ok(msg) = serde_json::from_slice::<Value>(&buffer) {
-                // notificationかどうかチェック（idがなくmethodがある）
-                if msg.get("id").is_none() && msg.get("method").is_some() {
-                    if let (Some(method), params) = (
-                        msg.get("method").and_then(|m| m.as_str()),
-                        msg.get("params"),
-                    ) {
-                        let params = params.cloned().unwrap_or(Value::Null);
-                        let handler = handler.clone();
-                        let method = method.to_string();
-
-                        // 非同期でハンドラーに渡す（ブロッキングを避ける）
-                        tokio::spawn(async move {
-                            if let Err(e) = handler.handle_notification(&method, params).await {
-                                warn!("Failed to handle notification for {}: {}", method, e);
-                            }
-                        });
-                    }
-                }
-            }
-        }
 
         Ok(ReceivedMessage::Bytes(buffer))
     }
