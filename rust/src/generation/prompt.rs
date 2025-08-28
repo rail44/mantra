@@ -15,11 +15,11 @@ pub fn build_prompt_with_types(
     // Add type definitions if available
     if !type_definitions.is_empty() {
         prompt.push_str("\nType definitions:\n");
-        for definition in type_definitions.values() {
-            // The hover content often includes the type definition
-            prompt.push_str(&format!("{definition}\n"));
+        for (scope_id, definition) in type_definitions {
+            prompt.push_str(&format!(
+                "<scope id=\"{scope_id}\">\n{definition}\n</scope>\n\n"
+            ));
         }
-        prompt.push('\n');
     }
 
     // Add instruction

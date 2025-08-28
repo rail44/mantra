@@ -34,16 +34,25 @@ async fn generate_for_target(
     let inspector = SymbolInspector::new(workspace);
     let mut type_definitions = HashMap::new();
 
-    for (i, type_path) in target.type_references.iter().enumerate() {
-        match inspector.inspect_by_path(&target.uri, type_path).await {
+    for type_ref in target.type_references.iter() {
+        match inspector.inspect_by_path(&target.uri, &type_ref.path).await {
             Ok(scoped_code) => {
-                let key = format!("type_{i}");
-                tracing::debug!("Found detailed type definition: {}", scoped_code.content);
+                // Use scope_id as key instead of generic type_i
+                tracing::debug!(
+                    "Found detailed type definition for {}: {}",
+                    type_ref.scope_id,
+                    scoped_code.content
+                );
                 // Use the full type definition content instead of hover info
-                type_definitions.insert(key, scoped_code.content);
+                type_definitions.insert(type_ref.scope_id.clone(), scoped_code.content);
             }
             Err(e) => {
-                tracing::warn!("Failed to inspect type at path {:?}: {}", type_path, e);
+                tracing::warn!(
+                    "Failed to inspect type '{}' at path {:?}: {}",
+                    type_ref.scope_id,
+                    type_ref.path,
+                    e
+                );
                 // Skip external types for now - they shouldn't be needed for basic generation
             }
         }

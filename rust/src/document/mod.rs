@@ -12,7 +12,10 @@ use crate::editor::crdt::CrdtEditor;
 use crate::generation::spawn_generation_task;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
-use crate::parser::{checksum::calculate_checksum, target::Target};
+use crate::parser::{
+    checksum::calculate_checksum,
+    target::{Target, TypeReference},
+};
 use crate::workspace::WorkspaceService;
 
 /// Document managing a single document's state with CRDT support
@@ -82,7 +85,7 @@ impl Document {
                         };
 
                         // Collect type references
-                        let type_references = collect_type_references(&node, &tree.root_node());
+                        let type_references = self.collect_type_references(&node);
 
                         // Create the base target for checksum calculation
                         let base_target = Target {
@@ -158,6 +161,77 @@ impl Document {
     /// Check if formatting should be applied
     pub fn should_format(&self) -> bool {
         self.pending_generations.is_empty()
+    }
+
+    /// Collect type references from a function/method declaration
+    fn collect_type_references(&self, func_node: &tree_sitter::Node) -> Vec<TypeReference> {
+        let tree = self.editor.tree().unwrap();
+        let rope = self.editor.rope();
+        let root_node = tree.root_node();
+        let mut type_references = Vec::new();
+
+        // For method declarations, collect receiver type
+        if func_node.kind() == "method_declaration" {
+            if let Some(receiver_list) = func_node.child_by_field_name("receiver") {
+                self.collect_types_from_node(
+                    &receiver_list,
+                    &root_node,
+                    &rope,
+                    &mut type_references,
+                );
+            }
+        }
+
+        // Collect parameter types
+        if let Some(params) = func_node.child_by_field_name("parameters") {
+            self.collect_types_from_node(&params, &root_node, &rope, &mut type_references);
+        }
+
+        // Collect return types
+        if let Some(result) = func_node.child_by_field_name("result") {
+            self.collect_types_from_node(&result, &root_node, &rope, &mut type_references);
+        }
+
+        type_references
+    }
+
+    /// Recursively collect type nodes and create TypeReference objects
+    fn collect_types_from_node(
+        &self,
+        node: &tree_sitter::Node,
+        root_node: &tree_sitter::Node,
+        rope: &crop::Rope,
+        type_references: &mut Vec<TypeReference>,
+    ) {
+        use crate::parser::ast_utils::build_path_to_node;
+
+        match node.kind() {
+            "type_identifier" | "pointer_type" | "slice_type" | "array_type" | "channel_type"
+            | "map_type" => {
+                // Build path from root to this type node
+                let path = build_path_to_node(node, root_node);
+                // Extract type name from the entire type node (preserves modifiers like *, [])
+                let scope_id = rope
+                    .byte_slice(node.start_byte()..node.end_byte())
+                    .to_string();
+                type_references.push(TypeReference { path, scope_id });
+            }
+            "qualified_type" => {
+                // For qualified types like time.Duration, get the entire qualified type
+                let path = build_path_to_node(node, root_node);
+                let scope_id = rope
+                    .byte_slice(node.start_byte()..node.end_byte())
+                    .to_string();
+                type_references.push(TypeReference { path, scope_id });
+            }
+            _ => {
+                // Recursively check children for other node types
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_types_from_node(&child, root_node, rope, type_references);
+                }
+            }
+        }
     }
 }
 
@@ -573,72 +647,6 @@ impl DocumentService {
         }
 
         Ok(None)
-    }
-}
-
-/// Collect type references from a function/method declaration
-fn collect_type_references(
-    func_node: &tree_sitter::Node,
-    root_node: &tree_sitter::Node,
-) -> Vec<Vec<crate::parser::target::PathSegment>> {
-    let mut type_references = Vec::new();
-
-    // For method declarations, collect receiver type
-    if func_node.kind() == "method_declaration" {
-        if let Some(receiver_list) = func_node.child_by_field_name("receiver") {
-            collect_types_from_node(&receiver_list, root_node, &mut type_references);
-        }
-    }
-
-    // Collect parameter types
-    if let Some(params) = func_node.child_by_field_name("parameters") {
-        collect_types_from_node(&params, root_node, &mut type_references);
-    }
-
-    // Collect return types
-    if let Some(result) = func_node.child_by_field_name("result") {
-        collect_types_from_node(&result, root_node, &mut type_references);
-    }
-
-    type_references
-}
-
-/// Recursively collect `type_identifier` nodes
-fn collect_types_from_node(
-    node: &tree_sitter::Node,
-    root_node: &tree_sitter::Node,
-    type_references: &mut Vec<Vec<crate::parser::target::PathSegment>>,
-) {
-    use crate::parser::ast_utils::build_path_to_node;
-
-    match node.kind() {
-        "type_identifier" => {
-            // Build path from root to this type node
-            let path = build_path_to_node(node, root_node);
-            type_references.push(path);
-        }
-        "qualified_type" => {
-            // For qualified types like time.Duration, find the last type_identifier
-            let mut cursor = node.walk();
-            let mut last_type_identifier = None;
-            for child in node.children(&mut cursor) {
-                if child.kind() == "type_identifier" {
-                    last_type_identifier = Some(child);
-                }
-            }
-
-            if let Some(type_node) = last_type_identifier {
-                let path = build_path_to_node(&type_node, root_node);
-                type_references.push(path);
-            }
-        }
-        _ => {
-            // Recursively check children for other node types
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                collect_types_from_node(&child, root_node, type_references);
-            }
-        }
     }
 }
 

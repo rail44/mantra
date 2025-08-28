@@ -12,6 +12,16 @@ pub struct PathSegment {
     pub index: Option<usize>,
 }
 
+/// Reference to a type in the code with its AST path and identifier
+#[derive(Debug, Clone)]
+pub struct TypeReference {
+    /// AST path to locate the type node
+    pub path: Vec<PathSegment>,
+    /// Type name identifier (e.g., "SimpleCache", "*User", "[]string")
+    /// Can be hierarchical like "SimpleCache.FieldName" for nested inspection
+    pub scope_id: String,
+}
+
 /// Target function or method to generate
 #[derive(Debug, Clone)]
 pub struct Target {
@@ -21,8 +31,8 @@ pub struct Target {
     pub checksum: u64,
     pub snapshot: Snapshot,
     pub byte_range: Range<usize>,
-    /// Paths to type nodes in the AST that should be resolved
-    pub type_references: Vec<Vec<PathSegment>>,
+    /// Type references found in the function signature
+    pub type_references: Vec<TypeReference>,
 }
 
 impl Target {}
