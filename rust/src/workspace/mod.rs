@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::config::Config;
 use crate::llm::LLMClient;

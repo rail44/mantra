@@ -176,7 +176,7 @@ impl Document {
                 self.collect_types_from_node(
                     &receiver_list,
                     &root_node,
-                    &rope,
+                    rope,
                     &mut type_references,
                 );
             }
@@ -184,12 +184,12 @@ impl Document {
 
         // Collect parameter types
         if let Some(params) = func_node.child_by_field_name("parameters") {
-            self.collect_types_from_node(&params, &root_node, &rope, &mut type_references);
+            self.collect_types_from_node(&params, &root_node, rope, &mut type_references);
         }
 
         // Collect return types
         if let Some(result) = func_node.child_by_field_name("result") {
-            self.collect_types_from_node(&result, &root_node, &rope, &mut type_references);
+            self.collect_types_from_node(&result, &root_node, rope, &mut type_references);
         }
 
         type_references

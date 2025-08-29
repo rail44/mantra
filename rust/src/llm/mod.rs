@@ -7,5 +7,5 @@ pub mod types;
 mod response_test;
 
 pub use client::LLMClient;
-pub use tools::{create_inspect_tool, InspectTool, Tool, ToolCall, ToolCallResult};
+pub use tools::{create_inspect_tool, InspectTool};
 pub use types::{CompletionRequest, Message, ProviderSpec};
