@@ -54,8 +54,37 @@ DocumentService ✅
 - tree-sitterノードからのソース抽出 ✅
 - 型/関数/定数の識別 ✅
 
-### LLMツール - 未実装
-- tool callインターフェース
+### LLMツール - 部分実装
+- tool callインターフェース（基本構造のみ） ✅
+- inspectツール本実装 ❌
+
+#### inspectツール設計仕様（未実装）
+**重要**: このツールはscopeとsymbolの両方のパラメータが必須です。
+
+**パラメータ**:
+- `scope` (必須): 調査対象を含むスコープのID（例: "SimpleCache", "cacheItem"）
+- `symbol` (必須): scope内の特定シンボル名（例: "items", "value", "Get"）
+
+**期待される動作**（未実装）:
+- 指定されたscope内のsymbolの詳細な型情報や構造を返す
+- symbolがフィールドの場合: その型定義を返す
+- symbolがメソッドの場合: シグネチャと実装を返す
+
+**使用例**:
+```json
+// SimpleCacheのitemsフィールドを調査
+{"scope": "SimpleCache", "symbol": "items"}
+// → map[string]cacheItem の詳細情報を返す
+
+// cacheItem型のvalueフィールドを調査
+{"scope": "cacheItem", "symbol": "value"}  
+// → any型の情報を返す
+```
+
+**実装上の課題**:
+- 現在はプレースホルダー応答のみ
+- SymbolInspectorとの適切な統合が必要
+- scope内の特定symbolを調査するロジックが未実装
 
 ### Generation Task ✅
 - SymbolInspector統合 ✅

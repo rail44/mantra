@@ -1,33 +1,43 @@
 use crate::parser::target::Target;
 use std::collections::HashMap;
 
-/// Build a prompt with type definitions for generating Go code implementation
+/// Build a system prompt for Go code generation
+pub fn build_system_prompt() -> String {
+    "You are a Go code generator. Your task is to implement function bodies based on the given signatures and instructions.
+
+IMPORTANT RULES:
+1. Return ONLY the Go code that goes inside the function body
+2. Do NOT include any explanations, comments, or text before or after the code
+3. Do NOT include the function signature or curly braces
+4. Do NOT use markdown formatting, code blocks, or backticks
+5. Return just the raw Go statements that implement the function
+
+If you need to investigate type structures, use the 'inspect' tool.
+
+Examples:
+- For a function that returns the sum: return a + b
+- For a function that initializes a struct: return &MyStruct{field: value}
+- For a void function that prints: fmt.Println(message)".to_string()
+}
+
+/// Build a user prompt with type definitions for generating Go code implementation
 pub fn build_prompt_with_types(
     target: &Target,
     type_definitions: &HashMap<String, String>,
 ) -> String {
-    let mut prompt = format!(
-        "Generate the Go implementation for this function:\n\n\
-         Function signature: {}\n",
-        target.signature
-    );
+    let mut prompt = format!("Function signature: {}\n", target.signature);
 
     // Add type definitions if available
     if !type_definitions.is_empty() {
-        prompt.push_str("\nType definitions:\n");
+        prompt.push_str("\nAvailable type definitions:\n");
         for (scope_id, definition) in type_definitions {
-            prompt.push_str(&format!(
-                "<scope id=\"{scope_id}\">\n{definition}\n</scope>\n\n"
-            ));
+            prompt.push_str(&format!("Type {}: {}\n", scope_id, definition));
         }
     }
 
     // Add instruction
     prompt.push_str(&format!(
-        "Instruction: {}\n\n\
-         Use the 'inspect' tool to investigate type structures if you need more details about types.\n\n\
-         Then return only the code that goes inside the function body (without the curly braces).\n\
-         For example, if the function should add two numbers, just return: return a + b",
+        "\nTask: {}",
         if target.instruction.is_empty() {
             "Implement this function"
         } else {

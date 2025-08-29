@@ -32,6 +32,15 @@ impl Message {
         }
     }
 
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::System,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,

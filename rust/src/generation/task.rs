@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::inspector::SymbolInspector;
-use crate::llm::{CompletionRequest, LLMClient, Message};
+use crate::llm::{CompletionRequest, InspectTool, LLMClient, Message};
 use crate::parser::target::Target;
 use crate::workspace::WorkspaceService;
 
@@ -33,8 +33,12 @@ async fn generate_for_target(
     // Collect detailed type definitions using SymbolInspector
     let inspector = SymbolInspector::new(workspace);
     let mut type_definitions = HashMap::new();
+    let mut type_scope_mapping = HashMap::new();
 
     for type_ref in target.type_references.iter() {
+        // Build mapping from scope_id to AST path for InspectTool
+        type_scope_mapping.insert(type_ref.scope_id.clone(), type_ref.path.clone());
+
         match inspector.inspect_by_path(&target.uri, &type_ref.path).await {
             Ok(scoped_code) => {
                 // Use scope_id as key instead of generic type_i
@@ -58,15 +62,20 @@ async fn generate_for_target(
         }
     }
 
-    // Build prompt with type information
-    let prompt = super::build_prompt_with_types(target, &type_definitions);
-    tracing::debug!("Generated prompt:\n{}", prompt);
+    // Build prompts
+    let system_prompt = super::build_system_prompt();
+    let user_prompt = super::build_prompt_with_types(target, &type_definitions);
+    tracing::debug!("System prompt:\n{}", system_prompt);
+    tracing::debug!("User prompt:\n{}", user_prompt);
 
     // Generate using LLM with tool support
     let tools = vec![crate::llm::create_inspect_tool()];
 
+    // Create InspectTool with necessary context
+    let inspect_tool = InspectTool::new(workspace.clone(), target.uri.clone(), type_scope_mapping);
+
     // Handle conversation with tool calls
-    let mut messages = vec![Message::user(prompt)];
+    let mut messages = vec![Message::system(system_prompt), Message::user(user_prompt)];
     let mut max_iterations = 5; // Prevent infinite loops
 
     loop {
@@ -99,7 +108,12 @@ async fn generate_for_target(
 
                 // Execute each tool call and add results
                 for tool_call in tool_calls {
-                    match crate::llm::execute_tool_call(tool_call).await {
+                    let result = match tool_call.function.name.as_str() {
+                        "inspect" => inspect_tool.execute(tool_call).await,
+                        _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_call.function.name)),
+                    };
+
+                    match result {
                         Ok(result) => {
                             tracing::debug!(
                                 "Tool call executed: {} -> {}",
