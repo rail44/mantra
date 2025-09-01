@@ -47,6 +47,36 @@ impl<'a> SymbolInspector<'a> {
 
         Ok(ScopedCode { content })
     }
+
+    /// Inspect a specific symbol within a scoped code definition
+    pub async fn inspect_symbol(
+        &self,
+        uri: &str,
+        ast_path: &[PathSegment],
+        symbol_name: &str,
+    ) -> Result<ScopedCode> {
+        // 1. Open document
+        let doc_service = self.workspace.open_document(uri).await?;
+
+        // 2. Get definition for the symbol within the node at AST path
+        let definition_response = doc_service
+            .get_definition_at_path_with_symbol(ast_path, Some(symbol_name))
+            .await?;
+
+        // 3. Extract definition location
+        let target_location = extract_first_location(definition_response)?;
+
+        // 4. Open target document
+        let target_doc = self
+            .workspace
+            .open_document(target_location.uri.as_str())
+            .await?;
+
+        // 5. Get the full definition using tree-sitter
+        let content = target_doc.get_full_definition_at(&target_location.range)?;
+
+        Ok(ScopedCode { content })
+    }
 }
 
 /// Extract the first location from a `GotoDefinitionResponse`
@@ -71,7 +101,105 @@ fn extract_first_location(response: Option<GotoDefinitionResponse>) -> Result<ls
 mod tests {
     use super::*;
     use crate::config::Config;
-    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn test_symbol_inspector_inspect_symbol() -> Result<()> {
+        // Initialize logging for test
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("warn,mantra=debug")
+            .try_init();
+
+        // Create a test Go file with struct and fields
+        let test_dir = std::env::temp_dir().join("mantra_inspector_symbol_test");
+        std::fs::create_dir_all(&test_dir)?;
+
+        let test_file = test_dir.join("test.go");
+        std::fs::write(
+            &test_file,
+            r#"package main
+
+type User struct {
+    Name string
+    Age  int
+    Profile UserProfile
+}
+
+type UserProfile struct {
+    Bio string
+    Location string
+}
+
+func ProcessUser(user *User) {
+    // mantra: implement user processing logic
+    panic("not implemented")
+}
+"#,
+        )?;
+
+        // Create a test config file
+        let config_file = test_dir.join("mantra.toml");
+        std::fs::write(
+            &config_file,
+            r#"# Test configuration
+model = "test-model"
+url = "http://localhost:8080"
+api_key = "test-key"
+"#,
+        )?;
+
+        // Setup workspace
+        let config = Config::load(&test_file)?;
+        let workspace = WorkspaceService::new(test_dir.clone(), config).await?;
+
+        // Create inspector
+        let inspector = SymbolInspector::new(&workspace);
+
+        // Create AST path to the User type definition
+        let ast_path = vec![
+            PathSegment {
+                node_kind: "source_file".to_string(),
+                field_name: None,
+                index: None,
+            },
+            PathSegment {
+                node_kind: "type_declaration".to_string(),
+                field_name: None,
+                index: Some(0), // First type declaration (User)
+            },
+            PathSegment {
+                node_kind: "type_spec".to_string(),
+                field_name: None,
+                index: Some(0), // First type spec in declaration
+            },
+        ];
+
+        let uri = format!("file://{}", test_file.display());
+
+        println!("Testing inspect_symbol for 'Profile' field in User struct...");
+        match inspector.inspect_symbol(&uri, &ast_path, "Profile").await {
+            Ok(scoped_code) => {
+                println!("Success!");
+                println!("  Content: {}", scoped_code.content.trim());
+
+                // Basic assertions
+                assert!(scoped_code.content.contains("UserProfile")); // Should contain UserProfile definition
+                assert!(!scoped_code.content.is_empty());
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                eprintln!("Test file exists: {}", test_file.exists());
+                if test_file.exists() {
+                    eprintln!("File content:\n{}", std::fs::read_to_string(&test_file)?);
+                }
+                return Err(e);
+            }
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&test_dir);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_symbol_inspector_basic() -> Result<()> {

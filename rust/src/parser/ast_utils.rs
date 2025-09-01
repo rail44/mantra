@@ -68,6 +68,97 @@ fn find_first_child_of_kind<'a>(parent: &Node<'a>, kind: &str) -> Option<Node<'a
     result
 }
 
+/// Find a symbol (field or method) within a node with text comparison
+pub fn find_symbol_in_node<'a>(
+    parent: &Node<'a>,
+    symbol_name: &str,
+    rope: &crop::Rope,
+) -> Option<Node<'a>> {
+    // Search through different node types that might contain symbols
+    match parent.kind() {
+        // For struct types, look in field_declaration_list
+        "struct_type" => {
+            // Look for field_declaration_list among children
+            let mut cursor = parent.walk();
+            for child in parent.children(&mut cursor) {
+                if child.kind() == "field_declaration_list" {
+                    return find_field_in_list(&child, symbol_name, rope);
+                }
+            }
+            None
+        }
+        // For interface types, look in method_spec_list
+        "interface_type" => {
+            if let Some(method_list) = parent.child_by_field_name("methods") {
+                find_method_in_list(&method_list, symbol_name, rope)
+            } else {
+                None
+            }
+        }
+        // For type_spec, look inside the type definition
+        "type_spec" => {
+            if let Some(type_node) = parent.child_by_field_name("type") {
+                find_symbol_in_node(&type_node, symbol_name, rope)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Find a field in a field_declaration_list
+fn find_field_in_list<'a>(
+    field_list: &Node<'a>,
+    field_name: &str,
+    rope: &crop::Rope,
+) -> Option<Node<'a>> {
+    let mut cursor = field_list.walk();
+
+    for child in field_list.children(&mut cursor) {
+        if child.kind() == "field_declaration" {
+            // Look for field_identifier within this field_declaration
+            let mut field_cursor = child.walk();
+            for field_child in child.children(&mut field_cursor) {
+                if field_child.kind() == "field_identifier" {
+                    // Get the text content and compare
+                    let field_text = rope
+                        .byte_slice(field_child.start_byte()..field_child.end_byte())
+                        .to_string();
+                    if field_text == field_name {
+                        return Some(field_child);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find a method in a method_spec_list
+fn find_method_in_list<'a>(
+    method_list: &Node<'a>,
+    method_name: &str,
+    rope: &crop::Rope,
+) -> Option<Node<'a>> {
+    let mut cursor = method_list.walk();
+
+    for child in method_list.children(&mut cursor) {
+        if child.kind() == "method_spec" {
+            // Look for method name within this method_spec
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let method_text = rope
+                    .byte_slice(name_node.start_byte()..name_node.end_byte())
+                    .to_string();
+                if method_text == method_name {
+                    return Some(name_node);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Build a path from root to a given node
 pub fn build_path_to_node(target: &Node, root: &Node) -> Vec<PathSegment> {
     let mut path = Vec::new();

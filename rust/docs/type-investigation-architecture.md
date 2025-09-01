@@ -40,3 +40,27 @@ InspectTool ✅
 - **inspectツールのsymbol機能**：現在symbolパラメータを受け取るが、実際には型定義全体を返すだけ
   - 期待動作：`inspect(scope="SimpleCache", symbol="items")`で特定フィールドの型情報のみ返す
   - 現状：symbolの有無に関わらず型定義全体を返す（プレースホルダー実装）
+
+## 実装計画
+
+### 1. SymbolInspectorに新メソッド追加
+- `inspect_symbol()`メソッドを追加
+- scopeで指定されたコード片内の特定symbolの定義を調査
+- 定義先ドキュメント内でsymbolを検索し、LSP definitionを実行
+
+### 2. ast_utilsにヘルパー関数追加
+- コード片内でのsymbol検索機能
+- 構造体/インターフェース内でフィールド/メソッドを検索
+
+### 3. InspectToolの修正
+- symbolパラメータを必須に変更
+- symbolがある場合は新しい`inspect_symbol()`を呼ぶ
+- 動的scope管理の追加（新しいscopeを登録）
+
+### 4. レスポンス形式の改善
+- 新しいscope_idとcontentを含む構造化された応答
+- LLMが連鎖的に調査できる形式
+
+### 5. 動的scope管理
+- inspectの結果を新しいscopeとして登録
+- 階層的な型調査を可能にする

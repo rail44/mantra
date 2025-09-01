@@ -454,10 +454,20 @@ impl DocumentService {
         &self,
         ast_path: &[crate::parser::target::PathSegment],
     ) -> Result<Option<lsp_types::GotoDefinitionResponse>> {
-        use crate::parser::ast_utils::find_node_by_path;
+        self.get_definition_at_path_with_symbol(ast_path, None)
+            .await
+    }
 
-        // Get tree and snapshot
-        let (tree, snapshot, uri) = {
+    /// Get definition location for a node or symbol within the node at the given AST path
+    pub async fn get_definition_at_path_with_symbol(
+        &self,
+        ast_path: &[crate::parser::target::PathSegment],
+        symbol_name: Option<&str>,
+    ) -> Result<Option<lsp_types::GotoDefinitionResponse>> {
+        use crate::parser::ast_utils::{find_node_by_path, find_symbol_in_node};
+
+        // Get tree, rope, snapshot and uri
+        let (tree, rope, snapshot, uri) = {
             let doc = self
                 .document
                 .read()
@@ -469,18 +479,27 @@ impl DocumentService {
                 .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
                 .clone();
 
+            let rope = doc.editor.rope().clone();
             let snapshot = doc.editor.fork();
             let uri = doc.uri.clone();
 
-            (tree, snapshot, uri)
+            (tree, rope, snapshot, uri)
         };
 
         // Find node by path
         let node = find_node_by_path(&tree.root_node(), ast_path)
             .ok_or_else(|| anyhow::anyhow!("Node not found at path"))?;
 
+        // Find target node (either the node itself or a symbol within it)
+        let target_node = if let Some(symbol) = symbol_name {
+            find_symbol_in_node(&node, symbol, &rope)
+                .ok_or_else(|| anyhow::anyhow!("Symbol '{}' not found in node", symbol))?
+        } else {
+            node
+        };
+
         // Convert byte position to LSP position
-        let position = snapshot.byte_to_lsp_position(node.start_byte());
+        let position = snapshot.byte_to_lsp_position(target_node.start_byte());
 
         // Request definition from LSP
         let text_document = lsp_types::TextDocumentIdentifier { uri: uri.parse()? };
