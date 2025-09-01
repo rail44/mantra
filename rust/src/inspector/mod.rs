@@ -7,12 +7,8 @@ use crate::workspace::WorkspaceService;
 /// Scoped code information with AST path
 #[derive(Debug, Clone)]
 pub struct ScopedCode {
-    /// AST path from root to this node
-    pub ast_path: Vec<PathSegment>,
     /// Extracted code content
     pub content: String,
-    /// Document URI
-    pub uri: String,
 }
 
 /// Symbol inspector for type investigation
@@ -51,11 +47,7 @@ impl<'a> SymbolInspector<'a> {
             .get_full_definition_at(&target_location.range)
             .await?;
 
-        Ok(ScopedCode {
-            ast_path: ast_path.to_vec(),
-            content,
-            uri: target_location.uri.to_string(),
-        })
+        Ok(ScopedCode { content })
     }
 }
 
@@ -168,14 +160,11 @@ api_key = "test-key"
         match inspector.inspect_by_path(&uri, &ast_path).await {
             Ok(scoped_code) => {
                 println!("Success!");
-                println!("  URI: {}", scoped_code.uri);
                 println!("  Content: {}", scoped_code.content.trim());
 
                 // Basic assertions
-                assert_eq!(scoped_code.uri, uri); // Should point to same file (User definition)
                 assert!(scoped_code.content.contains("User")); // Should contain User type
                 assert!(!scoped_code.content.is_empty());
-                assert_eq!(scoped_code.ast_path.len(), ast_path.len());
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -192,7 +181,6 @@ api_key = "test-key"
         }
 
         // Cleanup
-        workspace.shutdown().await?;
         let _ = std::fs::remove_dir_all(&test_dir); // Ignore cleanup errors
 
         Ok(())

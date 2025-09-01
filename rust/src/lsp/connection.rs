@@ -1,16 +1,15 @@
 use anyhow::Result;
 use jsonrpsee::core::client::{Client as RpcClient, ClientBuilder};
 use tokio::io::BufReader as AsyncBufReader;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tracing::info;
 
 use crate::lsp::transport::{StdioReceiver, StdioSender};
 
-/// LSP connection that manages the process and RPC client
+/// LSP connection that manages the RPC client
 #[derive(Debug)]
 pub struct LspConnection {
     pub client: RpcClient,
-    pub process: Child,
 }
 
 impl LspConnection {
@@ -39,12 +38,6 @@ impl LspConnection {
         // Build the RPC client
         let client = ClientBuilder::default().build_with_tokio(sender, receiver);
 
-        Ok(Self { client, process })
-    }
-
-    /// Shutdown the LSP process
-    pub async fn shutdown(mut self) -> Result<()> {
-        self.process.kill().await?;
-        Ok(())
+        Ok(Self { client })
     }
 }

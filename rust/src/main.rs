@@ -96,9 +96,6 @@ async fn generate_command(file: PathBuf) -> Result<()> {
     // Output to stdout
     print!("{result}");
 
-    // Shutdown workspace
-    workspace.shutdown().await?;
-
     total_timer.stop();
     Ok(())
 }

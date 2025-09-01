@@ -173,63 +173,57 @@ impl Document {
         // For method declarations, collect receiver type
         if func_node.kind() == "method_declaration" {
             if let Some(receiver_list) = func_node.child_by_field_name("receiver") {
-                self.collect_types_from_node(
-                    &receiver_list,
-                    &root_node,
-                    rope,
-                    &mut type_references,
-                );
+                collect_types_from_node(&receiver_list, &root_node, rope, &mut type_references);
             }
         }
 
         // Collect parameter types
         if let Some(params) = func_node.child_by_field_name("parameters") {
-            self.collect_types_from_node(&params, &root_node, rope, &mut type_references);
+            collect_types_from_node(&params, &root_node, rope, &mut type_references);
         }
 
         // Collect return types
         if let Some(result) = func_node.child_by_field_name("result") {
-            self.collect_types_from_node(&result, &root_node, rope, &mut type_references);
+            collect_types_from_node(&result, &root_node, rope, &mut type_references);
         }
 
         type_references
     }
+}
 
-    /// Recursively collect type nodes and create TypeReference objects
-    fn collect_types_from_node(
-        &self,
-        node: &tree_sitter::Node,
-        root_node: &tree_sitter::Node,
-        rope: &crop::Rope,
-        type_references: &mut Vec<TypeReference>,
-    ) {
-        use crate::parser::ast_utils::build_path_to_node;
+/// Recursively collect type nodes and create TypeReference objects
+fn collect_types_from_node(
+    node: &tree_sitter::Node,
+    root_node: &tree_sitter::Node,
+    rope: &crop::Rope,
+    type_references: &mut Vec<TypeReference>,
+) {
+    use crate::parser::ast_utils::build_path_to_node;
 
-        match node.kind() {
-            "type_identifier" | "pointer_type" | "slice_type" | "array_type" | "channel_type"
-            | "map_type" => {
-                // Build path from root to this type node
-                let path = build_path_to_node(node, root_node);
-                // Extract type name from the entire type node (preserves modifiers like *, [])
-                let scope_id = rope
-                    .byte_slice(node.start_byte()..node.end_byte())
-                    .to_string();
-                type_references.push(TypeReference { path, scope_id });
-            }
-            "qualified_type" => {
-                // For qualified types like time.Duration, get the entire qualified type
-                let path = build_path_to_node(node, root_node);
-                let scope_id = rope
-                    .byte_slice(node.start_byte()..node.end_byte())
-                    .to_string();
-                type_references.push(TypeReference { path, scope_id });
-            }
-            _ => {
-                // Recursively check children for other node types
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    self.collect_types_from_node(&child, root_node, rope, type_references);
-                }
+    match node.kind() {
+        "type_identifier" | "pointer_type" | "slice_type" | "array_type" | "channel_type"
+        | "map_type" => {
+            // Build path from root to this type node
+            let path = build_path_to_node(node, root_node);
+            // Extract type name from the entire type node (preserves modifiers like *, [])
+            let scope_id = rope
+                .byte_slice(node.start_byte()..node.end_byte())
+                .to_string();
+            type_references.push(TypeReference { path, scope_id });
+        }
+        "qualified_type" => {
+            // For qualified types like time.Duration, get the entire qualified type
+            let path = build_path_to_node(node, root_node);
+            let scope_id = rope
+                .byte_slice(node.start_byte()..node.end_byte())
+                .to_string();
+            type_references.push(TypeReference { path, scope_id });
+        }
+        _ => {
+            // Recursively check children for other node types
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_types_from_node(&child, root_node, rope, type_references);
             }
         }
     }
@@ -472,30 +466,6 @@ impl DocumentService {
         }
     }
 
-    /// Get content at a specific range (currently returns whole lines)
-    pub fn get_content_at_range(&self, range: &lsp_types::Range) -> Result<String> {
-        let doc = self
-            .document
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
-
-        let rope = doc.editor.rope();
-
-        // TODO: Handle exact character positions with UTF-16
-        // For MVP, get the whole line(s) covered by the range
-        let start_line = range.start.line as usize;
-        let end_line = range.end.line as usize;
-
-        let start_byte = rope.byte_of_line(start_line);
-        let end_byte = if end_line + 1 < rope.line_len() {
-            rope.byte_of_line(end_line + 1)
-        } else {
-            rope.byte_len()
-        };
-
-        Ok(rope.byte_slice(start_byte..end_byte).to_string())
-    }
-
     /// Get definition location for a node at the given AST path
     pub async fn get_definition_at_path(
         &self,
@@ -602,71 +572,5 @@ impl DocumentService {
         }
 
         Ok(())
-    }
-
-    /// Get hover information for a type at a given AST path
-    pub async fn get_hover_for_path(
-        &self,
-        ast_path: &[crate::parser::target::PathSegment],
-    ) -> Result<Option<String>> {
-        use crate::parser::ast_utils::find_node_by_path;
-
-        tracing::trace!("Getting hover for path: {:?}", ast_path);
-
-        // Get current document state
-        let (tree, uri, snapshot) = {
-            let doc = self
-                .document
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
-
-            let tree = doc
-                .editor
-                .tree()
-                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
-                .clone();
-
-            let uri = doc.uri.clone();
-            let snapshot = doc.editor.fork();
-
-            (tree, uri, snapshot)
-        };
-
-        // Find node by path
-        if let Some(node) = find_node_by_path(&tree.root_node(), ast_path) {
-            // Convert byte position to LSP position
-            let position = snapshot.byte_to_lsp_position(node.start_byte());
-
-            // Request hover from LSP
-            let text_document = lsp_types::TextDocumentIdentifier { uri: uri.parse()? };
-
-            if let Some(hover) = self.lsp_client.hover(text_document, position).await? {
-                // Extract hover content
-                return Ok(Some(extract_hover_content(hover)));
-            }
-        }
-
-        Ok(None)
-    }
-}
-
-/// Extract hover content as a string
-fn extract_hover_content(hover: lsp_types::Hover) -> String {
-    use lsp_types::{HoverContents, MarkedString};
-
-    match hover.contents {
-        HoverContents::Scalar(scalar) => match scalar {
-            MarkedString::String(s) => s,
-            MarkedString::LanguageString(ls) => ls.value,
-        },
-        HoverContents::Array(array) => array
-            .into_iter()
-            .map(|ms| match ms {
-                MarkedString::String(s) => s,
-                MarkedString::LanguageString(ls) => ls.value,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        HoverContents::Markup(markup) => markup.value,
     }
 }

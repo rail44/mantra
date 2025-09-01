@@ -181,18 +181,6 @@ impl Client {
         Ok(())
     }
 
-    /// Shutdown the LSP server (consumes self)
-    /// Note: Because the client is Clone, ensure all clones are dropped before shutdown
-    pub async fn shutdown(self) -> Result<()> {
-        // Try to get the inner connection if this is the last reference
-        if let Ok(connection) = Arc::try_unwrap(self.connection) {
-            connection.shutdown().await
-        } else {
-            tracing::warn!("Cannot shutdown LSP server: other references still exist");
-            Ok(())
-        }
-    }
-
     /// Check if the server supports document formatting
     pub async fn supports_document_formatting(&self) -> bool {
         let capabilities = self.server_capabilities.read().await;
@@ -287,38 +275,6 @@ impl Client {
         } else {
             // Parse the various response formats
             parse_goto_definition_response(result).map(Some)
-        }
-    }
-
-    /// Get hover information at a position
-    pub async fn hover(
-        &self,
-        text_document: TextDocumentIdentifier,
-        position: lsp_types::Position,
-    ) -> Result<Option<lsp_types::Hover>> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct HoverParams {
-            text_document: TextDocumentIdentifier,
-            position: lsp_types::Position,
-        }
-
-        let params = HoverParams {
-            text_document,
-            position,
-        };
-
-        let result: Value = self
-            .connection
-            .client
-            .request("textDocument/hover", params.to_object_params()?)
-            .await?;
-
-        // Handle null response as None
-        if result.is_null() {
-            Ok(None)
-        } else {
-            Ok(Some(serde_json::from_value(result)?))
         }
     }
 }

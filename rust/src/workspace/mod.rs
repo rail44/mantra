@@ -4,7 +4,6 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tracing::info;
 
 use crate::config::Config;
 use crate::llm::LLMClient;
@@ -24,8 +23,6 @@ pub struct WorkspaceService {
     lsp_client: LspClient,
     /// LLM client
     llm_client: LLMClient,
-    /// Configuration
-    config: Config,
 }
 
 impl Workspace {
@@ -68,7 +65,6 @@ impl WorkspaceService {
             workspace: Arc::new(RwLock::new(workspace)),
             lsp_client,
             llm_client,
-            config,
         })
     }
 }
@@ -194,18 +190,5 @@ impl WorkspaceService {
         }
 
         Ok(document)
-    }
-
-    /// Shutdown the workspace
-    pub async fn shutdown(self) -> Result<()> {
-        info!("Shutting down Workspace");
-
-        // Clear all documents
-        drop(self.workspace);
-
-        // LSP server will be automatically terminated when the process exits
-        // No need for explicit shutdown
-
-        Ok(())
     }
 }

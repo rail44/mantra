@@ -41,15 +41,6 @@ impl Message {
         }
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::Assistant,
-            content: content.into(),
-            tool_calls: None,
-            tool_call_id: None,
-        }
-    }
-
     pub fn tool(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
