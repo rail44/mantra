@@ -1,9 +1,9 @@
 use crate::inspector::SymbolInspector;
 use crate::parser::target::PathSegment;
 use crate::workspace::WorkspaceService;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Tool function definition for LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,14 +48,14 @@ pub struct ToolCallResult {
 pub struct InspectTool {
     workspace: WorkspaceService,
     document_uri: String,
-    type_scope_mapping: HashMap<String, Vec<PathSegment>>,
+    type_scope_mapping: FxHashMap<String, Vec<PathSegment>>,
 }
 
 impl InspectTool {
     pub fn new(
         workspace: WorkspaceService,
         document_uri: String,
-        type_scope_mapping: HashMap<String, Vec<PathSegment>>,
+        type_scope_mapping: FxHashMap<String, Vec<PathSegment>>,
     ) -> Self {
         Self {
             workspace,

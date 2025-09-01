@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::inspector::SymbolInspector;
 use crate::llm::{CompletionRequest, InspectTool, LLMClient, Message};
@@ -32,8 +32,8 @@ async fn generate_for_target(
 ) -> Result<String> {
     // Collect detailed type definitions using SymbolInspector
     let inspector = SymbolInspector::new(workspace);
-    let mut type_definitions = HashMap::new();
-    let mut type_scope_mapping = HashMap::new();
+    let mut type_definitions = FxHashMap::default();
+    let mut type_scope_mapping = FxHashMap::default();
 
     for type_ref in &target.type_references {
         // Build mapping from scope_id to AST path for InspectTool

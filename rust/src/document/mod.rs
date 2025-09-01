@@ -2,7 +2,7 @@ use anyhow::Result;
 use lsp_types::{
     DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -516,7 +516,7 @@ impl DocumentService {
             trim_trailing_whitespace: Some(true),
             insert_final_newline: Some(true),
             trim_final_newlines: Some(true),
-            properties: HashMap::default(),
+            properties: std::collections::HashMap::new(),
         };
 
         match self

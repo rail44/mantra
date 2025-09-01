@@ -1,7 +1,7 @@
 pub use crate::document::{Document, DocumentService};
 
 use anyhow::Result;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -12,7 +12,7 @@ use crate::lsp::Client as LspClient;
 /// Workspace managing documents (state only)
 pub struct Workspace {
     /// Documents by file URI
-    documents: HashMap<String, DocumentService>,
+    documents: FxHashMap<String, DocumentService>,
 }
 
 /// Service wrapper for Workspace with external dependencies  
@@ -29,7 +29,7 @@ impl Workspace {
     /// Create a new empty workspace
     pub fn new() -> Self {
         Self {
-            documents: HashMap::new(),
+            documents: FxHashMap::default(),
         }
     }
 }

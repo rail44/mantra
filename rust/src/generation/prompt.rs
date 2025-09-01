@@ -1,5 +1,5 @@
 use crate::parser::target::Target;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt::Write;
 
 /// Build a system prompt for Go code generation
@@ -24,7 +24,7 @@ Examples:
 /// Build a user prompt with type definitions for generating Go code implementation
 pub fn build_prompt_with_types(
     target: &Target,
-    type_definitions: &HashMap<String, String>,
+    type_definitions: &FxHashMap<String, String>,
 ) -> String {
     let mut prompt = format!("Function signature: {}\n", target.signature);
 
