@@ -38,7 +38,7 @@ impl WorkspaceService {
     /// Create a new workspace service
     pub async fn new(root_dir: PathBuf, config: Config) -> Result<Self> {
         // Initialize LSP client
-        let lsp_client = LspClient::new("gopls", &[]).await?;
+        let lsp_client = LspClient::new("gopls", &[])?;
 
         // Initialize workspace with LSP
         let workspace_uri = format!("file://{}", root_dir.display());

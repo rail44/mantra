@@ -14,7 +14,7 @@ pub struct LspConnection {
 
 impl LspConnection {
     /// Create a new LSP connection by starting a language server process
-    pub async fn new(command: &str, args: &[&str]) -> Result<Self> {
+    pub fn new(command: &str, args: &[&str]) -> Result<Self> {
         info!("Starting LSP server: {} {:?}", command, args);
 
         let mut cmd = Command::new(command);

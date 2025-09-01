@@ -136,9 +136,11 @@ impl Document {
         );
 
         // Apply edit using byte offsets directly with a forked snapshot
-        let change =
-            self.editor
-                .apply_byte_edit(&target.byte_range, replacement, target.snapshot.fork())?;
+        let change = self.editor.apply_byte_edit(
+            &target.byte_range,
+            &replacement,
+            target.snapshot.fork(),
+        )?;
 
         Ok(vec![change])
     }
@@ -308,7 +310,7 @@ impl DocumentService {
                 .write()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
             let version_before = doc.editor.get_version();
-            let changes = doc.apply_generation(&target, &new_body)?;
+            let changes = doc.apply_generation(&target, new_body)?;
             // Mark this generation as complete
             doc.complete_generation(checksum);
             let version_after = doc.editor.get_version();
@@ -376,7 +378,7 @@ impl DocumentService {
     }
 
     /// Get the full definition at a range using tree-sitter
-    pub async fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<String> {
+    pub fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<String> {
         // Use the existing tree from this document
         let doc = self.document.read().unwrap();
         let tree = doc
@@ -405,7 +407,7 @@ impl DocumentService {
         while let Some(n) = current {
             match n.kind() {
                 // Type, constant, variable, method spec, and field definitions
-                "type_spec" | "type_declaration" | "const_spec" | "const_declaration" 
+                "type_spec" | "type_declaration" | "const_spec" | "const_declaration"
                 | "var_spec" | "var_declaration" | "method_spec" | "field_declaration" => {
                     definition_range = Some((n.start_byte(), n.end_byte()));
                     break;

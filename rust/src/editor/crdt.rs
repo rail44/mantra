@@ -265,10 +265,10 @@ impl CrdtEditor {
     pub fn apply_byte_edit(
         &mut self,
         byte_range: &StdRange<usize>,
-        new_text: String,
+        new_text: &str,
         mut snapshot: Snapshot,
     ) -> Result<TextDocumentContentChangeEvent> {
-        let result = self.apply_byte_edit_internal(byte_range, &new_text, &mut snapshot)?;
+        let result = self.apply_byte_edit_internal(byte_range, new_text, &mut snapshot)?;
         self.increment_version();
         Ok(result)
     }
@@ -308,22 +308,18 @@ mod tests {
         // Test insertion using apply_byte_edit
         let snapshot = editor.fork();
         editor
-            .apply_byte_edit(&(7..7), "beautiful ".to_string(), snapshot)
+            .apply_byte_edit(&(7..7), "beautiful ", snapshot)
             .unwrap();
         assert_eq!(editor.get_text(), "Hello, beautiful world!");
 
         // Test deletion using apply_byte_edit
         let snapshot = editor.fork();
-        editor
-            .apply_byte_edit(&(7..17), String::new(), snapshot)
-            .unwrap();
+        editor.apply_byte_edit(&(7..17), "", snapshot).unwrap();
         assert_eq!(editor.get_text(), "Hello, world!");
 
         // Test replacement using apply_byte_edit
         let snapshot = editor.fork();
-        editor
-            .apply_byte_edit(&(7..12), "Rust".to_string(), snapshot)
-            .unwrap();
+        editor.apply_byte_edit(&(7..12), "Rust", snapshot).unwrap();
         assert_eq!(editor.get_text(), "Hello, Rust!");
     }
 }

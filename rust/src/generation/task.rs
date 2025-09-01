@@ -132,7 +132,7 @@ async fn generate_for_target(
                 // Continue the loop to get the next response
             } else {
                 // No tool calls, return the final response
-                return Ok(super::clean_generated_code(assistant_message.content));
+                return Ok(super::clean_generated_code(&assistant_message.content));
             }
         } else {
             return Err(anyhow::anyhow!("No response from LLM"));
@@ -142,7 +142,7 @@ async fn generate_for_target(
     // Fallback if we exit the loop
     if let Some(last_message) = messages.last() {
         if last_message.role == crate::llm::types::Role::Assistant {
-            return Ok(super::clean_generated_code(last_message.content.clone()));
+            return Ok(super::clean_generated_code(&last_message.content));
         }
     }
 

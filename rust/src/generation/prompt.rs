@@ -1,5 +1,6 @@
 use crate::parser::target::Target;
 use std::collections::HashMap;
+use std::fmt::Write;
 
 /// Build a system prompt for Go code generation
 pub fn build_system_prompt() -> String {
@@ -31,25 +32,27 @@ pub fn build_prompt_with_types(
     if !type_definitions.is_empty() {
         prompt.push_str("\nAvailable type definitions:\n");
         for (scope_id, definition) in type_definitions {
-            prompt.push_str(&format!("Type {scope_id}: {definition}\n"));
+            writeln!(&mut prompt, "Type {scope_id}: {definition}").unwrap();
         }
     }
 
     // Add instruction
-    prompt.push_str(&format!(
+    write!(
+        &mut prompt,
         "\nTask: {}",
         if target.instruction.is_empty() {
             "Implement this function"
         } else {
             &target.instruction
         }
-    ));
+    )
+    .unwrap();
 
     prompt
 }
 
 /// Clean generated code by removing markdown formatting and extra whitespace
-pub fn clean_generated_code(code: String) -> String {
+pub fn clean_generated_code(code: &str) -> String {
     let mut cleaned = code.trim().to_string();
 
     // Remove markdown code blocks if present
@@ -79,15 +82,15 @@ mod tests {
     #[test]
     fn test_clean_generated_code() {
         let code_with_markdown = "```go\nreturn a + b\n```".to_string();
-        let cleaned = clean_generated_code(code_with_markdown);
+        let cleaned = clean_generated_code(&code_with_markdown);
         assert_eq!(cleaned, "return a + b");
 
         let code_with_backticks = "```\nreturn a + b\n```".to_string();
-        let cleaned = clean_generated_code(code_with_backticks);
+        let cleaned = clean_generated_code(&code_with_backticks);
         assert_eq!(cleaned, "return a + b");
 
         let plain_code = "  return a + b  ".to_string();
-        let cleaned = clean_generated_code(plain_code);
+        let cleaned = clean_generated_code(&plain_code);
         assert_eq!(cleaned, "return a + b");
     }
 }

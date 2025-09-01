@@ -43,9 +43,7 @@ impl<'a> SymbolInspector<'a> {
         };
 
         // 5. Get the full definition using tree-sitter
-        let content = target_doc
-            .get_full_definition_at(&target_location.range)
-            .await?;
+        let content = target_doc.get_full_definition_at(&target_location.range)?;
 
         Ok(ScopedCode { content })
     }

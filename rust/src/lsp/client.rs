@@ -90,8 +90,8 @@ pub struct Client {
 
 impl Client {
     /// Start a new LSP server and create a client
-    pub async fn new(command: &str, args: &[&str]) -> Result<Self> {
-        let connection = LspConnection::new(command, args).await?;
+    pub fn new(command: &str, args: &[&str]) -> Result<Self> {
+        let connection = LspConnection::new(command, args)?;
         Ok(Self {
             connection: Arc::new(connection),
             server_capabilities: Arc::new(tokio::sync::RwLock::new(None)),
@@ -274,14 +274,14 @@ impl Client {
             Ok(None)
         } else {
             // Parse the various response formats
-            parse_goto_definition_response(result).map(Some)
+            parse_goto_definition_response(&result).map(Some)
         }
     }
 }
 
 /// Parse `GotoDefinitionResponse` from a JSON value
 /// Handles the three possible formats: Location, Location[], `LocationLink`[]
-fn parse_goto_definition_response(value: Value) -> Result<GotoDefinitionResponse> {
+fn parse_goto_definition_response(value: &Value) -> Result<GotoDefinitionResponse> {
     // First try to parse as a single Location
     if let Ok(location) = serde_json::from_value::<Location>(value.clone()) {
         return Ok(GotoDefinitionResponse::Scalar(location));
@@ -329,7 +329,7 @@ mod tests {
             }
         });
 
-        let result = parse_goto_definition_response(json).unwrap();
+        let result = parse_goto_definition_response(&json).unwrap();
         match result {
             GotoDefinitionResponse::Scalar(location) => {
                 assert_eq!(location.uri.as_str(), "file:///path/to/file.go");
@@ -358,7 +358,7 @@ mod tests {
             }
         ]);
 
-        let result = parse_goto_definition_response(json).unwrap();
+        let result = parse_goto_definition_response(&json).unwrap();
         match result {
             GotoDefinitionResponse::Array(locations) => {
                 assert_eq!(locations.len(), 2);
@@ -389,7 +389,7 @@ mod tests {
             }
         ]);
 
-        let result = parse_goto_definition_response(json).unwrap();
+        let result = parse_goto_definition_response(&json).unwrap();
         match result {
             GotoDefinitionResponse::Link(links) => {
                 assert_eq!(links.len(), 1);
@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn test_parse_goto_definition_response_empty_array() {
         let json = serde_json::json!([]);
-        let result = parse_goto_definition_response(json).unwrap();
+        let result = parse_goto_definition_response(&json).unwrap();
         match result {
             GotoDefinitionResponse::Array(locations) => {
                 assert!(locations.is_empty());
