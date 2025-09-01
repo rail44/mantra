@@ -72,7 +72,10 @@ impl InspectTool {
             .and_then(|s| s.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing required 'scope' parameter"))?;
 
-        let symbol = args.get("symbol").and_then(|s| s.as_str());
+        let symbol = args
+            .get("symbol")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing required 'symbol' parameter"))?;
 
         let inspector = SymbolInspector::new(&self.workspace);
 
@@ -86,23 +89,16 @@ impl InspectTool {
             .get(base_scope)
             .ok_or_else(|| anyhow::anyhow!("Unknown scope: {}", base_scope))?;
 
-        // Get the type definition using SymbolInspector
+        // Inspect specific symbol within the scope using SymbolInspector
         match inspector
-            .inspect_by_path(&self.document_uri, ast_path)
+            .inspect_symbol(&self.document_uri, ast_path, symbol)
             .await
         {
             Ok(scoped_code) => {
-                let response_content = if let Some(symbol) = symbol {
-                    // For now, return the full type definition when a symbol is requested
-                    // In the future, we can parse the type to extract specific field/method info
-                    format!(
-                        "Type '{}' with symbol '{}':\n{}\n\nFor nested inspection, use scope '{}.{}'",
-                        base_scope, symbol, scoped_code.content, scope, symbol
-                    )
-                } else {
-                    // Return the full type definition
-                    format!("Type '{}' definition:\n{}", base_scope, scoped_code.content)
-                };
+                let response_content = format!(
+                    "Symbol '{}' in '{}' definition:\n{}",
+                    symbol, base_scope, scoped_code.content
+                );
 
                 Ok(ToolCallResult {
                     tool_call_id: tool_call.id.clone(),
@@ -149,10 +145,10 @@ pub fn create_inspect_tool() -> Tool {
                     },
                     "symbol": {
                         "type": "string", 
-                        "description": "Optional symbol name within the scope to focus on"
+                        "description": "Symbol name within the scope to inspect (e.g., field name, method name)"
                     }
                 },
-                "required": ["scope"]
+                "required": ["scope", "symbol"]
             }),
         },
     }
@@ -160,3 +156,115 @@ pub fn create_inspect_tool() -> Tool {
 
 // Note: execute_tool_call is removed in favor of InspectTool::execute
 // The dispatcher logic should be handled by the caller with proper context
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::parser::target::PathSegment;
+    use crate::workspace::WorkspaceService;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_inspect_tool_with_symbol() -> anyhow::Result<()> {
+        // Initialize logging for test
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("warn,mantra=debug")
+            .try_init();
+
+        // Create a test Go file
+        let test_dir = std::env::temp_dir().join("mantra_inspect_tool_test");
+        std::fs::create_dir_all(&test_dir)?;
+
+        let test_file = test_dir.join("test.go");
+        std::fs::write(
+            &test_file,
+            r#"package main
+
+type SimpleCache struct {
+    items map[string]cacheItem
+    mu    sync.RWMutex
+}
+
+type cacheItem struct {
+    value any
+    expiry time.Time
+}
+"#,
+        )?;
+
+        // Create config
+        let config_file = test_dir.join("mantra.toml");
+        std::fs::write(
+            &config_file,
+            r#"model = "test-model"
+url = "http://localhost:8080"
+api_key = "test-key"
+"#,
+        )?;
+
+        // Setup workspace
+        let config = Config::load(&test_file)?;
+        let workspace = WorkspaceService::new(test_dir.clone(), config).await?;
+
+        // Create type_scope_mapping for SimpleCache
+        let mut type_scope_mapping = FxHashMap::default();
+        type_scope_mapping.insert(
+            "SimpleCache".to_string(),
+            vec![
+                PathSegment {
+                    node_kind: "source_file".to_string(),
+                    field_name: None,
+                    index: None,
+                },
+                PathSegment {
+                    node_kind: "type_declaration".to_string(),
+                    field_name: None,
+                    index: Some(0),
+                },
+                PathSegment {
+                    node_kind: "type_spec".to_string(),
+                    field_name: None,
+                    index: Some(0),
+                },
+            ],
+        );
+
+        // Create InspectTool
+        let uri = format!("file://{}", test_file.display());
+        let inspect_tool = InspectTool::new(workspace, uri, type_scope_mapping);
+
+        // Create a test tool call with symbol
+        let tool_call = ToolCall {
+            id: "test_call_1".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "inspect".to_string(),
+                arguments: json!({
+                    "scope": "SimpleCache",
+                    "symbol": "items"
+                })
+                .to_string(),
+            },
+        };
+
+        // Execute the tool call
+        match inspect_tool.execute(&tool_call).await {
+            Ok(result) => {
+                println!("Test result: {}", result.content);
+                assert!(result.content.contains("items"));
+                assert!(result.content.contains("map[string]cacheItem"));
+                println!("✅ Test passed: InspectTool with symbol works!");
+            }
+            Err(e) => {
+                eprintln!("❌ Test failed: {}", e);
+                return Err(e);
+            }
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&test_dir);
+
+        Ok(())
+    }
+}
