@@ -118,9 +118,9 @@ impl InspectTool {
                     || base_scope == "float64"
                     || base_scope == "float32"
                 {
-                    format!("'{}' is a built-in type", base_scope)
+                    format!("'{base_scope}' is a built-in type")
                 } else {
-                    format!("Failed to inspect '{}': {}", base_scope, e)
+                    format!("Failed to inspect '{base_scope}': {e}")
                 };
 
                 Ok(ToolCallResult {

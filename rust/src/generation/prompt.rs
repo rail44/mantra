@@ -31,7 +31,7 @@ pub fn build_prompt_with_types(
     if !type_definitions.is_empty() {
         prompt.push_str("\nAvailable type definitions:\n");
         for (scope_id, definition) in type_definitions {
-            prompt.push_str(&format!("Type {}: {}\n", scope_id, definition));
+            prompt.push_str(&format!("Type {scope_id}: {definition}\n"));
         }
     }
 

@@ -97,7 +97,7 @@ pub fn build_path_to_node(target: &Node, root: &Node) -> Vec<PathSegment> {
             for (i, child) in parent.children(&mut cursor).enumerate() {
                 if child.id() == node.id() {
                     // Found our node - check if it has a field name
-                    found_field = parent.field_name_for_child(i as u32);
+                    found_field = parent.field_name_for_child(u32::try_from(i).unwrap());
                     if found_field.is_none() && same_kind_count > 0 {
                         same_kind_index = Some(same_kind_count);
                     }

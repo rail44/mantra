@@ -35,7 +35,7 @@ async fn generate_for_target(
     let mut type_definitions = HashMap::new();
     let mut type_scope_mapping = HashMap::new();
 
-    for type_ref in target.type_references.iter() {
+    for type_ref in &target.type_references {
         // Build mapping from scope_id to AST path for InspectTool
         type_scope_mapping.insert(type_ref.scope_id.clone(), type_ref.path.clone());
 
@@ -125,7 +125,7 @@ async fn generate_for_target(
                         Err(e) => {
                             tracing::error!("Tool call failed: {}", e);
                             messages
-                                .push(Message::tool(format!("Error: {}", e), tool_call.id.clone()));
+                                .push(Message::tool(format!("Error: {e}"), tool_call.id.clone()));
                         }
                     }
                 }

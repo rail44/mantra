@@ -17,7 +17,7 @@ pub struct PathSegment {
 pub struct TypeReference {
     /// AST path to locate the type node
     pub path: Vec<PathSegment>,
-    /// Type name identifier (e.g., "SimpleCache", "*User", "[]string")
+    /// Type name identifier (e.g., "`SimpleCache`", "*User", "[]string")
     /// Can be hierarchical like "SimpleCache.FieldName" for nested inspection
     pub scope_id: String,
 }

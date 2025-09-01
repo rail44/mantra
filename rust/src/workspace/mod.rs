@@ -114,7 +114,7 @@ impl WorkspaceService {
             .await?;
 
         // Create document service
-        let d = Document::new(absolute_path.clone(), file_uri.clone())?;
+        let d = Document::new(&absolute_path, file_uri.clone())?;
         let document = DocumentService::new(
             d,
             self.lsp_client.clone(),
@@ -173,7 +173,7 @@ impl WorkspaceService {
             .await?;
 
         // Create document service
-        let d = Document::new(path, uri.to_string())?;
+        let d = Document::new(&path, uri.to_string())?;
         let document = DocumentService::new(
             d,
             self.lsp_client.clone(),

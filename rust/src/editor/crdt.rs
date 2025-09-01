@@ -48,8 +48,8 @@ impl Snapshot {
         let utf16_col = target_utf16 - line_start_utf16;
 
         Position {
-            line: line as u32,
-            character: utf16_col as u32,
+            line: u32::try_from(line).unwrap(),
+            character: u32::try_from(utf16_col).unwrap(),
         }
     }
 
@@ -196,8 +196,8 @@ impl CrdtEditor {
         let utf16_col = target_utf16 - line_start_utf16;
 
         Position {
-            line: line as u32,
-            character: utf16_col as u32,
+            line: u32::try_from(line).unwrap(),
+            character: u32::try_from(utf16_col).unwrap(),
         }
     }
 

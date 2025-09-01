@@ -2,7 +2,7 @@ use anyhow::Result;
 use lsp_types::{
     DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -27,8 +27,8 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn new(file_path: PathBuf, uri: String) -> Result<Self> {
-        let content = fs::read_to_string(&file_path)
+    pub fn new(file_path: &PathBuf, uri: String) -> Result<Self> {
+        let content = fs::read_to_string(file_path)
             .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
 
         let editor = CrdtEditor::new(&content)?;
@@ -125,7 +125,7 @@ impl Document {
     pub fn apply_generation(
         &mut self,
         target: &Target,
-        new_body: String,
+        new_body: &str,
     ) -> Result<Vec<TextDocumentContentChangeEvent>> {
         // Create replacement with checksum comment using the signature from Target
         let replacement = format!(
@@ -191,7 +191,7 @@ impl Document {
     }
 }
 
-/// Recursively collect type nodes and create TypeReference objects
+/// Recursively collect type nodes and create `TypeReference` objects
 fn collect_types_from_node(
     node: &tree_sitter::Node,
     root_node: &tree_sitter::Node,
@@ -282,7 +282,7 @@ impl DocumentService {
             let clone = self.clone();
             set.spawn(Box::pin(async move {
                 let new_body = spawn_generation_task(&target, llm_client, &workspace).await?;
-                clone.apply_generation(target, new_body).await?;
+                clone.apply_generation(target, &new_body).await?;
                 Ok(())
             }));
         }
@@ -298,7 +298,7 @@ impl DocumentService {
             .get_text())
     }
 
-    async fn apply_generation(&self, target: Target, new_body: String) -> Result<()> {
+    async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {
         let checksum = target.checksum;
         tracing::debug!("Applying generation for checksum {:x}", checksum);
 
@@ -308,7 +308,7 @@ impl DocumentService {
                 .write()
                 .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
             let version_before = doc.editor.get_version();
-            let changes = doc.apply_generation(&target, new_body)?;
+            let changes = doc.apply_generation(&target, &new_body)?;
             // Mark this generation as complete
             doc.complete_generation(checksum);
             let version_after = doc.editor.get_version();
@@ -404,18 +404,9 @@ impl DocumentService {
 
         while let Some(n) = current {
             match n.kind() {
-                // Type definitions
-                "type_spec" | "type_declaration" => {
-                    definition_range = Some((n.start_byte(), n.end_byte()));
-                    break;
-                }
-                // Constant definitions
-                "const_spec" | "const_declaration" => {
-                    definition_range = Some((n.start_byte(), n.end_byte()));
-                    break;
-                }
-                // Variable definitions
-                "var_spec" | "var_declaration" => {
+                // Type, constant, variable, method spec, and field definitions
+                "type_spec" | "type_declaration" | "const_spec" | "const_declaration" 
+                | "var_spec" | "var_declaration" | "method_spec" | "field_declaration" => {
                     definition_range = Some((n.start_byte(), n.end_byte()));
                     break;
                 }
@@ -428,16 +419,6 @@ impl DocumentService {
                     } else {
                         definition_range = Some((n.start_byte(), n.end_byte()));
                     }
-                    break;
-                }
-                // Interface method specifications
-                "method_spec" => {
-                    definition_range = Some((n.start_byte(), n.end_byte()));
-                    break;
-                }
-                // Field declarations in structs
-                "field_declaration" => {
-                    definition_range = Some((n.start_byte(), n.end_byte()));
                     break;
                 }
                 _ => {
@@ -533,7 +514,7 @@ impl DocumentService {
             trim_trailing_whitespace: Some(true),
             insert_final_newline: Some(true),
             trim_final_newlines: Some(true),
-            properties: Default::default(),
+            properties: HashMap::default(),
         };
 
         match self
