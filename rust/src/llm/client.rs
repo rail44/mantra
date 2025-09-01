@@ -64,15 +64,6 @@ impl LLMClient {
         // Debug log the request
         if let Some(tools) = &request.tools {
             tracing::debug!("Sending request with {} tools", tools.len());
-            for tool in tools {
-                tracing::debug!(
-                    "Tool: {} - {}",
-                    tool.function.name,
-                    tool.function.description
-                );
-            }
-        } else {
-            tracing::debug!("Sending request without tools");
         }
 
         let response = self
@@ -103,15 +94,6 @@ impl LLMClient {
         if let Some(choice) = completion.choices.first() {
             if let Some(tool_calls) = &choice.message.tool_calls {
                 tracing::debug!("LLM response contains {} tool calls", tool_calls.len());
-                for tool_call in tool_calls {
-                    tracing::debug!(
-                        "Tool call: {} -> {}",
-                        tool_call.function.name,
-                        tool_call.function.arguments
-                    );
-                }
-            } else {
-                tracing::debug!("LLM response contains no tool calls");
             }
         }
 

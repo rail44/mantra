@@ -9,6 +9,10 @@ use crate::workspace::WorkspaceService;
 pub struct ScopedCode {
     /// Extracted code content
     pub content: String,
+    /// Document URI where the code is located
+    pub document_uri: String,
+    /// AST path segments to locate the code within the document
+    pub path_segments: Vec<PathSegment>,
 }
 
 /// Symbol inspector for type investigation
@@ -42,10 +46,10 @@ impl<'a> SymbolInspector<'a> {
                 .await?
         };
 
-        // 5. Get the full definition using tree-sitter
-        let content = target_doc.get_full_definition_at(&target_location.range)?;
+        // 5. Get the full definition with path segments using tree-sitter
+        let scoped_code = target_doc.get_full_definition_at(&target_location.range)?;
 
-        Ok(ScopedCode { content })
+        Ok(scoped_code)
     }
 
     /// Inspect a specific symbol within a scoped code definition
@@ -72,10 +76,10 @@ impl<'a> SymbolInspector<'a> {
             .open_document(target_location.uri.as_str())
             .await?;
 
-        // 5. Get the full definition using tree-sitter
-        let content = target_doc.get_full_definition_at(&target_location.range)?;
+        // 5. Get the full definition with path segments using tree-sitter
+        let scoped_code = target_doc.get_full_definition_at(&target_location.range)?;
 
-        Ok(ScopedCode { content })
+        Ok(scoped_code)
     }
 }
 

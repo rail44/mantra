@@ -107,7 +107,7 @@ pub fn find_symbol_in_node<'a>(
     }
 }
 
-/// Find a field in a field_declaration_list
+/// Find a field in a `field_declaration_list`
 fn find_field_in_list<'a>(
     field_list: &Node<'a>,
     field_name: &str,
@@ -135,7 +135,7 @@ fn find_field_in_list<'a>(
     None
 }
 
-/// Find a method in a method_spec_list
+/// Find a method in a `method_spec_list`
 fn find_method_in_list<'a>(
     method_list: &Node<'a>,
     method_name: &str,

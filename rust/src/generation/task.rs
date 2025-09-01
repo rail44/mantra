@@ -36,17 +36,15 @@ async fn generate_for_target(
     let mut type_scope_mapping = FxHashMap::default();
 
     for type_ref in &target.type_references {
-        // Build mapping from scope_id to AST path for InspectTool
-        type_scope_mapping.insert(type_ref.scope_id.clone(), type_ref.path.clone());
+        // Build mapping from scope_id to (document_uri, AST path) for InspectTool
+        type_scope_mapping.insert(
+            type_ref.scope_id.clone(),
+            (target.uri.clone(), type_ref.path.clone()),
+        );
 
         match inspector.inspect_by_path(&target.uri, &type_ref.path).await {
             Ok(scoped_code) => {
-                // Use scope_id as key instead of generic type_i
-                tracing::debug!(
-                    "Found detailed type definition for {}: {}",
-                    type_ref.scope_id,
-                    scoped_code.content
-                );
+                tracing::debug!("Found type definition for {}", type_ref.scope_id);
                 // Use the full type definition content instead of hover info
                 type_definitions.insert(type_ref.scope_id.clone(), scoped_code.content);
             }
@@ -65,14 +63,12 @@ async fn generate_for_target(
     // Build prompts
     let system_prompt = super::build_system_prompt();
     let user_prompt = super::build_prompt_with_types(target, &type_definitions);
-    tracing::debug!("System prompt:\n{}", system_prompt);
-    tracing::debug!("User prompt:\n{}", user_prompt);
 
     // Generate using LLM with tool support
     let tools = vec![crate::llm::create_inspect_tool()];
 
     // Create InspectTool with necessary context
-    let inspect_tool = InspectTool::new(workspace.clone(), target.uri.clone(), type_scope_mapping);
+    let mut inspect_tool = InspectTool::new(workspace.clone(), type_scope_mapping);
 
     // Handle conversation with tool calls
     let mut messages = vec![Message::system(system_prompt), Message::user(user_prompt)];

@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 
 use crate::editor::crdt::CrdtEditor;
 use crate::generation::spawn_generation_task;
+use crate::inspector::ScopedCode;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
 use crate::parser::{
@@ -378,7 +379,9 @@ impl DocumentService {
     }
 
     /// Get the full definition at a range using tree-sitter
-    pub fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<String> {
+    pub fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<ScopedCode> {
+        use crate::parser::ast_utils::build_path_to_node;
+
         // Use the existing tree from this document
         let doc = self.document.read().unwrap();
         let tree = doc
@@ -402,6 +405,7 @@ impl DocumentService {
         // Walk up the tree to find a definition node
         // In Go, we're looking for type_spec, const_spec, var_spec, function_declaration, method_declaration
         let mut definition_range = None;
+        let mut definition_node = None;
         let mut current = Some(node);
 
         while let Some(n) = current {
@@ -410,6 +414,7 @@ impl DocumentService {
                 "type_spec" | "type_declaration" | "const_spec" | "const_declaration"
                 | "var_spec" | "var_declaration" | "method_spec" | "field_declaration" => {
                     definition_range = Some((n.start_byte(), n.end_byte()));
+                    definition_node = Some(n);
                     break;
                 }
                 // Function/method definitions
@@ -421,6 +426,7 @@ impl DocumentService {
                     } else {
                         definition_range = Some((n.start_byte(), n.end_byte()));
                     }
+                    definition_node = Some(n);
                     break;
                 }
                 _ => {
@@ -429,17 +435,31 @@ impl DocumentService {
             }
         }
 
-        // If we found a definition, return its content
-        if let Some((start, end)) = definition_range {
-            Ok(rope.byte_slice(start..end).to_string())
+        // Get document URI
+        let document_uri = doc.uri.clone();
+
+        // If we found a definition, return its content with path segments
+        if let (Some((start, end)), Some(def_node)) = (definition_range, definition_node) {
+            let content = rope.byte_slice(start..end).to_string();
+            let path_segments = build_path_to_node(&def_node, &root);
+            Ok(ScopedCode {
+                content,
+                document_uri,
+                path_segments,
+            })
         } else {
             // If we couldn't find a definition node, the position might be pointing
             // to an identifier that is the definition itself
             if node.kind() == "type_identifier" || node.kind() == "identifier" {
-                // Return just the identifier
-                Ok(rope
+                let content = rope
                     .byte_slice(node.start_byte()..node.end_byte())
-                    .to_string())
+                    .to_string();
+                let path_segments = build_path_to_node(&node, &root);
+                Ok(ScopedCode {
+                    content,
+                    document_uri,
+                    path_segments,
+                })
             } else {
                 Err(anyhow::anyhow!(
                     "Could not find definition node at position. Found '{}' instead",
@@ -563,13 +583,9 @@ impl DocumentService {
                 };
                 // Send incremental changes to LSP
                 self.send_did_change(changes).await?;
-                tracing::debug!("Formatting applied successfully");
             }
-            Some(_) => {
-                tracing::debug!("Formatting returned empty edits");
-            }
-            None => {
-                tracing::debug!("Formatting returned None");
+            Some(_) | None => {
+                // Formatting returned empty edits or None
             }
         }
 
