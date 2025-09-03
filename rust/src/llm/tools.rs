@@ -104,8 +104,8 @@ impl InspectTool {
                 tracing::debug!("Registered new dynamic scope: {}", new_scope_id);
 
                 let response_content = format!(
-                    "Symbol '{}' in '{}' definition:\n{}\n\nNew scope '{}' is now available for further investigation.",
-                    symbol, base_scope, scoped_code.content, new_scope_id
+                    "Symbol '{symbol}' in '{base_scope}' definition:\n<scope id=\"{new_scope_id}\">\n{}\n</scope>",
+                    scoped_code.content
                 );
 
                 Ok(ToolCallResult {
@@ -373,8 +373,10 @@ api_key = "test-key"
         assert!(inspect_tool
             .type_scope_mapping
             .contains_key("SimpleCache.items"));
-        assert!(result_1.content.contains("SimpleCache.items"));
-        assert!(result_1.content.contains("further investigation"));
+        assert!(result_1
+            .content
+            .contains("<scope id=\"SimpleCache.items\">"));
+        assert!(result_1.content.contains("</scope>"));
 
         // Second call: use the new dynamic scope
         let tool_call_2 = ToolCall {
