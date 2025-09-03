@@ -56,16 +56,15 @@ impl Target {
 
                 "function_declaration" | "method_declaration" => {
                     if let Some(instruction) = pending_instruction.take() {
-                        if let Some(target) = create_target_from_function(
+                        let target = create_target_from_function(
                             &node,
                             tree,
                             rope,
                             snapshot,
                             uri,
-                            instruction,
-                        ) {
-                            targets.push(target);
-                        }
+                            &instruction,
+                        );
+                        targets.push(target);
                     }
                 }
 
@@ -105,8 +104,8 @@ fn create_target_from_function(
     rope: &Rope,
     snapshot: &Snapshot,
     uri: &str,
-    instruction: String,
-) -> Option<Target> {
+    instruction: &str,
+) -> Target {
     // Extract signature
     let signature = if let Some(body_node) = node.child_by_field_name("body") {
         let sig_start = node.start_byte();
@@ -126,7 +125,7 @@ fn create_target_from_function(
     // Create the base target for checksum calculation
     let base_target = Target {
         uri: uri.to_string(),
-        instruction: instruction.clone(),
+        instruction: instruction.to_string(),
         signature: signature.clone(),
         checksum: 0, // Will be calculated next
         snapshot: snapshot.clone(),
@@ -137,8 +136,8 @@ fn create_target_from_function(
     // Calculate checksum
     let checksum = calculate_checksum(&base_target);
 
-    Some(Target {
+    Target {
         checksum,
         ..base_target
-    })
+    }
 }
