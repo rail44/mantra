@@ -103,6 +103,17 @@ pub fn find_symbol_in_node<'a>(
                 None
             }
         }
+        // For qualified_type (like time.Duration), extract the definition target
+        "qualified_type" => {
+            let node_text = rope
+                .byte_slice(parent.start_byte()..parent.end_byte())
+                .to_string();
+            if node_text == symbol_name {
+                extract_definition_target_from_qualified(parent)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -156,7 +167,7 @@ fn find_matching_node_in_field<'a>(
 }
 
 /// Extract the definition target node from a qualified identifier based on AST structure
-fn extract_definition_target_from_qualified<'a>(qualified_node: &Node<'a>) -> Option<Node<'a>> {
+pub fn extract_definition_target_from_qualified<'a>(qualified_node: &Node<'a>) -> Option<Node<'a>> {
     match qualified_node.kind() {
         // For qualified_type nodes (like time.Duration), return the type identifier (right side)
         "qualified_type" => {

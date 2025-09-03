@@ -515,7 +515,16 @@ impl DocumentService {
             find_symbol_in_node(&node, symbol, &rope)
                 .ok_or_else(|| anyhow::anyhow!("Symbol '{}' not found in node", symbol))?
         } else {
-            node
+            // For qualified_type nodes, use the definition target position instead of the start
+            if node.kind() == "qualified_type" {
+                use crate::parser::ast_utils::extract_definition_target_from_qualified;
+                extract_definition_target_from_qualified(&node).unwrap_or(node)
+            } else if node.kind() == "slice_type" {
+                // For slice types like []string, find the element type
+                node.child_by_field_name("element").unwrap_or(node)
+            } else {
+                node
+            }
         };
 
         // Convert byte position to LSP position

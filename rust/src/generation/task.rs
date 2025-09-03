@@ -55,7 +55,6 @@ async fn generate_for_target(
                     type_ref.path,
                     e
                 );
-                // Skip external types for now - they shouldn't be needed for basic generation
             }
         }
     }
