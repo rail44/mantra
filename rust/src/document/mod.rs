@@ -48,7 +48,7 @@ impl Document {
         let rope = self.editor.rope();
         let snapshot = self.editor.fork();
 
-        let targets = Target::find_targets(&tree, rope, &snapshot, &self.uri);
+        let targets = Target::find_targets(tree, rope, &snapshot, &self.uri);
 
         Ok(targets)
     }

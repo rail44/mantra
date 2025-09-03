@@ -279,7 +279,7 @@ pub fn find_node_at_byte_position<'a>(root: &Node<'a>, byte_pos: usize) -> Optio
 }
 
 /// Find a definition node starting from a given node
-/// In Go, we're looking for type_spec, const_spec, var_spec, function_declaration, method_declaration
+/// In Go, we're looking for `type_spec`, `const_spec`, `var_spec`, `function_declaration`, `method_declaration`
 pub fn find_definition_node(start_node: Node) -> Option<(Node, (usize, usize))> {
     let mut current = Some(start_node);
 
@@ -296,9 +296,8 @@ pub fn find_definition_node(start_node: Node) -> Option<(Node, (usize, usize))> 
                 if let Some(params) = n.child_by_field_name("parameters") {
                     // Get from start of function to end of parameters
                     return Some((n, (n.start_byte(), params.end_byte())));
-                } else {
-                    return Some((n, (n.start_byte(), n.end_byte())));
                 }
+                return Some((n, (n.start_byte(), n.end_byte())));
             }
             _ => {
                 current = n.parent();
@@ -334,7 +333,7 @@ pub fn extract_definition_content(
 }
 
 /// Get the target node for definition lookup
-/// Handles special cases like qualified_type and slice_type
+/// Handles special cases like `qualified_type` and `slice_type`
 pub fn get_definition_target_node<'a>(
     node: Node<'a>,
     symbol_name: Option<&str>,
