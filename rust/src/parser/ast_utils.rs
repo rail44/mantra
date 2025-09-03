@@ -117,22 +117,71 @@ fn find_field_in_list<'a>(
 
     for child in field_list.children(&mut cursor) {
         if child.kind() == "field_declaration" {
-            // Look for field_identifier within this field_declaration
-            let mut field_cursor = child.walk();
-            for field_child in child.children(&mut field_cursor) {
-                if field_child.kind() == "field_identifier" {
-                    // Get the text content and compare
-                    let field_text = rope
-                        .byte_slice(field_child.start_byte()..field_child.end_byte())
-                        .to_string();
-                    if field_text == field_name {
-                        return Some(field_child);
-                    }
-                }
+            // Search within this field_declaration
+            if let Some(node) = find_matching_node_in_field(&child, field_name, rope) {
+                return Some(node);
             }
         }
     }
     None
+}
+
+/// Find a matching node within a field declaration
+fn find_matching_node_in_field<'a>(
+    parent: &Node<'a>,
+    target_text: &str,
+    rope: &crop::Rope,
+) -> Option<Node<'a>> {
+    let mut cursor = parent.walk();
+    for node in parent.children(&mut cursor) {
+        let node_text = rope
+            .byte_slice(node.start_byte()..node.end_byte())
+            .to_string();
+
+        if node_text == target_text {
+            // Check if it's a field_identifier (direct match)
+            if node.kind() == "field_identifier" {
+                return Some(node);
+            }
+            // Otherwise try to extract from qualified identifier
+            return extract_definition_target_from_qualified(&node);
+        }
+
+        // Recursively search in children
+        if let Some(result) = find_matching_node_in_field(&node, target_text, rope) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// Extract the definition target node from a qualified identifier based on AST structure
+fn extract_definition_target_from_qualified<'a>(qualified_node: &Node<'a>) -> Option<Node<'a>> {
+    match qualified_node.kind() {
+        // For qualified_type nodes (like time.Duration), return the type identifier (right side)
+        "qualified_type" => {
+            if let Some(name_node) = qualified_node.child_by_field_name("name") {
+                Some(name_node)
+            } else {
+                // Fallback: get the rightmost identifier child
+                let mut cursor = qualified_node.walk();
+                qualified_node
+                    .children(&mut cursor)
+                    .filter(|child| child.kind() == "type_identifier")
+                    .last()
+            }
+        }
+        // For selector_expression nodes (like pkg.Function), return the field (right side)
+        "selector_expression" => qualified_node.child_by_field_name("field"),
+        // For other qualified structures, try to find the rightmost identifier
+        _ => {
+            let mut cursor = qualified_node.walk();
+            qualified_node
+                .children(&mut cursor)
+                .filter(|child| child.kind().contains("identifier"))
+                .last()
+        }
+    }
 }
 
 /// Find a method in a `method_spec_list`
@@ -145,7 +194,7 @@ fn find_method_in_list<'a>(
 
     for child in method_list.children(&mut cursor) {
         if child.kind() == "method_spec" {
-            // Look for method name within this method_spec
+            // Check the name field specifically
             if let Some(name_node) = child.child_by_field_name("name") {
                 let method_text = rope
                     .byte_slice(name_node.start_byte()..name_node.end_byte())
