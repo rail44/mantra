@@ -2,6 +2,7 @@ pub mod ast_utils;
 pub mod checksum;
 pub mod error;
 pub mod target;
+pub mod type_collector;
 
 use crate::core::{MantraError, Result};
 use tree_sitter::{Parser, Tree};

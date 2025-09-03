@@ -1,3 +1,4 @@
+use crop::Rope;
 use tree_sitter::Node;
 
 use crate::parser::target::PathSegment;
@@ -270,4 +271,86 @@ pub fn build_path_to_node(target: &Node, root: &Node) -> Vec<PathSegment> {
 
     path.reverse();
     path
+}
+
+/// Find a node at a specific byte position
+pub fn find_node_at_byte_position<'a>(root: &Node<'a>, byte_pos: usize) -> Option<Node<'a>> {
+    root.descendant_for_byte_range(byte_pos, byte_pos)
+}
+
+/// Find a definition node starting from a given node
+/// In Go, we're looking for type_spec, const_spec, var_spec, function_declaration, method_declaration
+pub fn find_definition_node(start_node: Node) -> Option<(Node, (usize, usize))> {
+    let mut current = Some(start_node);
+
+    while let Some(n) = current {
+        match n.kind() {
+            // Type, constant, variable, method spec, and field definitions
+            "type_spec" | "type_declaration" | "const_spec" | "const_declaration" | "var_spec"
+            | "var_declaration" | "method_spec" | "field_declaration" => {
+                return Some((n, (n.start_byte(), n.end_byte())));
+            }
+            // Function/method definitions
+            "function_declaration" | "method_declaration" => {
+                // For functions, we typically want just the signature, not the body
+                if let Some(params) = n.child_by_field_name("parameters") {
+                    // Get from start of function to end of parameters
+                    return Some((n, (n.start_byte(), params.end_byte())));
+                } else {
+                    return Some((n, (n.start_byte(), n.end_byte())));
+                }
+            }
+            _ => {
+                current = n.parent();
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract definition content from a node or an identifier
+pub fn extract_definition_content(
+    node: Node,
+    rope: &Rope,
+    root: &Node,
+) -> Option<(String, Vec<PathSegment>)> {
+    // Try to find a definition node first
+    if let Some((def_node, (start, end))) = find_definition_node(node) {
+        let content = rope.byte_slice(start..end).to_string();
+        let path_segments = build_path_to_node(&def_node, root);
+        Some((content, path_segments))
+    } else if node.kind() == "type_identifier" || node.kind() == "identifier" {
+        // If we couldn't find a definition node, the position might be pointing
+        // to an identifier that is the definition itself
+        let content = rope
+            .byte_slice(node.start_byte()..node.end_byte())
+            .to_string();
+        let path_segments = build_path_to_node(&node, root);
+        Some((content, path_segments))
+    } else {
+        None
+    }
+}
+
+/// Get the target node for definition lookup
+/// Handles special cases like qualified_type and slice_type
+pub fn get_definition_target_node<'a>(
+    node: Node<'a>,
+    symbol_name: Option<&str>,
+    rope: &Rope,
+) -> Node<'a> {
+    if let Some(symbol) = symbol_name {
+        find_symbol_in_node(&node, symbol, rope).unwrap_or(node)
+    } else {
+        // For qualified_type nodes, use the definition target position
+        if node.kind() == "qualified_type" {
+            extract_definition_target_from_qualified(&node).unwrap_or(node)
+        } else if node.kind() == "slice_type" {
+            // For slice types like []string, find the element type
+            node.child_by_field_name("element").unwrap_or(node)
+        } else {
+            node
+        }
+    }
 }

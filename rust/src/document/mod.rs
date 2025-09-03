@@ -13,10 +13,7 @@ use crate::generation::spawn_generation_task;
 use crate::inspector::ScopedCode;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
-use crate::parser::{
-    checksum::calculate_checksum,
-    target::{Target, TypeReference},
-};
+use crate::parser::target::Target;
 use crate::workspace::WorkspaceService;
 
 /// Document managing a single document's state with CRDT support
@@ -46,79 +43,12 @@ impl Document {
         let tree = self
             .editor
             .tree()
-            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
-            .clone();
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
 
         let rope = self.editor.rope();
         let snapshot = self.editor.fork();
-        let mut targets = Vec::new();
 
-        // Find all mantra comments and their associated functions
-        let mut pending_instruction: Option<String> = None;
-        let mut stack = vec![tree.root_node()];
-
-        while let Some(node) = stack.pop() {
-            match node.kind() {
-                "comment" => {
-                    let text = rope
-                        .byte_slice(node.start_byte()..node.end_byte())
-                        .to_string();
-                    let text = text.trim();
-                    if text.starts_with("// mantra:") {
-                        let instruction = text.strip_prefix("// mantra:").unwrap().trim();
-                        pending_instruction = Some(instruction.to_string());
-                    }
-                }
-
-                "function_declaration" | "method_declaration" => {
-                    if let Some(instruction) = pending_instruction.take() {
-                        // Extract signature
-                        let signature = if let Some(body_node) = node.child_by_field_name("body") {
-                            let sig_start = node.start_byte();
-                            let sig_end = body_node.start_byte();
-                            rope.byte_slice(sig_start..sig_end)
-                                .to_string()
-                                .trim()
-                                .to_string()
-                        } else {
-                            rope.byte_slice(node.start_byte()..node.end_byte())
-                                .to_string()
-                        };
-
-                        // Collect type references
-                        let type_references = self.collect_type_references(&node);
-
-                        // Create the base target for checksum calculation
-                        let base_target = Target {
-                            uri: self.uri.clone(),
-                            instruction: instruction.clone(),
-                            signature: signature.clone(),
-                            checksum: 0, // Will be calculated next
-                            snapshot: snapshot.clone(),
-                            byte_range: node.start_byte()..node.end_byte(),
-                            type_references,
-                        };
-
-                        // Calculate checksum based on name, instruction, and signature
-                        let checksum = calculate_checksum(&base_target);
-
-                        targets.push(Target {
-                            checksum,
-                            ..base_target
-                        });
-                    }
-                }
-
-                _ => {}
-            }
-
-            // Add children to stack in reverse order for depth-first traversal
-            let mut cursor = node.walk();
-            let children: Vec<_> = node.children(&mut cursor).collect();
-            for child in children.into_iter().rev() {
-                stack.push(child);
-            }
-        }
+        let targets = Target::find_targets(&tree, rope, &snapshot, &self.uri);
 
         Ok(targets)
     }
@@ -164,71 +94,6 @@ impl Document {
     /// Check if formatting should be applied
     pub fn should_format(&self) -> bool {
         self.pending_generations.is_empty()
-    }
-
-    /// Collect type references from a function/method declaration
-    fn collect_type_references(&self, func_node: &tree_sitter::Node) -> Vec<TypeReference> {
-        let tree = self.editor.tree().unwrap();
-        let rope = self.editor.rope();
-        let root_node = tree.root_node();
-        let mut type_references = Vec::new();
-
-        // For method declarations, collect receiver type
-        if func_node.kind() == "method_declaration" {
-            if let Some(receiver_list) = func_node.child_by_field_name("receiver") {
-                collect_types_from_node(&receiver_list, &root_node, rope, &mut type_references);
-            }
-        }
-
-        // Collect parameter types
-        if let Some(params) = func_node.child_by_field_name("parameters") {
-            collect_types_from_node(&params, &root_node, rope, &mut type_references);
-        }
-
-        // Collect return types
-        if let Some(result) = func_node.child_by_field_name("result") {
-            collect_types_from_node(&result, &root_node, rope, &mut type_references);
-        }
-
-        type_references
-    }
-}
-
-/// Recursively collect type nodes and create `TypeReference` objects
-fn collect_types_from_node(
-    node: &tree_sitter::Node,
-    root_node: &tree_sitter::Node,
-    rope: &crop::Rope,
-    type_references: &mut Vec<TypeReference>,
-) {
-    use crate::parser::ast_utils::build_path_to_node;
-
-    match node.kind() {
-        "type_identifier" | "pointer_type" | "slice_type" | "array_type" | "channel_type"
-        | "map_type" => {
-            // Build path from root to this type node
-            let path = build_path_to_node(node, root_node);
-            // Extract type name from the entire type node (preserves modifiers like *, [])
-            let scope_id = rope
-                .byte_slice(node.start_byte()..node.end_byte())
-                .to_string();
-            type_references.push(TypeReference { path, scope_id });
-        }
-        "qualified_type" => {
-            // For qualified types like time.Duration, get the entire qualified type
-            let path = build_path_to_node(node, root_node);
-            let scope_id = rope
-                .byte_slice(node.start_byte()..node.end_byte())
-                .to_string();
-            type_references.push(TypeReference { path, scope_id });
-        }
-        _ => {
-            // Recursively check children for other node types
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                collect_types_from_node(&child, root_node, rope, type_references);
-            }
-        }
     }
 }
 
@@ -380,7 +245,7 @@ impl DocumentService {
 
     /// Get the full definition at a range using tree-sitter
     pub fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<ScopedCode> {
-        use crate::parser::ast_utils::build_path_to_node;
+        use crate::parser::ast_utils::{extract_definition_content, find_node_at_byte_position};
 
         // Use the existing tree from this document
         let doc = self.document.read().unwrap();
@@ -398,74 +263,24 @@ impl DocumentService {
 
         // Find the node at this position
         let root = tree.root_node();
-        let node = root
-            .descendant_for_byte_range(byte_pos, byte_pos)
+        let node = find_node_at_byte_position(&root, byte_pos)
             .ok_or_else(|| anyhow::anyhow!("No node at position"))?;
-
-        // Walk up the tree to find a definition node
-        // In Go, we're looking for type_spec, const_spec, var_spec, function_declaration, method_declaration
-        let mut definition_range = None;
-        let mut definition_node = None;
-        let mut current = Some(node);
-
-        while let Some(n) = current {
-            match n.kind() {
-                // Type, constant, variable, method spec, and field definitions
-                "type_spec" | "type_declaration" | "const_spec" | "const_declaration"
-                | "var_spec" | "var_declaration" | "method_spec" | "field_declaration" => {
-                    definition_range = Some((n.start_byte(), n.end_byte()));
-                    definition_node = Some(n);
-                    break;
-                }
-                // Function/method definitions
-                "function_declaration" | "method_declaration" => {
-                    // For functions, we typically want just the signature, not the body
-                    if let Some(params) = n.child_by_field_name("parameters") {
-                        // Get from start of function to end of parameters
-                        definition_range = Some((n.start_byte(), params.end_byte()));
-                    } else {
-                        definition_range = Some((n.start_byte(), n.end_byte()));
-                    }
-                    definition_node = Some(n);
-                    break;
-                }
-                _ => {
-                    current = n.parent();
-                }
-            }
-        }
 
         // Get document URI
         let document_uri = doc.uri.clone();
 
-        // If we found a definition, return its content with path segments
-        if let (Some((start, end)), Some(def_node)) = (definition_range, definition_node) {
-            let content = rope.byte_slice(start..end).to_string();
-            let path_segments = build_path_to_node(&def_node, &root);
+        // Extract definition content
+        if let Some((content, path_segments)) = extract_definition_content(node, rope, &root) {
             Ok(ScopedCode {
                 content,
                 document_uri,
                 path_segments,
             })
         } else {
-            // If we couldn't find a definition node, the position might be pointing
-            // to an identifier that is the definition itself
-            if node.kind() == "type_identifier" || node.kind() == "identifier" {
-                let content = rope
-                    .byte_slice(node.start_byte()..node.end_byte())
-                    .to_string();
-                let path_segments = build_path_to_node(&node, &root);
-                Ok(ScopedCode {
-                    content,
-                    document_uri,
-                    path_segments,
-                })
-            } else {
-                Err(anyhow::anyhow!(
-                    "Could not find definition node at position. Found '{}' instead",
-                    node.kind()
-                ))
-            }
+            Err(anyhow::anyhow!(
+                "Could not find definition node at position. Found '{}' instead",
+                node.kind()
+            ))
         }
     }
 
@@ -484,7 +299,7 @@ impl DocumentService {
         ast_path: &[crate::parser::target::PathSegment],
         symbol_name: Option<&str>,
     ) -> Result<Option<lsp_types::GotoDefinitionResponse>> {
-        use crate::parser::ast_utils::{find_node_by_path, find_symbol_in_node};
+        use crate::parser::ast_utils::{find_node_by_path, get_definition_target_node};
 
         // Get tree, rope, snapshot and uri
         let (tree, rope, snapshot, uri) = {
@@ -510,22 +325,8 @@ impl DocumentService {
         let node = find_node_by_path(&tree.root_node(), ast_path)
             .ok_or_else(|| anyhow::anyhow!("Node not found at path"))?;
 
-        // Find target node (either the node itself or a symbol within it)
-        let target_node = if let Some(symbol) = symbol_name {
-            find_symbol_in_node(&node, symbol, &rope)
-                .ok_or_else(|| anyhow::anyhow!("Symbol '{}' not found in node", symbol))?
-        } else {
-            // For qualified_type nodes, use the definition target position instead of the start
-            if node.kind() == "qualified_type" {
-                use crate::parser::ast_utils::extract_definition_target_from_qualified;
-                extract_definition_target_from_qualified(&node).unwrap_or(node)
-            } else if node.kind() == "slice_type" {
-                // For slice types like []string, find the element type
-                node.child_by_field_name("element").unwrap_or(node)
-            } else {
-                node
-            }
-        };
+        // Get the target node for definition lookup
+        let target_node = get_definition_target_node(node, symbol_name, &rope);
 
         // Convert byte position to LSP position
         let position = snapshot.byte_to_lsp_position(target_node.start_byte());
