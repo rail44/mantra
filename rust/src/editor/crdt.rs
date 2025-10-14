@@ -165,7 +165,7 @@ impl CrdtEditor {
                     },
                     None, // Currentrly, full re-parse (no incremental parsing)
                 )
-                .map_err(|e| anyhow::anyhow!("Failed to parse: {}", e))?,
+                .map_err(|e| anyhow::anyhow!("Failed to parse: {e}"))?,
         );
         Ok(())
     }

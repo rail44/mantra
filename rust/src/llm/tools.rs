@@ -84,7 +84,7 @@ impl InspectTool {
         let (document_uri, ast_path) = self
             .type_scope_mapping
             .get(base_scope)
-            .ok_or_else(|| anyhow::anyhow!("Unknown scope: {}", base_scope))?;
+            .ok_or_else(|| anyhow::anyhow!("Unknown scope: {base_scope}"))?;
 
         // Inspect specific symbol within the scope using SymbolInspector
         match inspector

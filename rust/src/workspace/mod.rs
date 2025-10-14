@@ -150,7 +150,7 @@ impl WorkspaceService {
         let path_str = parsed_uri
             .as_str()
             .strip_prefix("file://")
-            .ok_or_else(|| anyhow::anyhow!("URI must be a file:// URI: {}", uri))?;
+            .ok_or_else(|| anyhow::anyhow!("URI must be a file:// URI: {uri}"))?;
 
         let path = PathBuf::from(path_str);
 

@@ -126,7 +126,7 @@ impl DocumentService {
             let mut document = self
                 .document
                 .write()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
             let targets = document.find_targets()?;
 
             if targets.is_empty() {
@@ -162,7 +162,7 @@ impl DocumentService {
         Ok(self
             .document
             .read()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?
             .get_text())
     }
 
@@ -174,7 +174,7 @@ impl DocumentService {
             let mut doc = self
                 .document
                 .write()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
             let version_before = doc.editor.get_version();
             let changes = doc.apply_generation(&target, new_body)?;
             // Mark this generation as complete
@@ -204,7 +204,7 @@ impl DocumentService {
             let doc = self
                 .document
                 .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
             let current_version = doc.editor.get_version();
             let uri: lsp_types::Uri = doc.uri.parse()?;
             (current_version, uri)
@@ -231,7 +231,7 @@ impl DocumentService {
             let doc = self
                 .document
                 .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
             doc.should_format()
         };
 
@@ -306,7 +306,7 @@ impl DocumentService {
             let doc = self
                 .document
                 .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
 
             let tree = doc
                 .editor
@@ -347,7 +347,7 @@ impl DocumentService {
             let doc = self
                 .document
                 .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
             let snapshot = doc.editor.fork();
             (doc.uri.clone(), doc.editor.get_version(), snapshot)
         };
@@ -381,7 +381,7 @@ impl DocumentService {
                     let mut doc = self
                         .document
                         .write()
-                        .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))?;
+                        .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
                     let current_version = doc.editor.get_version();
                     tracing::debug!(
                         "Applying {} formatting edits (version: {} -> {})",
