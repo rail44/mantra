@@ -1,34 +1,6 @@
 use jsonrpsee::proc_macros::rpc;
 use lsp_types::{Position, TextDocumentIdentifier};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HoverParams {
-    #[serde(rename = "textDocument")]
-    pub text_document: TextDocumentIdentifier,
-    pub position: Position,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitializeParams {
-    #[serde(rename = "processId")]
-    pub process_id: Option<u32>,
-    #[serde(rename = "rootUri")]
-    pub root_uri: Option<String>,
-    pub capabilities: Value,
-    #[serde(rename = "workspaceFolders")]
-    pub workspace_folders: Option<Vec<Value>>,
-}
-
-// Kept for backward compatibility, will be removed later
-pub type TextDocumentItem = lsp_types::TextDocumentItem;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DidOpenTextDocumentParams {
-    #[serde(rename = "textDocument")]
-    pub text_document: TextDocumentItem,
-}
 
 // Use lsp-types directly in function signatures
 
@@ -60,5 +32,5 @@ pub trait LspRpc {
 
     /// Open a text document notification (no return = notification in LSP spec)
     #[method(name = "textDocument/didOpen", param_kind = map)]
-    async fn did_open(&self, text_document: TextDocumentItem);
+    async fn did_open(&self, text_document: lsp_types::TextDocumentItem);
 }
