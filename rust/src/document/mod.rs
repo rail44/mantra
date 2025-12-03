@@ -1,6 +1,8 @@
 use anyhow::Result;
+use crop::Rope;
 use lsp_types::{
-    DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
+    DidChangeTextDocumentParams, Position, TextDocumentContentChangeEvent,
+    VersionedTextDocumentIdentifier,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -9,6 +11,27 @@ use std::sync::{Arc, RwLock};
 use tokio::task::JoinSet;
 
 use crate::editor::crdt::CrdtEditor;
+
+/// Convert LSP position to byte position in rope
+fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
+    let line_start_byte = rope.byte_of_line(position.line as usize);
+    let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
+    let target_utf16 = line_start_utf16 + position.character as usize;
+    rope.byte_of_utf16_code_unit(target_utf16)
+}
+
+/// Convert byte position to LSP position in rope
+fn byte_to_lsp_position(byte_pos: usize, rope: &Rope) -> Position {
+    let line = rope.line_of_byte(byte_pos);
+    let line_start_byte = rope.byte_of_line(line);
+    let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
+    let target_utf16 = rope.utf16_code_unit_of_byte(byte_pos);
+    let character = target_utf16 - line_start_utf16;
+    Position {
+        line: line as u32,
+        character: character as u32,
+    }
+}
 use crate::generation::spawn_generation_task;
 use crate::inspector::ScopedCode;
 use crate::llm::LLMClient;
@@ -29,7 +52,12 @@ impl Document {
         let content = fs::read_to_string(file_path)
             .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
 
-        let editor = CrdtEditor::new(&content)?;
+        Self::from_text(uri, &content)
+    }
+
+    /// Create a Document from provided text (without reading from disk)
+    pub fn from_text(uri: String, content: &str) -> Result<Self> {
+        let editor = CrdtEditor::new(content)?;
 
         Ok(Self {
             uri,
@@ -81,6 +109,31 @@ impl Document {
         self.editor.get_text()
     }
 
+    /// Apply incremental change from LSP
+    pub fn apply_incremental_change(
+        &mut self,
+        change: &TextDocumentContentChangeEvent,
+    ) -> Result<()> {
+        match &change.range {
+            Some(range) => {
+                // Convert LSP positions to byte positions
+                let rope = self.editor.rope();
+                let start_byte = lsp_position_to_byte(range.start, rope);
+                let end_byte = lsp_position_to_byte(range.end, rope);
+
+                // Apply edit
+                let snapshot = self.editor.fork();
+                self.editor
+                    .apply_byte_edit(&(start_byte..end_byte), &change.text, snapshot)?;
+            }
+            None => {
+                // Full document replacement - recreate editor
+                self.editor = CrdtEditor::new(&change.text)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Start tracking a generation task
     pub fn start_generation(&mut self, checksum: u64) {
         self.pending_generations.insert(checksum);
@@ -119,6 +172,37 @@ impl DocumentService {
             lsp_client,
             workspace,
         }
+    }
+
+    /// Apply incremental changes from LSP did_change
+    pub fn apply_changes(&self, changes: &[TextDocumentContentChangeEvent]) -> Result<()> {
+        let mut document = self
+            .document
+            .write()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+
+        for change in changes {
+            document.apply_incremental_change(change)?;
+        }
+        Ok(())
+    }
+
+    /// Get the current text content
+    pub fn get_text(&self) -> Result<String> {
+        let document = self
+            .document
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+        Ok(document.get_text())
+    }
+
+    /// Find targets in the document
+    pub fn find_targets(&self) -> Result<Vec<crate::parser::target::Target>> {
+        let document = self
+            .document
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+        document.find_targets()
     }
 
     pub async fn generate(&self) -> Result<String> {
@@ -164,6 +248,170 @@ impl DocumentService {
             .read()
             .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?
             .get_text())
+    }
+
+    /// Generate code for a single target, apply and format
+    /// Returns a single TextEdit representing the complete change
+    pub async fn generate_single_with_edits(
+        &self,
+        target: &Target,
+    ) -> Result<Vec<lsp_types::TextEdit>> {
+        // Get the original LSP range before any changes
+        let original_range = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+            let rope = doc.editor.rope();
+            let start_pos = byte_to_lsp_position(target.byte_range.start, rope);
+            let end_pos = byte_to_lsp_position(target.byte_range.end, rope);
+            lsp_types::Range::new(start_pos, end_pos)
+        };
+
+        // Mark generation as pending
+        {
+            let mut document = self
+                .document
+                .write()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+            document.start_generation(target.checksum);
+        }
+
+        // Generate code for this target
+        let new_body =
+            spawn_generation_task(target, self.llm_client.clone(), &self.workspace).await?;
+
+        // Apply generation (this modifies the internal CRDT editor)
+        self.apply_generation_internal(target.clone(), &new_body)
+            .await?;
+
+        // Format (this modifies the internal CRDT editor)
+        self.format_document_internal().await?;
+
+        // Find the updated target in the final document and extract its text
+        let final_text = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+
+            // Re-find targets in the updated document
+            let targets = doc.find_targets()?;
+            tracing::debug!("Found {} targets after generation/format", targets.len());
+            for t in &targets {
+                tracing::debug!("  Target: signature='{}', byte_range={:?}", t.signature, t.byte_range);
+            }
+
+            // Find the target with matching signature
+            let updated_target = targets
+                .iter()
+                .find(|t| t.signature == target.signature)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Could not find updated target with signature: {}", target.signature)
+                })?;
+
+            // Extract text from the updated byte range
+            let rope = doc.editor.rope();
+            let text = rope.byte_slice(updated_target.byte_range.clone()).to_string();
+            tracing::debug!("Extracted text (len={}): {:?}", text.len(), &text[..text.len().min(200)]);
+            text
+        };
+
+        tracing::debug!(
+            "Returning single edit: range={:?}, text_len={}",
+            original_range,
+            final_text.len()
+        );
+
+        Ok(vec![lsp_types::TextEdit {
+            range: original_range,
+            new_text: final_text,
+        }])
+    }
+
+    /// Apply generation and return the changes (internal, does not send to LSP)
+    async fn apply_generation_internal(
+        &self,
+        target: Target,
+        new_body: &str,
+    ) -> Result<Vec<TextDocumentContentChangeEvent>> {
+        let checksum = target.checksum;
+        tracing::debug!("Applying generation for checksum {:x}", checksum);
+
+        let changes = {
+            let mut doc = self
+                .document
+                .write()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+            let changes = doc.apply_generation(&target, new_body)?;
+            doc.complete_generation(checksum);
+            changes
+        };
+
+        // Also send to gopls for formatting support
+        self.send_did_change(changes.clone()).await?;
+
+        Ok(changes)
+    }
+
+    /// Format document and return the changes (internal)
+    async fn format_document_internal(&self) -> Result<Vec<TextDocumentContentChangeEvent>> {
+        let supports_formatting = self.lsp_client.supports_document_formatting().await;
+        tracing::debug!("Document formatting supported: {}", supports_formatting);
+        if !supports_formatting {
+            return Ok(Vec::new());
+        }
+
+        let (uri_str, snapshot) = {
+            let doc = self
+                .document
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+            let snapshot = doc.editor.fork();
+            (doc.uri.clone(), snapshot)
+        };
+
+        let uri: lsp_types::Uri = uri_str.parse()?;
+
+        let formatting_options = lsp_types::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: false,
+            trim_trailing_whitespace: Some(true),
+            insert_final_newline: Some(true),
+            trim_final_newlines: Some(true),
+            properties: std::collections::HashMap::new(),
+        };
+
+        tracing::debug!("Requesting formatting for {}", uri_str);
+        let result = self
+            .lsp_client
+            .format_document(
+                lsp_types::TextDocumentIdentifier { uri },
+                formatting_options,
+            )
+            .await?;
+
+        tracing::debug!("Formatting result: {:?}", result.as_ref().map(|v| v.len()));
+
+        match result {
+            Some(edits) if !edits.is_empty() => {
+                tracing::debug!("Applying {} formatting edits", edits.len());
+                let changes = {
+                    let mut doc = self
+                        .document
+                        .write()
+                        .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+                    doc.editor.apply_text_edits(&edits, snapshot)?
+                };
+                // Send to gopls
+                self.send_did_change(changes.clone()).await?;
+                Ok(changes)
+            }
+            _ => {
+                tracing::debug!("No formatting edits returned");
+                Ok(Vec::new())
+            }
+        }
     }
 
     async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {

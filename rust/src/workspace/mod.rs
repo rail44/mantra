@@ -133,6 +133,54 @@ impl WorkspaceService {
         Ok(result)
     }
 
+    /// Open a document with provided text (from editor), creating if not exists
+    pub async fn open_document_with_text(&self, uri: &str, text: &str) -> Result<DocumentService> {
+        // Check if document already exists
+        {
+            let workspace = self.workspace.read().unwrap();
+            if let Some(document) = workspace.documents.get(uri) {
+                return Ok(document.clone());
+            }
+        }
+
+        let parsed_uri: lsp_types::Uri = uri.parse()?;
+
+        // Open document in gopls
+        self.lsp_client
+            .did_open(lsp_types::TextDocumentItem {
+                uri: parsed_uri,
+                language_id: "go".to_string(),
+                version: 1,
+                text: text.to_string(),
+            })
+            .await?;
+
+        // Create document from provided text (not from disk)
+        let d = Document::from_text(uri.to_string(), text)?;
+        let document = DocumentService::new(
+            d,
+            self.lsp_client.clone(),
+            self.llm_client.clone(),
+            self.clone(),
+        );
+
+        // Store the document
+        {
+            let mut workspace = self.workspace.write().unwrap();
+            workspace
+                .documents
+                .insert(uri.to_string(), document.clone());
+        }
+
+        Ok(document)
+    }
+
+    /// Get an existing document by URI
+    pub fn get_document(&self, uri: &str) -> Option<DocumentService> {
+        let workspace = self.workspace.read().unwrap();
+        workspace.documents.get(uri).cloned()
+    }
+
     /// Open a document by URI, reusing existing if already open
     pub async fn open_document(&self, uri: &str) -> Result<DocumentService> {
         // Check if document already exists

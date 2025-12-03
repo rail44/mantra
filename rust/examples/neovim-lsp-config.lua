@@ -16,10 +16,12 @@ vim.opt.signcolumn = "yes"
 vim.api.nvim_create_autocmd("FileType", {
   pattern = "go",
   callback = function()
+    -- Use the directory of the current file as root_dir to find mantra.toml
+    local file_dir = vim.fn.expand("%:p:h")
     local client_id = vim.lsp.start({
       name = "mantra",
       cmd = { mantra_bin, "lsp" },
-      root_dir = vim.fn.getcwd(),
+      root_dir = file_dir,
     })
     if client_id then
       print("mantra LSP started with client_id: " .. client_id)
@@ -53,10 +55,11 @@ end, { desc = "Code action" })
 
 -- Start LSP for current buffer if it's a Go file (for when config is loaded after file is opened)
 if vim.bo.filetype == "go" then
+  local file_dir = vim.fn.expand("%:p:h")
   local client_id = vim.lsp.start({
     name = "mantra",
     cmd = { mantra_bin, "lsp" },
-    root_dir = vim.fn.getcwd(),
+    root_dir = file_dir,
   })
   if client_id then
     print("mantra LSP started for current buffer (client_id: " .. client_id .. ")")
