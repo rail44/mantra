@@ -14,6 +14,7 @@ mod language;
 mod llm;
 mod lsp;
 mod parser;
+mod server;
 mod workspace;
 
 /// Mantra - AI-powered Go code generation tool
@@ -31,23 +32,32 @@ enum Commands {
         /// Go file to process
         file: PathBuf,
     },
+    /// Start the LSP server (for editor integration)
+    Lsp,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Setup structured logging with RUST_LOG environment variable
-    // Default to "warn" if RUST_LOG is not set
-    // Examples:
-    //   RUST_LOG=mantra=debug                    - all mantra debug logs
-    //   RUST_LOG=mantra::lsp=trace               - LSP trace logs
-    //   RUST_LOG=mantra::editor=debug            - editor debug logs
-    //   RUST_LOG=warn,mantra::generation=info    - warnings + generation info
+    // Process commands
+    match args.command {
+        Commands::Generate { file } => {
+            setup_stderr_logging();
+            generate_command(file).await
+        }
+        Commands::Lsp => {
+            setup_file_logging();
+            server::run_server().await
+        }
+    }
+}
+
+/// Setup logging to stderr (for CLI commands)
+fn setup_stderr_logging() {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,mantra=info"));
 
-    // Configure structured logging (explicitly output to stderr)
     let format_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_target(true)
@@ -62,11 +72,32 @@ async fn main() -> Result<()> {
         .with(env_filter)
         .with(format_layer)
         .init();
+}
 
-    // Process commands
-    match args.command {
-        Commands::Generate { file } => generate_command(file).await,
-    }
+/// Setup logging to file (for LSP server)
+fn setup_file_logging() {
+    use std::fs::OpenOptions;
+
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mantra-lsp.log")
+        .expect("Failed to open log file");
+
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,mantra=debug"));
+
+    let format_layer = fmt::layer()
+        .with_writer(log_file)
+        .with_ansi(false)
+        .with_target(true)
+        .with_file(true)
+        .with_line_number(true);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(format_layer)
+        .init();
 }
 
 async fn generate_command(file: PathBuf) -> Result<()> {
