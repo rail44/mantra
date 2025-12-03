@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::RwLock;
 use tokio::sync::RwLock as AsyncRwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::{
@@ -12,8 +11,6 @@ use tower_lsp_server::lsp_types::{
 use tower_lsp_server::{Client, LanguageServer};
 
 use crate::config::Config;
-use crate::editor::crdt::CrdtEditor;
-use crate::parser::target::Target;
 use crate::workspace::WorkspaceService;
 
 /// Info about panic("not implemented") location
@@ -26,8 +23,6 @@ struct PanicInfo {
 /// Mantra LSP backend
 pub struct MantraBackend {
     client: Client,
-    /// Document contents indexed by URI
-    documents: RwLock<std::collections::HashMap<String, String>>,
     /// Workspace service (initialized after receiving root_uri)
     workspace: AsyncRwLock<Option<WorkspaceService>>,
 }
@@ -36,7 +31,6 @@ impl MantraBackend {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            documents: RwLock::new(std::collections::HashMap::new()),
             workspace: AsyncRwLock::new(None),
         }
     }
@@ -194,27 +188,6 @@ impl MantraBackend {
 
         None
     }
-
-    /// Find targets in the document text using tree-sitter parsing
-    fn find_targets_in_text(&self, uri: &str, text: &str) -> Vec<Target> {
-        match CrdtEditor::new(text) {
-            Ok(editor) => {
-                if let Some(tree) = editor.tree() {
-                    let rope = editor.rope();
-                    let snapshot = editor.fork();
-                    Target::find_targets(tree, rope, &snapshot, uri)
-                } else {
-                    tracing::warn!("No parse tree available for {}", uri);
-                    Vec::new()
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to parse document {}: {}", uri, e);
-                Vec::new()
-            }
-        }
-    }
-
 }
 
 impl LanguageServer for MantraBackend {
@@ -268,11 +241,6 @@ impl LanguageServer for MantraBackend {
 
         tracing::debug!("Document opened: {}", uri.as_str());
 
-        // Store document content for diagnostics
-        if let Ok(mut docs) = self.documents.write() {
-            docs.insert(uri.to_string(), text.clone());
-        }
-
         // Create DocumentService via WorkspaceService
         let workspace = self.workspace.read().await;
         if let Some(ws) = workspace.as_ref() {
@@ -295,22 +263,14 @@ impl LanguageServer for MantraBackend {
             changes.len()
         );
 
-        // Apply incremental changes to DocumentService
-        let workspace = self.workspace.read().await;
-        if let Some(ws) = workspace.as_ref() {
-            if let Some(doc_service) = ws.get_document(uri.as_str()) {
-                if let Err(e) = doc_service.apply_changes(&changes) {
-                    tracing::warn!("Failed to apply changes: {}", e);
-                }
-            }
-        }
-        drop(workspace);
-
-        // Get updated text for diagnostics
+        // Apply incremental changes to DocumentService and get updated text
         let text = {
             let workspace = self.workspace.read().await;
             if let Some(ws) = workspace.as_ref() {
                 if let Some(doc_service) = ws.get_document(uri.as_str()) {
+                    if let Err(e) = doc_service.apply_changes(&changes) {
+                        tracing::warn!("Failed to apply changes: {}", e);
+                    }
                     doc_service.get_text().ok()
                 } else {
                     None
@@ -321,10 +281,6 @@ impl LanguageServer for MantraBackend {
         };
 
         if let Some(text) = text {
-            // Update stored document content for code_action
-            if let Ok(mut docs) = self.documents.write() {
-                docs.insert(uri.to_string(), text.clone());
-            }
             // Re-analyze and publish diagnostics
             self.analyze_and_publish_diagnostics(uri, &text).await;
         }
