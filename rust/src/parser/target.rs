@@ -37,9 +37,31 @@ pub struct Target {
     pub byte_range: Range<usize>,
     /// Type references found in the function signature
     pub type_references: Vec<TypeReference>,
+    /// Whether the function body contains panic("not implemented")
+    pub has_panic_not_implemented: bool,
 }
 
 impl Target {
+    /// Find all targets from text (parses with tree-sitter internally)
+    pub fn find_targets_from_text(text: &str, uri: &str) -> Vec<Target> {
+        use crate::editor::crdt::CrdtEditor;
+
+        let editor = match CrdtEditor::new(text) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+
+        let tree = match editor.tree() {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let rope = editor.rope();
+        let snapshot = editor.fork();
+
+        Self::find_targets(tree, rope, &snapshot, uri)
+    }
+
     /// Find all targets (functions with mantra comments) in a parsed tree
     pub fn find_targets(tree: &Tree, rope: &Rope, snapshot: &Snapshot, uri: &str) -> Vec<Target> {
         let mut targets = Vec::new();
@@ -106,17 +128,22 @@ fn create_target_from_function(
     uri: &str,
     instruction: &str,
 ) -> Target {
-    // Extract signature
-    let signature = if let Some(body_node) = node.child_by_field_name("body") {
+    // Extract signature and check for panic("not implemented")
+    let (signature, has_panic_not_implemented) = if let Some(body_node) = node.child_by_field_name("body") {
         let sig_start = node.start_byte();
         let sig_end = body_node.start_byte();
-        rope.byte_slice(sig_start..sig_end)
+        let sig = rope.byte_slice(sig_start..sig_end)
             .to_string()
             .trim()
-            .to_string()
+            .to_string();
+
+        // Check function body for panic("not implemented")
+        let body_text = rope.byte_slice(body_node.start_byte()..body_node.end_byte()).to_string();
+        let has_panic = body_text.contains("panic(\"not implemented\")");
+
+        (sig, has_panic)
     } else {
-        rope.byte_slice(node.start_byte()..node.end_byte())
-            .to_string()
+        (rope.byte_slice(node.start_byte()..node.end_byte()).to_string(), false)
     };
 
     // Collect type references
@@ -131,6 +158,7 @@ fn create_target_from_function(
         snapshot: snapshot.clone(),
         byte_range: node.start_byte()..node.end_byte(),
         type_references,
+        has_panic_not_implemented,
     };
 
     // Calculate checksum

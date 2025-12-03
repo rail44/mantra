@@ -13,13 +13,6 @@ use tower_lsp_server::{Client, LanguageServer};
 use crate::config::Config;
 use crate::workspace::WorkspaceService;
 
-/// Info about panic("not implemented") location
-struct PanicInfo {
-    line: u32,
-    start_char: u32,
-    end_char: u32,
-}
-
 /// Mantra LSP backend
 pub struct MantraBackend {
     client: Client,
@@ -82,7 +75,7 @@ impl MantraBackend {
 
     /// Analyze document and publish diagnostics
     async fn analyze_and_publish_diagnostics(&self, uri: Uri, text: &str) {
-        let diagnostics = self.find_mantra_targets(text);
+        let diagnostics = self.find_mantra_targets(text, uri.as_str());
 
         tracing::info!(
             "Publishing {} diagnostics for {}",
@@ -100,94 +93,54 @@ impl MantraBackend {
     }
 
     /// Find mantra targets in text and return diagnostics
-    fn find_mantra_targets(&self, text: &str) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
+    fn find_mantra_targets(&self, text: &str, uri: &str) -> Vec<Diagnostic> {
+        use crate::parser::target::Target;
 
-        // Simple line-by-line parsing to find // mantra: comments
-        let lines: Vec<&str> = text.lines().collect();
-        let mut pending_mantra_line: Option<(usize, String)> = None;
+        let targets = Target::find_targets_from_text(text, uri);
 
-        for (line_num, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
+        targets
+            .into_iter()
+            .filter(|t| t.has_panic_not_implemented)
+            .map(|t| {
+                // Convert byte range start to line/character
+                let (line, character) = byte_to_line_char(text, t.byte_range.start);
 
-            // Check for mantra comment
-            if let Some(instruction) = trimmed.strip_prefix("// mantra:") {
-                pending_mantra_line = Some((line_num, instruction.trim().to_string()));
-                continue;
-            }
-
-            // Check if this line is a function declaration following a mantra comment
-            if let Some((mantra_line, instruction)) = pending_mantra_line.take() {
-                if trimmed.starts_with("func ") || trimmed.contains(") ") && trimmed.contains("func") {
-                    // Check if it contains panic("not implemented") and get its location
-                    if let Some(panic_info) = self.find_panic_not_implemented(&lines, line_num) {
-                        diagnostics.push(Diagnostic {
-                            range: Range {
-                                start: Position {
-                                    line: mantra_line as u32,
-                                    character: 0,
-                                },
-                                end: Position {
-                                    line: mantra_line as u32,
-                                    character: lines[mantra_line].len() as u32,
-                                },
-                            },
-                            severity: Some(DiagnosticSeverity::HINT),
-                            source: Some("mantra".to_string()),
-                            message: format!("Generate implementation: {}", instruction),
-                            // Store panic line info for code action
-                            data: Some(serde_json::json!({
-                                "panic_line": panic_info.line,
-                                "panic_start_char": panic_info.start_char,
-                                "panic_end_char": panic_info.end_char,
-                                "instruction": instruction,
-                            })),
-                            ..Default::default()
-                        });
-                    }
+                Diagnostic {
+                    range: Range {
+                        start: Position { line, character: 0 },
+                        end: Position { line, character },
+                    },
+                    severity: Some(DiagnosticSeverity::HINT),
+                    source: Some("mantra".to_string()),
+                    message: format!("Generate implementation: {}", t.instruction),
+                    data: Some(serde_json::json!({
+                        "instruction": t.instruction,
+                    })),
+                    ..Default::default()
                 }
-            }
-        }
+            })
+            .collect()
+    }
+}
 
-        diagnostics
+/// Convert byte position to (line, character) in text
+fn byte_to_line_char(text: &str, byte_pos: usize) -> (u32, u32) {
+    let mut line = 0u32;
+    let mut character = 0u32;
+
+    for (idx, ch) in text.char_indices() {
+        if idx >= byte_pos {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
     }
 
-    /// Find panic("not implemented") in a function and return its location
-    fn find_panic_not_implemented(&self, lines: &[&str], start_line: usize) -> Option<PanicInfo> {
-        let mut brace_count = 0;
-        let mut started = false;
-        let panic_pattern = "panic(\"not implemented\")";
-
-        for (offset, line) in lines.iter().skip(start_line).enumerate() {
-            let line_num = start_line + offset;
-
-            for ch in line.chars() {
-                if ch == '{' {
-                    brace_count += 1;
-                    started = true;
-                } else if ch == '}' {
-                    brace_count -= 1;
-                    if started && brace_count == 0 {
-                        return None;
-                    }
-                }
-            }
-
-            if let Some(pos) = line.find(panic_pattern) {
-                return Some(PanicInfo {
-                    line: line_num as u32,
-                    start_char: pos as u32,
-                    end_char: (pos + panic_pattern.len()) as u32,
-                });
-            }
-
-            if started && brace_count == 0 {
-                break;
-            }
-        }
-
-        None
-    }
+    (line, character)
 }
 
 impl LanguageServer for MantraBackend {
