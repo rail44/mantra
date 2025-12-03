@@ -252,12 +252,13 @@ impl DocumentService {
 
     /// Generate code for a single target, apply and format
     /// Returns a single TextEdit representing the complete change
+    /// Note: This does NOT modify the internal document state - changes come via did_change
     pub async fn generate_single_with_edits(
         &self,
         target: &Target,
     ) -> Result<Vec<lsp_types::TextEdit>> {
-        // Get the original LSP range before any changes
-        let original_range = {
+        // Get the original LSP range and create a temporary editor for generation
+        let (original_range, mut temp_editor, uri) = {
             let doc = self
                 .document
                 .read()
@@ -265,56 +266,95 @@ impl DocumentService {
             let rope = doc.editor.rope();
             let start_pos = byte_to_lsp_position(target.byte_range.start, rope);
             let end_pos = byte_to_lsp_position(target.byte_range.end, rope);
-            lsp_types::Range::new(start_pos, end_pos)
-        };
+            let range = lsp_types::Range::new(start_pos, end_pos);
 
-        // Mark generation as pending
-        {
-            let mut document = self
-                .document
-                .write()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
-            document.start_generation(target.checksum);
-        }
+            // Create a temporary editor with the current content
+            let temp_editor = CrdtEditor::new(&doc.get_text())?;
+            (range, temp_editor, doc.uri.clone())
+        };
 
         // Generate code for this target
         let new_body =
             spawn_generation_task(target, self.llm_client.clone(), &self.workspace).await?;
 
-        // Apply generation (this modifies the internal CRDT editor)
-        self.apply_generation_internal(target.clone(), &new_body)
+        // Apply generation to temporary editor
+        let replacement = format!(
+            "// mantra:checksum:{:x}\n{} {{\n{}\n}}",
+            target.checksum,
+            target.signature.trim_end(),
+            new_body.trim()
+        );
+        let snapshot = temp_editor.fork();
+        temp_editor.apply_byte_edit(&target.byte_range, &replacement, snapshot)?;
+
+        // Send to gopls for formatting (using a temporary did_open/did_change)
+        let temp_uri = format!("{}#temp", uri);
+        let parsed_uri: lsp_types::Uri = temp_uri.parse()?;
+
+        // Open temporary document in gopls
+        self.lsp_client
+            .did_open(lsp_types::TextDocumentItem {
+                uri: parsed_uri.clone(),
+                language_id: "go".to_string(),
+                version: 1,
+                text: temp_editor.get_text(),
+            })
             .await?;
 
-        // Format (this modifies the internal CRDT editor)
-        self.format_document_internal().await?;
+        // Request formatting from gopls
+        let format_result = if self.lsp_client.supports_document_formatting().await {
+            let formatting_options = lsp_types::FormattingOptions {
+                tab_size: 4,
+                insert_spaces: false,
+                trim_trailing_whitespace: Some(true),
+                insert_final_newline: Some(true),
+                trim_final_newlines: Some(true),
+                properties: std::collections::HashMap::new(),
+            };
+            self.lsp_client
+                .format_document(
+                    lsp_types::TextDocumentIdentifier { uri: parsed_uri.clone() },
+                    formatting_options,
+                )
+                .await?
+        } else {
+            None
+        };
 
-        // Find the updated target in the final document and extract its text
-        let final_text = {
-            let doc = self
-                .document
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
-
-            // Re-find targets in the updated document
-            let targets = doc.find_targets()?;
-            tracing::debug!("Found {} targets after generation/format", targets.len());
-            for t in &targets {
-                tracing::debug!("  Target: signature='{}', byte_range={:?}", t.signature, t.byte_range);
+        // Apply formatting edits to temporary editor
+        if let Some(edits) = format_result {
+            if !edits.is_empty() {
+                let snapshot = temp_editor.fork();
+                temp_editor.apply_text_edits(&edits, snapshot)?;
             }
+        }
 
-            // Find the target with matching signature
+        // Close temporary document (gopls will clean up)
+        self.lsp_client
+            .did_close(lsp_types::TextDocumentIdentifier { uri: parsed_uri })
+            .await?;
+
+        // Find the updated target in the temporary editor
+        let final_text = {
+            let tree = temp_editor
+                .tree()
+                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
+            let rope = temp_editor.rope();
+            let snapshot = temp_editor.fork();
+
+            let targets = crate::parser::target::Target::find_targets(tree, rope, &snapshot, &uri);
+
             let updated_target = targets
                 .iter()
                 .find(|t| t.signature == target.signature)
                 .ok_or_else(|| {
-                    anyhow::anyhow!("Could not find updated target with signature: {}", target.signature)
+                    anyhow::anyhow!(
+                        "Could not find updated target with signature: {}",
+                        target.signature
+                    )
                 })?;
 
-            // Extract text from the updated byte range
-            let rope = doc.editor.rope();
-            let text = rope.byte_slice(updated_target.byte_range.clone()).to_string();
-            tracing::debug!("Extracted text (len={}): {:?}", text.len(), &text[..text.len().min(200)]);
-            text
+            rope.byte_slice(updated_target.byte_range.clone()).to_string()
         };
 
         tracing::debug!(

@@ -391,21 +391,35 @@ impl LanguageServer for MantraBackend {
         for diagnostic in mantra_diagnostics {
             tracing::info!("Diagnostic range: {:?}", diagnostic.range);
 
-            // Find the matching target by checking if the diagnostic line is just before the function
-            // The diagnostic is on the mantra comment line, and the function starts on the next line
+            // Extract instruction from diagnostic data for matching
+            let instruction = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("instruction"))
+                .and_then(|v| v.as_str());
+
+            // Find the matching target by instruction (primary) or line number (fallback)
             let diagnostic_line = diagnostic.range.start.line;
 
-            let target = targets.iter().find(|t| {
-                // Convert target's byte_range.start to line number
-                let (target_start_pos, _) = byte_range_to_lsp_range(&text, &t.byte_range);
-                // The function should start on the line after the mantra comment
-                target_start_pos.line == diagnostic_line + 1
-            });
+            let target = if let Some(instr) = instruction {
+                // Match by instruction content
+                targets.iter().find(|t| t.instruction == instr)
+            } else {
+                // Fallback to line number matching
+                targets.iter().find(|t| {
+                    let (target_start_pos, _) = byte_range_to_lsp_range(&text, &t.byte_range);
+                    target_start_pos.line == diagnostic_line + 1
+                })
+            };
 
             let target = match target {
                 Some(t) => t.clone(),
                 None => {
-                    tracing::warn!("No target found for diagnostic at line {}", diagnostic_line);
+                    tracing::warn!(
+                        "No target found for diagnostic at line {} (instruction: {:?})",
+                        diagnostic_line,
+                        instruction
+                    );
                     continue;
                 }
             };
