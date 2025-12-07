@@ -181,7 +181,7 @@ impl Document {
         Ok(vec![change])
     }
 
-    /// Find target byte_range by checksum (fallback when anchor resolution fails)
+    /// Find target `byte_range` by checksum (fallback when anchor resolution fails)
     fn find_target_by_checksum(&self, checksum: u64) -> Result<std::ops::Range<usize>> {
         let gen_tree = self
             .generation_editor
@@ -195,10 +195,7 @@ impl Document {
             .into_iter()
             .find(|t| t.checksum == checksum)
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Target with checksum {:x} not found in generation_editor",
-                    checksum
-                )
+                anyhow::anyhow!("Target with checksum {checksum:x} not found in generation_editor")
             })?;
 
         Ok(gen_target.byte_range)

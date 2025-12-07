@@ -13,11 +13,9 @@ pub struct DeletionResult {
     pub lsp_range: Range,
 }
 
-/// Edit operation that can be propagated to other CrdtEditors
+/// Edit operation that can be propagated to other `CrdtEditors`
 #[derive(Debug)]
 pub struct EditOperation {
-    /// The LSP change event
-    pub lsp_change: TextDocumentContentChangeEvent,
     /// The cola Deletion (if any)
     pub deletion: Option<Deletion>,
     /// The cola Insertion (if any)
@@ -285,7 +283,7 @@ impl CrdtEditor {
         Ok(result)
     }
 
-    /// Apply an edit and return the EditOperation for propagation to other editors
+    /// Apply an edit and return the `EditOperation` for propagation to other editors
     ///
     /// Unlike `apply_byte_edit`, this method creates Insertion/Deletion in self's replica
     /// and returns them so they can be integrated into other editors.
@@ -294,16 +292,6 @@ impl CrdtEditor {
         byte_range: &StdRange<usize>,
         new_text: &str,
     ) -> Result<EditOperation> {
-        // Calculate LSP range before any modifications
-        let lsp_range = if byte_range.start < byte_range.end {
-            let start_pos = self.byte_to_lsp_position(byte_range.start);
-            let end_pos = self.byte_to_lsp_position(byte_range.end);
-            Range::new(start_pos, end_pos)
-        } else {
-            let pos = self.byte_to_lsp_position(byte_range.start);
-            Range::new(pos, pos)
-        };
-
         // Create deletion if needed
         let deletion = if byte_range.start < byte_range.end {
             let del = self.snapshot.replica.deleted(byte_range.clone());
@@ -316,7 +304,9 @@ impl CrdtEditor {
         };
 
         // Create insertion if needed
-        let insertion = if !new_text.is_empty() {
+        let insertion = if new_text.is_empty() {
+            None
+        } else {
             let ins = self
                 .snapshot
                 .replica
@@ -324,8 +314,6 @@ impl CrdtEditor {
             // Apply insertion to rope
             self.snapshot.rope.insert(byte_range.start, new_text);
             Some(ins)
-        } else {
-            None
         };
 
         // Re-parse after edit
@@ -333,18 +321,13 @@ impl CrdtEditor {
         self.increment_version();
 
         Ok(EditOperation {
-            lsp_change: TextDocumentContentChangeEvent {
-                range: Some(lsp_range),
-                range_length: None,
-                text: new_text.to_string(),
-            },
             deletion,
             insertion,
             inserted_text: new_text.to_string(),
         })
     }
 
-    /// Integrate an EditOperation from another editor
+    /// Integrate an `EditOperation` from another editor
     ///
     /// This applies the Insertion/Deletion from another editor, with cola
     /// handling coordinate transformation automatically.
@@ -374,7 +357,7 @@ impl CrdtEditor {
 
     /// Create a forked editor that shares ancestry with this editor
     ///
-    /// The forked editor can receive EditOperations from this editor via `integrate_ops`,
+    /// The forked editor can receive `EditOperations` from this editor via `integrate_ops`,
     /// and cola will correctly handle coordinate transformation.
     pub fn fork_editor(&self) -> Result<Self> {
         let snapshot = Snapshot {
