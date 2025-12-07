@@ -17,7 +17,7 @@ use crate::workspace::WorkspaceService;
 /// Mantra LSP backend
 pub struct MantraBackend {
     client: Client,
-    /// Workspace service (initialized after receiving root_uri)
+    /// Workspace service (initialized after receiving `root_uri`)
     workspace: AsyncRwLock<Option<WorkspaceService>>,
 }
 
@@ -29,22 +29,19 @@ impl MantraBackend {
         }
     }
 
-    /// Initialize workspace service from root_uri
+    /// Initialize workspace service from `root_uri`
     async fn init_workspace(&self, root_uri: Option<String>) -> bool {
-        let root_path = match root_uri {
-            Some(uri) => {
-                // Parse file:// URI
-                if let Some(path) = uri.strip_prefix("file://") {
-                    PathBuf::from(path)
-                } else {
-                    tracing::warn!("root_uri is not a file:// URI: {}", uri);
-                    return false;
-                }
-            }
-            None => {
-                tracing::warn!("No root_uri provided");
+        let root_path = if let Some(uri) = root_uri {
+            // Parse file:// URI
+            if let Some(path) = uri.strip_prefix("file://") {
+                PathBuf::from(path)
+            } else {
+                tracing::warn!("root_uri is not a file:// URI: {}", uri);
                 return false;
             }
+        } else {
+            tracing::warn!("No root_uri provided");
+            return false;
         };
 
         // Try to load config
@@ -62,12 +59,11 @@ impl MantraBackend {
             config
                 .api_key
                 .as_ref()
-                .map(|k| if k.starts_with("${") {
+                .map_or("none", |k| if k.starts_with("${") {
                     "NOT EXPANDED (env var not set)"
                 } else {
                     "yes (hidden)"
                 })
-                .unwrap_or("none")
         );
 
         // Initialize workspace service
@@ -90,12 +86,9 @@ impl MantraBackend {
     async fn analyze_and_start_generation(&self, uri: Uri, text: &str) {
         let workspace = {
             let ws = self.workspace.read().await;
-            match ws.as_ref() {
-                Some(w) => w.clone(),
-                None => {
-                    tracing::debug!("No workspace available for background generation");
-                    return;
-                }
+            if let Some(w) = ws.as_ref() { w.clone() } else {
+                tracing::debug!("No workspace available for background generation");
+                return;
             }
         };
 
@@ -134,9 +127,8 @@ impl MantraBackend {
         let original_text = text.to_string();
 
         // Start background generation and get completion receiver
-        let completion_rx = match doc_service.spawn_background_generation(generation_targets) {
-            Some(rx) => rx,
-            None => return,
+        let Some(completion_rx) = doc_service.spawn_background_generation(generation_targets) else {
+            return;
         };
 
         // Spawn a task to publish diagnostics when generation completes
@@ -191,6 +183,7 @@ impl MantraBackend {
 }
 
 impl LanguageServer for MantraBackend {
+    #[allow(deprecated)] // root_uri is deprecated but still widely used
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         tracing::info!("LSP initialize request received");
 
@@ -271,7 +264,7 @@ impl LanguageServer for MantraBackend {
                     if let Err(e) = doc_service.apply_changes(&changes) {
                         tracing::warn!("Failed to apply changes: {}", e);
                     }
-                    doc_service.get_text().ok()
+                    Some(doc_service.get_text())
                 } else {
                     None
                 }
@@ -286,6 +279,7 @@ impl LanguageServer for MantraBackend {
         }
     }
 
+    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::mutable_key_type)]
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
         let diagnostics = params.context.diagnostics;
@@ -304,20 +298,14 @@ impl LanguageServer for MantraBackend {
 
         // Get DocumentService via WorkspaceService
         let workspace = self.workspace.read().await;
-        let workspace = match workspace.as_ref() {
-            Some(ws) => ws,
-            None => {
-                tracing::warn!("No workspace available for code action");
-                return Ok(None);
-            }
+        let Some(workspace) = workspace.as_ref() else {
+            tracing::warn!("No workspace available for code action");
+            return Ok(None);
         };
 
-        let doc_service = match workspace.get_document(uri.as_str()) {
-            Some(ds) => ds,
-            None => {
-                tracing::warn!("Document not found: {}", uri.as_str());
-                return Ok(None);
-            }
+        let Some(doc_service) = workspace.get_document(uri.as_str()) else {
+            tracing::warn!("Document not found: {}", uri.as_str());
+            return Ok(None);
         };
 
         for diagnostic in mantra_diagnostics {
@@ -334,26 +322,20 @@ impl LanguageServer for MantraBackend {
                 .and_then(|d| d.get("instruction"))
                 .and_then(|v| v.as_str());
 
-            let checksum = match checksum_str {
-                Some(s) => match u64::from_str_radix(s, 16) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("Failed to parse checksum '{}': {}", s, e);
-                        continue;
-                    }
-                },
-                None => {
-                    tracing::warn!("No checksum in diagnostic data");
+            let checksum = if let Some(s) = checksum_str { match u64::from_str_radix(s, 16) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to parse checksum '{}': {}", s, e);
                     continue;
                 }
+            } } else {
+                tracing::warn!("No checksum in diagnostic data");
+                continue;
             };
 
-            let instruction = match instruction {
-                Some(i) => i.to_string(),
-                None => {
-                    tracing::warn!("No instruction in diagnostic data");
-                    continue;
-                }
+            let instruction = if let Some(i) = instruction { i.to_string() } else {
+                tracing::warn!("No instruction in diagnostic data");
+                continue;
             };
 
             // Extract target range from diagnostic data
@@ -361,50 +343,47 @@ impl LanguageServer for MantraBackend {
                 .data
                 .as_ref()
                 .and_then(|d| d.get("target_start_line"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
 
             let target_start_character = diagnostic
                 .data
                 .as_ref()
                 .and_then(|d| d.get("target_start_character"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
 
             let target_end_line = diagnostic
                 .data
                 .as_ref()
                 .and_then(|d| d.get("target_end_line"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
 
             let target_end_character = diagnostic
                 .data
                 .as_ref()
                 .and_then(|d| d.get("target_end_character"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
 
-            let (start_pos, end_pos) = match (
+            let (start_pos, end_pos) = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (
                 target_start_line,
                 target_start_character,
                 target_end_line,
                 target_end_character,
-            ) {
-                (Some(sl), Some(sc), Some(el), Some(ec)) => (
-                    Position {
-                        line: sl,
-                        character: sc,
-                    },
-                    Position {
-                        line: el,
-                        character: ec,
-                    },
-                ),
-                _ => {
-                    tracing::warn!("No target range in diagnostic data");
-                    continue;
-                }
+            ) { (
+                Position {
+                    line: sl,
+                    character: sc,
+                },
+                Position {
+                    line: el,
+                    character: ec,
+                },
+            ) } else {
+                tracing::warn!("No target range in diagnostic data");
+                continue;
             };
 
             // Check if code has been generated (either via background or now)
@@ -419,12 +398,9 @@ impl LanguageServer for MantraBackend {
             if !is_generated {
                 // Find target from CRDT
                 let target = match doc_service.find_targets() {
-                    Ok(targets) => match targets.into_iter().find(|t| t.checksum == checksum) {
-                        Some(t) => t,
-                        None => {
-                            tracing::warn!("Target with checksum {:x} not found", checksum);
-                            continue;
-                        }
+                    Ok(targets) => if let Some(t) = targets.into_iter().find(|t| t.checksum == checksum) { t } else {
+                        tracing::warn!("Target with checksum {:x} not found", checksum);
+                        continue;
                     },
                     Err(e) => {
                         tracing::error!("Failed to find targets: {}", e);
@@ -461,7 +437,7 @@ impl LanguageServer for MantraBackend {
 
             // Create a code action with the workspace edit
             let action = CodeAction {
-                title: format!("🔮 Generate: {}", instruction),
+                title: format!("🔮 Generate: {instruction}"),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![diagnostic.clone()]),
                 command: None,

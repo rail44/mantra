@@ -245,17 +245,6 @@ impl Client {
         Ok(())
     }
 
-    /// Close a text document notification
-    pub async fn did_close(&self, text_document: TextDocumentIdentifier) -> Result<()> {
-        let params = lsp_types::DidCloseTextDocumentParams { text_document };
-
-        self.connection
-            .client
-            .notification("textDocument/didClose", params.to_object_params()?)
-            .await?;
-        Ok(())
-    }
-
     /// Get definition location(s) for a symbol at a position
     pub async fn definition(
         &self,

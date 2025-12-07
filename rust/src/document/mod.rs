@@ -87,11 +87,6 @@ impl Document {
         self.generated_not_applied.insert(checksum);
     }
 
-    /// Check if a checksum is generated but not yet applied to editor
-    pub fn is_generated_not_applied(&self, checksum: u64) -> bool {
-        self.generated_not_applied.contains(&checksum)
-    }
-
     /// Get targets for generation
     pub fn find_targets(&self) -> Result<Vec<Target>> {
         let tree = self
@@ -202,7 +197,7 @@ impl DocumentService {
         }
     }
 
-    /// Apply incremental changes from LSP did_change
+    /// Apply incremental changes from LSP `did_change`
     pub fn apply_changes(&self, changes: &[TextDocumentContentChangeEvent]) -> Result<()> {
         let mut document = self.document.write();
 
@@ -213,9 +208,9 @@ impl DocumentService {
     }
 
     /// Get the current text content
-    pub fn get_text(&self) -> Result<String> {
+    pub fn get_text(&self) -> String {
         let document = self.document.read();
-        Ok(document.get_text())
+        document.get_text()
     }
 
     /// Find targets in the document
@@ -228,14 +223,8 @@ impl DocumentService {
     pub fn is_generated(&self, checksum: u64) -> bool {
         let document = self.document.read();
         let text = document.get_text();
-        let checksum_comment = format!("// mantra:checksum:{:x}", checksum);
+        let checksum_comment = format!("// mantra:checksum:{checksum:x}");
         text.contains(&checksum_comment)
-    }
-
-    /// Check if a target is generated but not yet applied to editor
-    pub fn is_generated_not_applied(&self, checksum: u64) -> bool {
-        let document = self.document.read();
-        document.is_generated_not_applied(checksum)
     }
 
     /// Get generated text by checksum from CRDT
@@ -243,7 +232,7 @@ impl DocumentService {
         let doc = self.document.read();
 
         let text = doc.get_text();
-        let checksum_comment = format!("// mantra:checksum:{:x}", checksum);
+        let checksum_comment = format!("// mantra:checksum:{checksum:x}");
 
         if let Some(checksum_pos) = text.find(&checksum_comment) {
             // Find the end of the function by parsing the tree
@@ -278,8 +267,7 @@ impl DocumentService {
         }
 
         Err(anyhow::anyhow!(
-            "Generated text not found for checksum {:x}",
-            checksum
+            "Generated text not found for checksum {checksum:x}"
         ))
     }
 
