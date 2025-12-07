@@ -76,7 +76,9 @@ impl Document {
     /// Create a Document from provided text (without reading from disk)
     pub fn from_text(uri: String, content: &str) -> Result<Self> {
         let editor_sync = CrdtEditor::new(content)?;
-        let generation_editor = CrdtEditor::new(content)?;
+        // Fork generation_editor from editor_sync to establish common ancestry
+        // This enables cola's coordinate transformation when propagating edits
+        let generation_editor = editor_sync.fork_editor()?;
 
         Ok(Self {
             uri,
@@ -189,23 +191,19 @@ impl Document {
             let start_byte = lsp_position_to_byte(range.start, rope);
             let end_byte = lsp_position_to_byte(range.end, rope);
 
-            // Apply to editor_sync first
-            let snapshot = self.editor_sync.fork();
-            self.editor_sync
-                .apply_byte_edit(&(start_byte..end_byte), &change.text, snapshot)?;
+            // Apply to editor_sync and get EditOperation with Insertion/Deletion
+            let ops = self
+                .editor_sync
+                .apply_byte_edit_with_ops(&(start_byte..end_byte), &change.text)?;
 
-            // Apply to generation_editor using editor_sync's snapshot
-            // cola's integrate_* will transform coordinates from editor_sync space to generation_editor space
-            let editor_snapshot = self.editor_sync.fork();
-            self.generation_editor.apply_byte_edit(
-                &(start_byte..end_byte),
-                &change.text,
-                editor_snapshot,
-            )?;
+            // Integrate the EditOperation into generation_editor
+            // cola's coordinate transformation handles the case where generation_editor
+            // has additional content (generated code) that editor_sync doesn't have
+            self.generation_editor.integrate_ops(&ops)?;
         } else {
-            // Full document replacement - recreate both editors
+            // Full document replacement - recreate both editors with fork relationship
             self.editor_sync = CrdtEditor::new(&change.text)?;
-            self.generation_editor = CrdtEditor::new(&change.text)?;
+            self.generation_editor = self.editor_sync.fork_editor()?;
         }
         Ok(())
     }

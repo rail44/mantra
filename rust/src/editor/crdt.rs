@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cola::{Replica, ReplicaId};
+use cola::{Deletion, Insertion, Replica, ReplicaId};
 use crop::Rope;
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent, TextEdit};
 use std::ops::Range as StdRange;
@@ -11,6 +11,19 @@ use crate::parser::GoParser;
 #[derive(Debug)]
 pub struct DeletionResult {
     pub lsp_range: Range,
+}
+
+/// Edit operation that can be propagated to other CrdtEditors
+#[derive(Debug)]
+pub struct EditOperation {
+    /// The LSP change event
+    pub lsp_change: TextDocumentContentChangeEvent,
+    /// The cola Deletion (if any)
+    pub deletion: Option<Deletion>,
+    /// The cola Insertion (if any)
+    pub insertion: Option<Insertion>,
+    /// The inserted text (needed for integration)
+    pub inserted_text: String,
 }
 
 /// Snapshot of text state for CRDT operations
@@ -273,6 +286,111 @@ impl CrdtEditor {
         Ok(result)
     }
 
+    /// Apply an edit and return the EditOperation for propagation to other editors
+    ///
+    /// Unlike `apply_byte_edit`, this method creates Insertion/Deletion in self's replica
+    /// and returns them so they can be integrated into other editors.
+    pub fn apply_byte_edit_with_ops(
+        &mut self,
+        byte_range: &StdRange<usize>,
+        new_text: &str,
+    ) -> Result<EditOperation> {
+        // Calculate LSP range before any modifications
+        let lsp_range = if byte_range.start < byte_range.end {
+            let start_pos = self.byte_to_lsp_position(byte_range.start);
+            let end_pos = self.byte_to_lsp_position(byte_range.end);
+            Range::new(start_pos, end_pos)
+        } else {
+            let pos = self.byte_to_lsp_position(byte_range.start);
+            Range::new(pos, pos)
+        };
+
+        // Create deletion if needed
+        let deletion = if byte_range.start < byte_range.end {
+            let del = self.snapshot.replica.deleted(byte_range.clone());
+            // Apply deletion to rope
+            // For local edits, we directly delete the range (no coordinate transformation needed)
+            self.snapshot.rope.delete(byte_range.clone());
+            Some(del)
+        } else {
+            None
+        };
+
+        // Create insertion if needed
+        let insertion = if !new_text.is_empty() {
+            let ins = self.snapshot.replica.inserted(byte_range.start, new_text.len());
+            // Apply insertion to rope
+            self.snapshot.rope.insert(byte_range.start, new_text);
+            Some(ins)
+        } else {
+            None
+        };
+
+        // Re-parse after edit
+        self.reparse()?;
+        self.increment_version();
+
+        Ok(EditOperation {
+            lsp_change: TextDocumentContentChangeEvent {
+                range: Some(lsp_range),
+                range_length: None,
+                text: new_text.to_string(),
+            },
+            deletion,
+            insertion,
+            inserted_text: new_text.to_string(),
+        })
+    }
+
+    /// Integrate an EditOperation from another editor
+    ///
+    /// This applies the Insertion/Deletion from another editor, with cola
+    /// handling coordinate transformation automatically.
+    pub fn integrate_ops(&mut self, ops: &EditOperation) -> Result<()> {
+        // Integrate deletion first (if any)
+        if let Some(ref deletion) = ops.deletion {
+            let ranges = self.snapshot.replica.integrate_deletion(deletion);
+            // Apply deletions to rope in reverse order
+            for range in ranges.iter().rev() {
+                self.snapshot.rope.delete(range.clone());
+            }
+        }
+
+        // Integrate insertion (if any)
+        if let Some(ref insertion) = ops.insertion {
+            if let Some(pos) = self.snapshot.replica.integrate_insertion(insertion) {
+                self.snapshot.rope.insert(pos, &ops.inserted_text);
+            }
+        }
+
+        // Re-parse after edit
+        self.reparse()?;
+        self.increment_version();
+
+        Ok(())
+    }
+
+    /// Create a forked editor that shares ancestry with this editor
+    ///
+    /// The forked editor can receive EditOperations from this editor via `integrate_ops`,
+    /// and cola will correctly handle coordinate transformation.
+    pub fn fork_editor(&self) -> Result<Self> {
+        let snapshot = Snapshot {
+            replica: self.snapshot.replica.fork(Self::generate_replica_id()),
+            rope: self.snapshot.rope.clone(),
+            version: self.snapshot.version,
+        };
+
+        let parser = GoParser::new()?;
+        let mut editor = Self {
+            snapshot,
+            parser,
+            tree: None,
+        };
+        editor.reparse()?;
+        Ok(editor)
+    }
+
     pub fn apply_text_edits(
         &mut self,
         edits: &[TextEdit],
@@ -321,5 +439,56 @@ mod tests {
         let snapshot = editor.fork();
         editor.apply_byte_edit(&(7..12), "Rust", snapshot).unwrap();
         assert_eq!(editor.get_text(), "Hello, Rust!");
+    }
+
+    #[test]
+    fn test_fork_editor_and_integrate_ops() {
+        // Create an editor and fork it
+        let mut editor_sync = CrdtEditor::new("func Foo() {}").unwrap();
+        let mut generation_editor = editor_sync.fork_editor().unwrap();
+
+        // Both should have the same initial content
+        assert_eq!(editor_sync.get_text(), "func Foo() {}");
+        assert_eq!(generation_editor.get_text(), "func Foo() {}");
+
+        // Apply an edit to editor_sync and get the ops
+        let ops = editor_sync
+            .apply_byte_edit_with_ops(&(5..8), "Bar")
+            .unwrap();
+        assert_eq!(editor_sync.get_text(), "func Bar() {}");
+
+        // Integrate the ops into generation_editor
+        generation_editor.integrate_ops(&ops).unwrap();
+        assert_eq!(generation_editor.get_text(), "func Bar() {}");
+    }
+
+    #[test]
+    fn test_fork_with_divergent_state() {
+        // Simulate the scenario where generation_editor has generated code
+        // that editor_sync doesn't have
+        // "func Foo() {}" - positions: func=0-4, Foo=5-8, ()=8-10, space=10, {}=11-13
+        let mut editor_sync = CrdtEditor::new("func Foo() {}").unwrap();
+        let mut generation_editor = editor_sync.fork_editor().unwrap();
+
+        // Apply generated code to generation_editor only
+        // Replace {} (positions 11-13) with { return 42 }
+        let _gen_ops = generation_editor
+            .apply_byte_edit_with_ops(&(11..13), "{ return 42 }")
+            .unwrap();
+        assert_eq!(generation_editor.get_text(), "func Foo() { return 42 }");
+        assert_eq!(editor_sync.get_text(), "func Foo() {}");
+
+        // Now user edits Foo to Bar in editor_sync
+        let user_ops = editor_sync
+            .apply_byte_edit_with_ops(&(5..8), "Bar")
+            .unwrap();
+        assert_eq!(editor_sync.get_text(), "func Bar() {}");
+
+        // Integrate user edit into generation_editor
+        // Cola should transform coordinates to account for the generated content
+        generation_editor.integrate_ops(&user_ops).unwrap();
+
+        // The function name should be changed, and generated content should be preserved
+        assert_eq!(generation_editor.get_text(), "func Bar() { return 42 }");
     }
 }

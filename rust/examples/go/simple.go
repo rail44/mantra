@@ -19,7 +19,7 @@ func (c *SimpleCache) Get(key string) any {
 	panic("not implemented")
 }
 
-// mantra: キャッシュに値を設定する。TTLが10以下の場合は有効期限なし。
+// mantra: キャッシュに値を設定する。TTLが0の場合は有効期限なし。
 func (c *SimpleCache) Set(key string, value any, ttl time.Duration) {
 	panic("not implemented")
 }
