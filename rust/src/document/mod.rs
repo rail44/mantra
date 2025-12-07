@@ -1,8 +1,6 @@
 use anyhow::Result;
-use crop::Rope;
 use lsp_types::{
-    DidChangeTextDocumentParams, Position, TextDocumentContentChangeEvent,
-    VersionedTextDocumentIdentifier,
+    DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
 };
 use parking_lot::RwLock;
 use std::collections::HashSet;
@@ -11,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
-use crate::editor::crdt::CrdtEditor;
+use crate::editor::crdt::{lsp_position_to_byte, CrdtEditor};
 
 /// Find the end of a function in Go code (simple brace matching)
 fn find_function_end(text: &str) -> Option<usize> {
@@ -34,14 +32,6 @@ fn find_function_end(text: &str) -> Option<usize> {
         }
     }
     None
-}
-
-/// Convert LSP position to byte position in rope
-fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
-    let line_start_byte = rope.byte_of_line(position.line as usize);
-    let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
-    let target_utf16 = line_start_utf16 + position.character as usize;
-    rope.byte_of_utf16_code_unit(target_utf16)
 }
 
 use crate::generation::spawn_generation_task;

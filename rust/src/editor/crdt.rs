@@ -7,6 +7,17 @@ use tree_sitter::Tree;
 
 use crate::parser::GoParser;
 
+/// Convert LSP position to byte position in rope
+///
+/// LSP positions use UTF-16 code units for the character offset,
+/// so we need to convert through UTF-16 to get the correct byte position.
+pub fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
+    let line_start_byte = rope.byte_of_line(position.line as usize);
+    let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
+    let target_utf16 = line_start_utf16 + position.character as usize;
+    rope.byte_of_utf16_code_unit(target_utf16)
+}
+
 /// Result of a deletion operation
 #[derive(Debug)]
 pub struct DeletionResult {
@@ -170,17 +181,6 @@ impl CrdtEditor {
                 .map_err(|e| anyhow::anyhow!("Failed to parse: {e}"))?,
         );
         Ok(())
-    }
-
-    fn lsp_position_to_byte_with_rope(position: Position, rope: &Rope) -> usize {
-        let line_start_byte = rope.byte_of_line(position.line as usize);
-        let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
-
-        // Calculate the target UTF-16 position
-        let target_utf16 = line_start_utf16 + position.character as usize;
-
-        // Convert to byte position
-        rope.byte_of_utf16_code_unit(target_utf16)
     }
 
     /// Convert byte position to LSP position
@@ -384,8 +384,8 @@ impl CrdtEditor {
         let mut changes = Vec::new();
 
         for edit in edits.iter().rev() {
-            let start_byte = Self::lsp_position_to_byte_with_rope(edit.range.start, &snapshot.rope);
-            let end_byte = Self::lsp_position_to_byte_with_rope(edit.range.end, &snapshot.rope);
+            let start_byte = lsp_position_to_byte(edit.range.start, &snapshot.rope);
+            let end_byte = lsp_position_to_byte(edit.range.end, &snapshot.rope);
 
             changes.push(self.apply_byte_edit_internal(
                 &(start_byte..end_byte),
