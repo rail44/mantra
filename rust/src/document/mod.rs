@@ -48,6 +48,7 @@ use crate::generation::spawn_generation_task;
 use crate::inspector::ScopedCode;
 use crate::llm::LLMClient;
 use crate::lsp::Client as LspClient;
+use crate::parser::ast_utils::find_function_at_byte_position;
 use crate::parser::target::Target;
 use crate::workspace::WorkspaceService;
 
@@ -139,9 +140,49 @@ impl Document {
             new_body.trim()
         );
 
-        // Find the corresponding target in generation_editor by checksum
-        // This is necessary because editor_sync and generation_editor are separate CRDTs
-        // and the byte_range from editor_sync may not match generation_editor's state
+        let gen_tree = self
+            .generation_editor
+            .tree()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available for generation_editor"))?;
+
+        // Try to use anchor-based position resolution first
+        // The anchor from editor_sync can be resolved in generation_editor because
+        // they share a common ancestor and user edits are propagated
+        let byte_range =
+            if let Some(start_pos) = self.generation_editor.resolve_anchor(target.start_anchor) {
+                // Find the function node at the resolved position
+                if let Some(func_node) =
+                    find_function_at_byte_position(&gen_tree.root_node(), start_pos)
+                {
+                    func_node.start_byte()..func_node.end_byte()
+                } else {
+                    // Anchor resolved but no function found at position - fall back to checksum search
+                    tracing::debug!(
+                    "Anchor resolved to {} but no function found, falling back to checksum search",
+                    start_pos
+                );
+                    self.find_target_by_checksum(target.checksum)?
+                }
+            } else {
+                // Anchor couldn't be resolved - fall back to checksum search
+                tracing::debug!(
+                "Anchor couldn't be resolved for checksum {:x}, falling back to checksum search",
+                target.checksum
+            );
+                self.find_target_by_checksum(target.checksum)?
+            };
+
+        // Apply edit using the resolved byte range
+        let snapshot = self.generation_editor.fork();
+        let change = self
+            .generation_editor
+            .apply_byte_edit(&byte_range, &replacement, snapshot)?;
+
+        Ok(vec![change])
+    }
+
+    /// Find target byte_range by checksum (fallback when anchor resolution fails)
+    fn find_target_by_checksum(&self, checksum: u64) -> Result<std::ops::Range<usize>> {
         let gen_tree = self
             .generation_editor
             .tree()
@@ -152,22 +193,15 @@ impl Document {
         let gen_targets = Target::find_targets(gen_tree, gen_rope, &gen_snapshot, &self.uri);
         let gen_target = gen_targets
             .into_iter()
-            .find(|t| t.checksum == target.checksum)
+            .find(|t| t.checksum == checksum)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Target with checksum {:x} not found in generation_editor",
-                    target.checksum
+                    checksum
                 )
             })?;
 
-        // Apply edit using the generation_editor's target position and snapshot
-        let change = self.generation_editor.apply_byte_edit(
-            &gen_target.byte_range,
-            &replacement,
-            gen_target.snapshot.fork(),
-        )?;
-
-        Ok(vec![change])
+        Ok(gen_target.byte_range)
     }
 
     /// Get text synchronized with editor (for diagnostics position)

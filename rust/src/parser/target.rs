@@ -1,6 +1,7 @@
 use crate::editor::crdt::Snapshot;
 use crate::parser::checksum::calculate_checksum;
 use crate::parser::type_collector::collect_function_types;
+use cola::{Anchor, AnchorBias};
 use crop::Rope;
 use std::ops::Range;
 use tree_sitter::{Node, Tree};
@@ -33,8 +34,9 @@ pub struct Target {
     pub instruction: String,
     pub signature: String,
     pub checksum: u64,
-    pub snapshot: Snapshot,
     pub byte_range: Range<usize>,
+    /// Anchor at the start of the function for position tracking across edits
+    pub start_anchor: Anchor,
     /// Type references found in the function signature
     pub type_references: Vec<TypeReference>,
     /// Whether this target has already been generated (checksum comment exists)
@@ -174,14 +176,21 @@ fn create_target_from_function(
     // byte_range is the function only (not including the mantra comment)
     let byte_range = node.start_byte()..node.end_byte();
 
+    // Create anchor at the start of the function
+    // Using AnchorBias::Right so the anchor stays at the function start
+    // even if text is inserted right before it
+    let start_anchor = snapshot
+        .replica
+        .create_anchor(node.start_byte(), AnchorBias::Right);
+
     // Create the base target for checksum calculation
     let base_target = Target {
         uri: uri.to_string(),
         instruction: instruction.to_string(),
         signature: signature.clone(),
         checksum: 0, // Will be calculated next
-        snapshot: snapshot.clone(),
         byte_range,
+        start_anchor,
         type_references,
         is_generated: false, // Will be set later in find_targets
     };

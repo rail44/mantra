@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cola::{Deletion, Insertion, Replica, ReplicaId};
+use cola::{Anchor, Deletion, Insertion, Replica, ReplicaId};
 use crop::Rope;
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent, TextEdit};
 use std::ops::Range as StdRange;
@@ -38,15 +38,6 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Fork this snapshot with a new replica ID
-    pub fn fork(&self) -> Self {
-        Snapshot {
-            replica: self.replica.fork(fastrand::u64(..) as ReplicaId),
-            rope: self.rope.clone(),
-            version: self.version,
-        }
-    }
-
     /// Convert byte position to LSP position
     pub fn byte_to_lsp_position(&self, byte_pos: usize) -> Position {
         let line = self.rope.line_of_byte(byte_pos);
@@ -234,6 +225,14 @@ impl CrdtEditor {
         }
     }
 
+    /// Resolve an anchor to its current byte position
+    ///
+    /// Returns None if the anchor cannot be resolved (e.g., the anchor
+    /// references edits that this replica doesn't have).
+    pub fn resolve_anchor(&self, anchor: Anchor) -> Option<usize> {
+        self.snapshot.replica.resolve_anchor(anchor)
+    }
+
     /// Internal byte edit without version increment
     fn apply_byte_edit_internal(
         &mut self,
@@ -318,7 +317,10 @@ impl CrdtEditor {
 
         // Create insertion if needed
         let insertion = if !new_text.is_empty() {
-            let ins = self.snapshot.replica.inserted(byte_range.start, new_text.len());
+            let ins = self
+                .snapshot
+                .replica
+                .inserted(byte_range.start, new_text.len());
             // Apply insertion to rope
             self.snapshot.rope.insert(byte_range.start, new_text);
             Some(ins)
@@ -460,6 +462,72 @@ mod tests {
         // Integrate the ops into generation_editor
         generation_editor.integrate_ops(&ops).unwrap();
         assert_eq!(generation_editor.get_text(), "func Bar() {}");
+    }
+
+    #[test]
+    fn test_anchor_across_forked_replicas() {
+        use cola::AnchorBias;
+
+        // Create an editor and fork it
+        let mut editor_sync = CrdtEditor::new("func Foo() {}").unwrap();
+        let mut generation_editor = editor_sync.fork_editor().unwrap();
+
+        // Create an anchor at position 5 (start of "Foo") in editor_sync
+        let foo_anchor = editor_sync
+            .snapshot
+            .replica
+            .create_anchor(5, AnchorBias::Left);
+
+        // The anchor should resolve in both editors initially
+        assert_eq!(
+            editor_sync.snapshot.replica.resolve_anchor(foo_anchor),
+            Some(5)
+        );
+        assert_eq!(
+            generation_editor
+                .snapshot
+                .replica
+                .resolve_anchor(foo_anchor),
+            Some(5)
+        );
+
+        // Apply an edit to editor_sync (insert "X" at position 0)
+        let ops = editor_sync.apply_byte_edit_with_ops(&(0..0), "X").unwrap();
+        generation_editor.integrate_ops(&ops).unwrap();
+
+        // The anchor should now resolve to position 6 in both editors
+        assert_eq!(
+            editor_sync.snapshot.replica.resolve_anchor(foo_anchor),
+            Some(6)
+        );
+        assert_eq!(
+            generation_editor
+                .snapshot
+                .replica
+                .resolve_anchor(foo_anchor),
+            Some(6)
+        );
+
+        // Apply generated code to generation_editor only
+        let _gen_ops = generation_editor
+            .apply_byte_edit_with_ops(&(12..14), "{ return 42 }")
+            .unwrap();
+
+        // The anchor should still resolve in both editors
+        // In editor_sync: still at position 6
+        // In generation_editor: still at position 6 (before the generated code change)
+        assert_eq!(
+            editor_sync.snapshot.replica.resolve_anchor(foo_anchor),
+            Some(6)
+        );
+        // generation_editor has the edit, so anchor should still resolve
+        assert_eq!(
+            generation_editor
+                .snapshot
+                .replica
+                .resolve_anchor(foo_anchor),
+            Some(6)
+        );
     }
 
     #[test]

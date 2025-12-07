@@ -278,6 +278,31 @@ pub fn find_node_at_byte_position<'a>(root: &Node<'a>, byte_pos: usize) -> Optio
     root.descendant_for_byte_range(byte_pos, byte_pos)
 }
 
+/// Find a function or method declaration at a specific byte position
+/// Returns the function/method node if found, or None if the position is not within a function
+pub fn find_function_at_byte_position<'a>(root: &Node<'a>, byte_pos: usize) -> Option<Node<'a>> {
+    let node = root.descendant_for_byte_range(byte_pos, byte_pos)?;
+    find_parent_function(node)
+}
+
+/// Walk up the tree to find a function or method declaration
+fn find_parent_function(start_node: Node) -> Option<Node> {
+    let mut current = Some(start_node);
+
+    while let Some(node) = current {
+        match node.kind() {
+            "function_declaration" | "method_declaration" => {
+                return Some(node);
+            }
+            _ => {
+                current = node.parent();
+            }
+        }
+    }
+
+    None
+}
+
 /// Find a definition node starting from a given node
 /// In Go, we're looking for `type_spec`, `const_spec`, `var_spec`, `function_declaration`, `method_declaration`
 pub fn find_definition_node(start_node: Node) -> Option<(Node, (usize, usize))> {
