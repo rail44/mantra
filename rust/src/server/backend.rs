@@ -2,15 +2,16 @@ use std::path::PathBuf;
 use tokio::sync::RwLock as AsyncRwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
-    CodeActionResponse, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams, Position,
-    Range, ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
-    Uri, WorkspaceEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, Diagnostic, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult,
+    InitializedParams, Position, Range, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri, WorkspaceEdit,
 };
 use tower_lsp_server::{Client, LanguageServer};
 
 use crate::config::Config;
+use crate::parser::target::Target;
 use crate::workspace::WorkspaceService;
 
 /// Mantra LSP backend
@@ -56,7 +57,18 @@ impl MantraBackend {
         };
 
         tracing::info!("Loaded config: model={}, url={}", config.model, config.url);
-        tracing::info!("API key configured: {}", config.api_key.as_ref().map(|k| if k.starts_with("${") { "NOT EXPANDED (env var not set)" } else { "yes (hidden)" }).unwrap_or("none"));
+        tracing::info!(
+            "API key configured: {}",
+            config
+                .api_key
+                .as_ref()
+                .map(|k| if k.starts_with("${") {
+                    "NOT EXPANDED (env var not set)"
+                } else {
+                    "yes (hidden)"
+                })
+                .unwrap_or("none")
+        );
 
         // Initialize workspace service
         match WorkspaceService::new(root_path, config).await {
@@ -73,74 +85,109 @@ impl MantraBackend {
         }
     }
 
-    /// Analyze document and publish diagnostics
-    async fn analyze_and_publish_diagnostics(&self, uri: Uri, text: &str) {
-        let diagnostics = self.find_mantra_targets(text, uri.as_str());
-
-        tracing::info!(
-            "Publishing {} diagnostics for {}",
-            diagnostics.len(),
-            uri.as_str()
-        );
-
-        for d in &diagnostics {
-            tracing::debug!("  Diagnostic: {} at line {}", d.message, d.range.start.line);
-        }
-
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
-    }
-
-    /// Find mantra targets in text and return diagnostics
-    fn find_mantra_targets(&self, text: &str, uri: &str) -> Vec<Diagnostic> {
-        use crate::parser::target::Target;
-
-        let targets = Target::find_targets_from_text(text, uri);
-
-        targets
-            .into_iter()
-            .filter(|t| t.has_panic_not_implemented)
-            .map(|t| {
-                // Convert byte range start to line/character
-                let (line, character) = byte_to_line_char(text, t.byte_range.start);
-
-                Diagnostic {
-                    range: Range {
-                        start: Position { line, character: 0 },
-                        end: Position { line, character },
-                    },
-                    severity: Some(DiagnosticSeverity::HINT),
-                    source: Some("mantra".to_string()),
-                    message: format!("Generate implementation: {}", t.instruction),
-                    data: Some(serde_json::json!({
-                        "instruction": t.instruction,
-                    })),
-                    ..Default::default()
+    /// Analyze document and start background generation
+    /// Diagnostics will be published when generation completes
+    async fn analyze_and_start_generation(&self, uri: Uri, text: &str) {
+        let workspace = {
+            let ws = self.workspace.read().await;
+            match ws.as_ref() {
+                Some(w) => w.clone(),
+                None => {
+                    tracing::debug!("No workspace available for background generation");
+                    return;
                 }
-            })
-            .collect()
-    }
-}
+            }
+        };
 
-/// Convert byte position to (line, character) in text
-fn byte_to_line_char(text: &str, byte_pos: usize) -> (u32, u32) {
-    let mut line = 0u32;
-    let mut character = 0u32;
+        let uri_str = uri.to_string();
 
-    for (idx, ch) in text.char_indices() {
-        if idx >= byte_pos {
-            break;
+        // Get or create DocumentService first, then find targets from its editor
+        // This ensures targets have snapshots from the document's CRDT editor
+        let doc_service = match workspace.open_document_with_text(&uri_str, text).await {
+            Ok(ds) => ds,
+            Err(e) => {
+                tracing::warn!("Failed to open document: {}", e);
+                return;
+            }
+        };
+
+        // Find targets from DocumentService's editor (correct snapshot)
+        let targets = match doc_service.find_targets() {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("Failed to find targets: {}", e);
+                return;
+            }
+        };
+
+        // Filter out already generated targets
+        let generation_targets: Vec<Target> =
+            targets.into_iter().filter(|t| !t.is_generated).collect();
+
+        if generation_targets.is_empty() {
+            self.client.publish_diagnostics(uri, vec![], None).await;
+            return;
         }
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += 1;
-        }
-    }
 
-    (line, character)
+        // Clone targets for diagnostics (need original positions)
+        let targets_for_diagnostics = generation_targets.clone();
+        let original_text = text.to_string();
+
+        // Start background generation and get completion receiver
+        let completion_rx = match doc_service.spawn_background_generation(generation_targets) {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        // Spawn a task to publish diagnostics when generation completes
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            if completion_rx.await.is_err() {
+                return;
+            }
+
+            // Publish diagnostics for the ORIGINAL targets (based on file content)
+            let diagnostics: Vec<Diagnostic> = targets_for_diagnostics
+                .iter()
+                .map(|t| {
+                    let (start_pos, end_pos) =
+                        byte_range_to_lsp_range(&original_text, &t.byte_range);
+
+                    Diagnostic {
+                        range: Range {
+                            start: Position {
+                                line: start_pos.line,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: start_pos.line,
+                                character: start_pos.character,
+                            },
+                        },
+                        severity: Some(DiagnosticSeverity::HINT),
+                        source: Some("mantra".to_string()),
+                        message: format!("Generate implementation: {}", t.instruction),
+                        data: Some(serde_json::json!({
+                            "instruction": t.instruction,
+                            "checksum": format!("{:x}", t.checksum),
+                            "target_start_line": start_pos.line,
+                            "target_start_character": start_pos.character,
+                            "target_end_line": end_pos.line,
+                            "target_end_character": end_pos.character,
+                        })),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+
+            let uri: Uri = match uri_str.parse() {
+                Ok(u) => u,
+                Err(_) => return,
+            };
+
+            client.publish_diagnostics(uri, diagnostics, None).await;
+        });
+    }
 }
 
 impl LanguageServer for MantraBackend {
@@ -202,8 +249,8 @@ impl LanguageServer for MantraBackend {
             }
         }
 
-        // Analyze and publish diagnostics
-        self.analyze_and_publish_diagnostics(uri, &text).await;
+        // Analyze and start background generation
+        self.analyze_and_start_generation(uri, &text).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -234,8 +281,8 @@ impl LanguageServer for MantraBackend {
         };
 
         if let Some(text) = text {
-            // Re-analyze and publish diagnostics
-            self.analyze_and_publish_diagnostics(uri, &text).await;
+            // Re-analyze and start generation for any new targets
+            self.analyze_and_start_generation(uri, &text).await;
         }
     }
 
@@ -243,16 +290,11 @@ impl LanguageServer for MantraBackend {
         let uri = params.text_document.uri;
         let diagnostics = params.context.diagnostics;
 
-        tracing::info!("Code action request for: {}", uri.as_str());
-        tracing::info!("Received {} diagnostics", diagnostics.len());
-
         // Filter for mantra diagnostics
         let mantra_diagnostics: Vec<_> = diagnostics
             .iter()
             .filter(|d| d.source.as_deref() == Some("mantra"))
             .collect();
-
-        tracing::info!("Found {} mantra diagnostics", mantra_diagnostics.len());
 
         if mantra_diagnostics.is_empty() {
             return Ok(None);
@@ -270,88 +312,144 @@ impl LanguageServer for MantraBackend {
             }
         };
 
-        let doc_service = match workspace.open_document(uri.as_str()).await {
-            Ok(ds) => ds,
-            Err(e) => {
-                tracing::error!("Failed to open document: {}", e);
-                return Ok(None);
-            }
-        };
-
-        // Find targets using DocumentService (to get correct CRDT snapshots)
-        let targets = match doc_service.find_targets() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Failed to find targets: {}", e);
-                return Ok(None);
-            }
-        };
-        tracing::info!("Found {} targets in document", targets.len());
-
-        // Get text for position calculation
-        let text = match doc_service.get_text() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Failed to get document text: {}", e);
+        let doc_service = match workspace.get_document(uri.as_str()) {
+            Some(ds) => ds,
+            None => {
+                tracing::warn!("Document not found: {}", uri.as_str());
                 return Ok(None);
             }
         };
 
         for diagnostic in mantra_diagnostics {
-            tracing::info!("Diagnostic range: {:?}", diagnostic.range);
+            // Extract checksum and instruction from diagnostic data
+            let checksum_str = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("checksum"))
+                .and_then(|v| v.as_str());
 
-            // Extract instruction from diagnostic data for matching
             let instruction = diagnostic
                 .data
                 .as_ref()
                 .and_then(|d| d.get("instruction"))
                 .and_then(|v| v.as_str());
 
-            // Find the matching target by instruction (primary) or line number (fallback)
-            let diagnostic_line = diagnostic.range.start.line;
-
-            let target = if let Some(instr) = instruction {
-                // Match by instruction content
-                targets.iter().find(|t| t.instruction == instr)
-            } else {
-                // Fallback to line number matching
-                targets.iter().find(|t| {
-                    let (target_start_pos, _) = byte_range_to_lsp_range(&text, &t.byte_range);
-                    target_start_pos.line == diagnostic_line + 1
-                })
-            };
-
-            let target = match target {
-                Some(t) => t.clone(),
+            let checksum = match checksum_str {
+                Some(s) => match u64::from_str_radix(s, 16) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse checksum '{}': {}", s, e);
+                        continue;
+                    }
+                },
                 None => {
-                    tracing::warn!(
-                        "No target found for diagnostic at line {} (instruction: {:?})",
-                        diagnostic_line,
-                        instruction
-                    );
+                    tracing::warn!("No checksum in diagnostic data");
                     continue;
                 }
             };
 
+            let instruction = match instruction {
+                Some(i) => i.to_string(),
+                None => {
+                    tracing::warn!("No instruction in diagnostic data");
+                    continue;
+                }
+            };
+
+            // Extract target range from diagnostic data
+            let target_start_line = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("target_start_line"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+
+            let target_start_character = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("target_start_character"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+
+            let target_end_line = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("target_end_line"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+
+            let target_end_character = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("target_end_character"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+
+            let (start_pos, end_pos) = match (
+                target_start_line,
+                target_start_character,
+                target_end_line,
+                target_end_character,
+            ) {
+                (Some(sl), Some(sc), Some(el), Some(ec)) => (
+                    Position {
+                        line: sl,
+                        character: sc,
+                    },
+                    Position {
+                        line: el,
+                        character: ec,
+                    },
+                ),
+                _ => {
+                    tracing::warn!("No target range in diagnostic data");
+                    continue;
+                }
+            };
+
+            // Check if code has been generated (either via background or now)
+            let is_generated = doc_service.is_generated(checksum);
+
             tracing::info!(
-                "Found target: signature='{}', byte_range={:?}",
-                target.signature,
-                target.byte_range
+                "Code action: checksum={:x}, is_generated={}",
+                checksum,
+                is_generated
             );
 
-            // Generate code using DocumentService (with formatting)
-            let edits = match doc_service.generate_single_with_edits(&target).await {
-                Ok(e) => e,
-                Err(e) => {
+            if !is_generated {
+                // Find target from CRDT
+                let target = match doc_service.find_targets() {
+                    Ok(targets) => match targets.into_iter().find(|t| t.checksum == checksum) {
+                        Some(t) => t,
+                        None => {
+                            tracing::warn!("Target with checksum {:x} not found", checksum);
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to find targets: {}", e);
+                        continue;
+                    }
+                };
+
+                if let Err(e) = doc_service.generate_single(target).await {
                     tracing::error!("Generation failed: {}", e);
                     continue;
                 }
-            };
-
-            if edits.is_empty() {
-                tracing::warn!("No edits generated for target");
-                continue;
             }
+
+            // Get the generated text from CRDT using checksum
+            let generated_text = match doc_service.get_generated_text_by_checksum(checksum) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!("Failed to get generated text: {}", e);
+                    continue;
+                }
+            };
+            let edits = vec![lsp_types::TextEdit {
+                range: lsp_types::Range::new(start_pos, end_pos),
+                new_text: generated_text,
+            }];
 
             let mut changes = std::collections::HashMap::new();
             changes.insert(uri.clone(), edits);
@@ -363,7 +461,7 @@ impl LanguageServer for MantraBackend {
 
             // Create a code action with the workspace edit
             let action = CodeAction {
-                title: format!("🔮 Generate: {}", target.instruction),
+                title: format!("🔮 Generate: {}", instruction),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![diagnostic.clone()]),
                 command: None,
@@ -373,22 +471,28 @@ impl LanguageServer for MantraBackend {
                 data: None,
             };
 
-            tracing::info!("Created code action: title='{}'", action.title);
-
             actions.push(CodeActionOrCommand::CodeAction(action));
         }
 
-        tracing::info!("Returning {} code actions", actions.len());
         Ok(Some(actions))
     }
 }
 
 /// Convert byte range to LSP position range
-fn byte_range_to_lsp_range(text: &str, byte_range: &std::ops::Range<usize>) -> (Position, Position) {
+fn byte_range_to_lsp_range(
+    text: &str,
+    byte_range: &std::ops::Range<usize>,
+) -> (Position, Position) {
     let mut line = 0u32;
     let mut character = 0u32;
-    let mut start_pos = Position { line: 0, character: 0 };
-    let mut end_pos = Position { line: 0, character: 0 };
+    let mut start_pos = Position {
+        line: 0,
+        character: 0,
+    };
+    let mut end_pos = Position {
+        line: 0,
+        character: 0,
+    };
     let mut found_start = false;
 
     for (byte_idx, ch) in text.char_indices() {

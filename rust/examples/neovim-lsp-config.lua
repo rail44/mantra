@@ -21,6 +21,7 @@ vim.api.nvim_create_autocmd("FileType", {
     local client_id = vim.lsp.start({
       name = "mantra",
       cmd = { mantra_bin, "lsp" },
+      cmd_env = { RUST_LOG = "mantra=debug" },
       root_dir = file_dir,
     })
     if client_id then
@@ -59,6 +60,7 @@ if vim.bo.filetype == "go" then
   local client_id = vim.lsp.start({
     name = "mantra",
     cmd = { mantra_bin, "lsp" },
+    cmd_env = { RUST_LOG = "mantra=debug" },
     root_dir = file_dir,
   })
   if client_id then

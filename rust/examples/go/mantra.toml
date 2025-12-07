@@ -1,5 +1,5 @@
 # Model configuration
-model = "mistralai/devstral-small"
+model = "mistralai/ministral-14b-2512"
 
 # OpenRouter API endpoint
 url = "https://openrouter.ai/api/v1"

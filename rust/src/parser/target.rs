@@ -39,6 +39,8 @@ pub struct Target {
     pub type_references: Vec<TypeReference>,
     /// Whether the function body contains panic("not implemented")
     pub has_panic_not_implemented: bool,
+    /// Whether this target has already been generated (checksum comment exists)
+    pub is_generated: bool,
 }
 
 impl Target {
@@ -64,6 +66,10 @@ impl Target {
 
     /// Find all targets (functions with mantra comments) in a parsed tree
     pub fn find_targets(tree: &Tree, rope: &Rope, snapshot: &Snapshot, uri: &str) -> Vec<Target> {
+        // First pass: collect all existing checksum comments
+        let existing_checksums = collect_existing_checksums(tree, rope);
+
+        // Second pass: find targets
         let mut targets = Vec::new();
         let mut pending_instruction: Option<String> = None;
         let mut stack = vec![tree.root_node()];
@@ -78,7 +84,7 @@ impl Target {
 
                 "function_declaration" | "method_declaration" => {
                     if let Some(instruction) = pending_instruction.take() {
-                        let target = create_target_from_function(
+                        let mut target = create_target_from_function(
                             &node,
                             tree,
                             rope,
@@ -86,6 +92,8 @@ impl Target {
                             uri,
                             &instruction,
                         );
+                        // Check if this target's checksum already exists
+                        target.is_generated = existing_checksums.contains(&target.checksum);
                         targets.push(target);
                     }
                 }
@@ -105,7 +113,30 @@ impl Target {
     }
 }
 
+/// Collect all existing checksum comments from the tree
+fn collect_existing_checksums(tree: &Tree, rope: &Rope) -> std::collections::HashSet<u64> {
+    let mut checksums = std::collections::HashSet::new();
+    let mut stack = vec![tree.root_node()];
+
+    while let Some(node) = stack.pop() {
+        if node.kind() == "comment" {
+            if let Some(checksum) = extract_checksum_comment(&node, rope) {
+                checksums.insert(checksum);
+            }
+        }
+
+        let mut cursor = node.walk();
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
+    }
+
+    checksums
+}
+
 /// Extract mantra instruction from a comment node
+/// Returns None for checksum comments (// mantra:checksum:xxx)
 fn extract_mantra_instruction(node: &Node, rope: &Rope) -> Option<String> {
     let text = rope
         .byte_slice(node.start_byte()..node.end_byte())
@@ -113,7 +144,25 @@ fn extract_mantra_instruction(node: &Node, rope: &Rope) -> Option<String> {
     let text = text.trim();
     if text.starts_with("// mantra:") {
         let instruction = text.strip_prefix("// mantra:").unwrap().trim();
+        // Skip checksum comments - they indicate already generated code
+        if instruction.starts_with("checksum:") {
+            return None;
+        }
         Some(instruction.to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract checksum from a mantra checksum comment
+fn extract_checksum_comment(node: &Node, rope: &Rope) -> Option<u64> {
+    let text = rope
+        .byte_slice(node.start_byte()..node.end_byte())
+        .to_string();
+    let text = text.trim();
+    if text.starts_with("// mantra:checksum:") {
+        let checksum_str = text.strip_prefix("// mantra:checksum:").unwrap().trim();
+        u64::from_str_radix(checksum_str, 16).ok()
     } else {
         None
     }
@@ -129,25 +178,36 @@ fn create_target_from_function(
     instruction: &str,
 ) -> Target {
     // Extract signature and check for panic("not implemented")
-    let (signature, has_panic_not_implemented) = if let Some(body_node) = node.child_by_field_name("body") {
-        let sig_start = node.start_byte();
-        let sig_end = body_node.start_byte();
-        let sig = rope.byte_slice(sig_start..sig_end)
-            .to_string()
-            .trim()
-            .to_string();
+    let (signature, has_panic_not_implemented) =
+        if let Some(body_node) = node.child_by_field_name("body") {
+            let sig_start = node.start_byte();
+            let sig_end = body_node.start_byte();
+            let sig = rope
+                .byte_slice(sig_start..sig_end)
+                .to_string()
+                .trim()
+                .to_string();
 
-        // Check function body for panic("not implemented")
-        let body_text = rope.byte_slice(body_node.start_byte()..body_node.end_byte()).to_string();
-        let has_panic = body_text.contains("panic(\"not implemented\")");
+            // Check function body for panic("not implemented")
+            let body_text = rope
+                .byte_slice(body_node.start_byte()..body_node.end_byte())
+                .to_string();
+            let has_panic = body_text.contains("panic(\"not implemented\")");
 
-        (sig, has_panic)
-    } else {
-        (rope.byte_slice(node.start_byte()..node.end_byte()).to_string(), false)
-    };
+            (sig, has_panic)
+        } else {
+            (
+                rope.byte_slice(node.start_byte()..node.end_byte())
+                    .to_string(),
+                false,
+            )
+        };
 
     // Collect type references
     let type_references = collect_function_types(node, tree, rope);
+
+    // byte_range is the function only (not including the mantra comment)
+    let byte_range = node.start_byte()..node.end_byte();
 
     // Create the base target for checksum calculation
     let base_target = Target {
@@ -156,9 +216,10 @@ fn create_target_from_function(
         signature: signature.clone(),
         checksum: 0, // Will be calculated next
         snapshot: snapshot.clone(),
-        byte_range: node.start_byte()..node.end_byte(),
+        byte_range,
         type_references,
         has_panic_not_implemented,
+        is_generated: false, // Will be set later in find_targets
     };
 
     // Calculate checksum

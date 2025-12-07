@@ -35,6 +35,7 @@ regex = "1"
 hashbrown = "0.16"
 rustc-hash = "2"
 fastrand = "2"
+parking_lot = "0.12"
 jsonrpsee = { version = "0.26", features = ["client", "server", "macros"] }
 lsp-types = "0.97"
 
