@@ -82,11 +82,13 @@ impl MantraBackend {
     }
 
     /// Analyze document and start background generation
-    /// Diagnostics will be published when generation completes
+    /// Diagnostics are published based on `generated_not_applied` state
     async fn analyze_and_start_generation(&self, uri: Uri, text: &str) {
         let workspace = {
             let ws = self.workspace.read().await;
-            if let Some(w) = ws.as_ref() { w.clone() } else {
+            if let Some(w) = ws.as_ref() {
+                w.clone()
+            } else {
                 tracing::debug!("No workspace available for background generation");
                 return;
             }
@@ -113,12 +115,35 @@ impl MantraBackend {
             }
         };
 
-        // Filter out already generated targets
+        // Get checksums that are generated but not yet applied to editor
+        let not_applied = doc_service.get_generated_not_applied_checksums();
+
+        // Publish diagnostics for targets that are in generated_not_applied
+        // This ensures diagnostics persist after code action is applied to other targets
+        if !not_applied.is_empty() {
+            let diagnostics: Vec<Diagnostic> = targets
+                .iter()
+                .filter(|t| not_applied.contains(&t.checksum))
+                .map(|t| {
+                    let (start_pos, end_pos) = byte_range_to_lsp_range(text, &t.byte_range);
+                    create_diagnostic(t, start_pos, end_pos)
+                })
+                .collect();
+
+            self.client
+                .publish_diagnostics(uri.clone(), diagnostics, None)
+                .await;
+        }
+
+        // Filter out already generated targets for background generation
         let generation_targets: Vec<Target> =
             targets.into_iter().filter(|t| !t.is_generated).collect();
 
         if generation_targets.is_empty() {
-            self.client.publish_diagnostics(uri, vec![], None).await;
+            // No new targets to generate, but we already published diagnostics above
+            if not_applied.is_empty() {
+                self.client.publish_diagnostics(uri, vec![], None).await;
+            }
             return;
         }
 
@@ -127,7 +152,8 @@ impl MantraBackend {
         let original_text = text.to_string();
 
         // Start background generation and get completion receiver
-        let Some(completion_rx) = doc_service.spawn_background_generation(generation_targets) else {
+        let Some(completion_rx) = doc_service.spawn_background_generation(generation_targets)
+        else {
             return;
         };
 
@@ -138,37 +164,13 @@ impl MantraBackend {
                 return;
             }
 
-            // Publish diagnostics for the ORIGINAL targets (based on file content)
+            // Publish diagnostics for the newly generated targets
             let diagnostics: Vec<Diagnostic> = targets_for_diagnostics
                 .iter()
                 .map(|t| {
                     let (start_pos, end_pos) =
                         byte_range_to_lsp_range(&original_text, &t.byte_range);
-
-                    Diagnostic {
-                        range: Range {
-                            start: Position {
-                                line: start_pos.line,
-                                character: 0,
-                            },
-                            end: Position {
-                                line: start_pos.line,
-                                character: start_pos.character,
-                            },
-                        },
-                        severity: Some(DiagnosticSeverity::HINT),
-                        source: Some("mantra".to_string()),
-                        message: format!("Generate implementation: {}", t.instruction),
-                        data: Some(serde_json::json!({
-                            "instruction": t.instruction,
-                            "checksum": format!("{:x}", t.checksum),
-                            "target_start_line": start_pos.line,
-                            "target_start_character": start_pos.character,
-                            "target_end_line": end_pos.line,
-                            "target_end_character": end_pos.character,
-                        })),
-                        ..Default::default()
-                    }
+                    create_diagnostic(t, start_pos, end_pos)
                 })
                 .collect();
 
@@ -279,7 +281,11 @@ impl LanguageServer for MantraBackend {
         }
     }
 
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation, clippy::mutable_key_type)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::mutable_key_type
+    )]
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
         let diagnostics = params.context.diagnostics;
@@ -322,18 +328,22 @@ impl LanguageServer for MantraBackend {
                 .and_then(|d| d.get("instruction"))
                 .and_then(|v| v.as_str());
 
-            let checksum = if let Some(s) = checksum_str { match u64::from_str_radix(s, 16) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Failed to parse checksum '{}': {}", s, e);
-                    continue;
+            let checksum = if let Some(s) = checksum_str {
+                match u64::from_str_radix(s, 16) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse checksum '{}': {}", s, e);
+                        continue;
+                    }
                 }
-            } } else {
+            } else {
                 tracing::warn!("No checksum in diagnostic data");
                 continue;
             };
 
-            let instruction = if let Some(i) = instruction { i.to_string() } else {
+            let instruction = if let Some(i) = instruction {
+                i.to_string()
+            } else {
                 tracing::warn!("No instruction in diagnostic data");
                 continue;
             };
@@ -372,16 +382,18 @@ impl LanguageServer for MantraBackend {
                 target_start_character,
                 target_end_line,
                 target_end_character,
-            ) { (
-                Position {
-                    line: sl,
-                    character: sc,
-                },
-                Position {
-                    line: el,
-                    character: ec,
-                },
-            ) } else {
+            ) {
+                (
+                    Position {
+                        line: sl,
+                        character: sc,
+                    },
+                    Position {
+                        line: el,
+                        character: ec,
+                    },
+                )
+            } else {
                 tracing::warn!("No target range in diagnostic data");
                 continue;
             };
@@ -398,10 +410,14 @@ impl LanguageServer for MantraBackend {
             if !is_generated {
                 // Find target from CRDT
                 let target = match doc_service.find_targets() {
-                    Ok(targets) => if let Some(t) = targets.into_iter().find(|t| t.checksum == checksum) { t } else {
-                        tracing::warn!("Target with checksum {:x} not found", checksum);
-                        continue;
-                    },
+                    Ok(targets) => {
+                        if let Some(t) = targets.into_iter().find(|t| t.checksum == checksum) {
+                            t
+                        } else {
+                            tracing::warn!("Target with checksum {:x} not found", checksum);
+                            continue;
+                        }
+                    }
                     Err(e) => {
                         tracing::error!("Failed to find targets: {}", e);
                         continue;
@@ -446,6 +462,9 @@ impl LanguageServer for MantraBackend {
                 disabled: None,
                 data: None,
             };
+
+            // Mark as applied (optimistically - assumes user will apply the action)
+            doc_service.mark_applied(checksum);
 
             actions.push(CodeActionOrCommand::CodeAction(action));
         }
@@ -498,4 +517,32 @@ fn byte_range_to_lsp_range(
     }
 
     (start_pos, end_pos)
+}
+
+/// Create a diagnostic for a target
+fn create_diagnostic(target: &Target, start_pos: Position, end_pos: Position) -> Diagnostic {
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line: start_pos.line,
+                character: 0,
+            },
+            end: Position {
+                line: start_pos.line,
+                character: start_pos.character,
+            },
+        },
+        severity: Some(DiagnosticSeverity::HINT),
+        source: Some("mantra".to_string()),
+        message: format!("Generate implementation: {}", target.instruction),
+        data: Some(serde_json::json!({
+            "instruction": target.instruction,
+            "checksum": format!("{:x}", target.checksum),
+            "target_start_line": start_pos.line,
+            "target_start_character": start_pos.character,
+            "target_end_line": end_pos.line,
+            "target_end_character": end_pos.character,
+        })),
+        ..Default::default()
+    }
 }

@@ -54,7 +54,10 @@ use crate::workspace::WorkspaceService;
 /// Document managing a single document's state with CRDT support
 pub struct Document {
     pub uri: String,
-    pub editor: CrdtEditor,
+    /// Editor synchronized with user's editor (for position calculation)
+    pub editor_sync: CrdtEditor,
+    /// Editor for generation (contains generated code, used for LSP communication)
+    pub generation_editor: CrdtEditor,
     /// Set of checksums for currently pending generation tasks
     pending_generations: HashSet<u64>,
     /// Set of checksums that have been generated but not yet applied to the editor
@@ -72,11 +75,13 @@ impl Document {
 
     /// Create a Document from provided text (without reading from disk)
     pub fn from_text(uri: String, content: &str) -> Result<Self> {
-        let editor = CrdtEditor::new(content)?;
+        let editor_sync = CrdtEditor::new(content)?;
+        let generation_editor = CrdtEditor::new(content)?;
 
         Ok(Self {
             uri,
-            editor,
+            editor_sync,
+            generation_editor,
             pending_generations: HashSet::new(),
             generated_not_applied: HashSet::new(),
         })
@@ -87,15 +92,32 @@ impl Document {
         self.generated_not_applied.insert(checksum);
     }
 
+    /// Check if a checksum is generated but not yet applied
+    #[allow(dead_code)]
+    pub fn is_generated_not_applied(&self, checksum: u64) -> bool {
+        self.generated_not_applied.contains(&checksum)
+    }
+
+    /// Remove checksum from `generated_not_applied` (called after code action applied)
+    pub fn mark_applied(&mut self, checksum: u64) {
+        self.generated_not_applied.remove(&checksum);
+    }
+
+    /// Get all checksums that are generated but not applied
+    pub fn get_generated_not_applied(&self) -> &HashSet<u64> {
+        &self.generated_not_applied
+    }
+
     /// Get targets for generation
+    /// Uses `editor_sync` which is synchronized with user's editor
     pub fn find_targets(&self) -> Result<Vec<Target>> {
         let tree = self
-            .editor
+            .editor_sync
             .tree()
             .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
 
-        let rope = self.editor.rope();
-        let snapshot = self.editor.fork();
+        let rope = self.editor_sync.rope();
+        let snapshot = self.editor_sync.fork();
 
         let targets = Target::find_targets(tree, rope, &snapshot, &self.uri);
 
@@ -115,21 +137,45 @@ impl Document {
             new_body.trim()
         );
 
-        // Apply edit using byte offsets directly with a forked snapshot
-        // The target.snapshot is from when the target was found (either initially or re-found)
-        // cola CRDT handles coordinate transformation if document has changed
-        let change = self.editor.apply_byte_edit(
-            &target.byte_range,
+        // Find the corresponding target in generation_editor by checksum
+        // This is necessary because editor_sync and generation_editor are separate CRDTs
+        // and the byte_range from editor_sync may not match generation_editor's state
+        let gen_tree = self
+            .generation_editor
+            .tree()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available for generation_editor"))?;
+        let gen_rope = self.generation_editor.rope();
+        let gen_snapshot = self.generation_editor.fork();
+
+        let gen_targets = Target::find_targets(gen_tree, gen_rope, &gen_snapshot, &self.uri);
+        let gen_target = gen_targets
+            .into_iter()
+            .find(|t| t.checksum == target.checksum)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Target with checksum {:x} not found in generation_editor",
+                    target.checksum
+                )
+            })?;
+
+        // Apply edit using the generation_editor's target position and snapshot
+        let change = self.generation_editor.apply_byte_edit(
+            &gen_target.byte_range,
             &replacement,
-            target.snapshot.fork(),
+            gen_target.snapshot.fork(),
         )?;
 
         Ok(vec![change])
     }
 
-    /// Get text content
-    pub fn get_text(&self) -> String {
-        self.editor.get_text()
+    /// Get text synchronized with editor (for diagnostics position)
+    pub fn get_editor_text(&self) -> String {
+        self.editor_sync.get_text()
+    }
+
+    /// Get text with generated code (for LSP communication)
+    pub fn get_generation_text(&self) -> String {
+        self.generation_editor.get_text()
     }
 
     /// Apply incremental change from LSP
@@ -137,22 +183,29 @@ impl Document {
         &mut self,
         change: &TextDocumentContentChangeEvent,
     ) -> Result<()> {
-        match &change.range {
-            Some(range) => {
-                // Convert LSP positions to byte positions
-                let rope = self.editor.rope();
-                let start_byte = lsp_position_to_byte(range.start, rope);
-                let end_byte = lsp_position_to_byte(range.end, rope);
+        if let Some(range) = &change.range {
+            // Use editor_sync for position calculation (matches user's editor)
+            let rope = self.editor_sync.rope();
+            let start_byte = lsp_position_to_byte(range.start, rope);
+            let end_byte = lsp_position_to_byte(range.end, rope);
 
-                // Apply edit
-                let snapshot = self.editor.fork();
-                self.editor
-                    .apply_byte_edit(&(start_byte..end_byte), &change.text, snapshot)?;
-            }
-            None => {
-                // Full document replacement - recreate editor
-                self.editor = CrdtEditor::new(&change.text)?;
-            }
+            // Apply to editor_sync first
+            let snapshot = self.editor_sync.fork();
+            self.editor_sync
+                .apply_byte_edit(&(start_byte..end_byte), &change.text, snapshot)?;
+
+            // Apply to generation_editor using editor_sync's snapshot
+            // cola's integrate_* will transform coordinates from editor_sync space to generation_editor space
+            let editor_snapshot = self.editor_sync.fork();
+            self.generation_editor.apply_byte_edit(
+                &(start_byte..end_byte),
+                &change.text,
+                editor_snapshot,
+            )?;
+        } else {
+            // Full document replacement - recreate both editors
+            self.editor_sync = CrdtEditor::new(&change.text)?;
+            self.generation_editor = CrdtEditor::new(&change.text)?;
         }
         Ok(())
     }
@@ -207,10 +260,10 @@ impl DocumentService {
         Ok(())
     }
 
-    /// Get the current text content
+    /// Get the current text content (synchronized with editor)
     pub fn get_text(&self) -> String {
         let document = self.document.read();
-        document.get_text()
+        document.get_editor_text()
     }
 
     /// Find targets in the document
@@ -219,29 +272,45 @@ impl DocumentService {
         document.find_targets()
     }
 
-    /// Check if a target has already been generated (checksum comment exists in CRDT)
+    /// Check if a target has already been generated (checksum comment exists in `generation_editor`)
     pub fn is_generated(&self, checksum: u64) -> bool {
         let document = self.document.read();
-        let text = document.get_text();
+        let text = document.get_generation_text();
         let checksum_comment = format!("// mantra:checksum:{checksum:x}");
         text.contains(&checksum_comment)
     }
 
-    /// Get generated text by checksum from CRDT
+    /// Check if a target is generated but not yet applied to editor
+    #[allow(dead_code)]
+    pub fn is_generated_not_applied(&self, checksum: u64) -> bool {
+        self.document.read().is_generated_not_applied(checksum)
+    }
+
+    /// Mark a checksum as applied (remove from `generated_not_applied`)
+    pub fn mark_applied(&self, checksum: u64) {
+        self.document.write().mark_applied(checksum);
+    }
+
+    /// Get all checksums that are generated but not applied
+    pub fn get_generated_not_applied_checksums(&self) -> HashSet<u64> {
+        self.document.read().get_generated_not_applied().clone()
+    }
+
+    /// Get generated text by checksum from `generation_editor`
     pub fn get_generated_text_by_checksum(&self, checksum: u64) -> Result<String> {
         let doc = self.document.read();
 
-        let text = doc.get_text();
+        let text = doc.get_generation_text();
         let checksum_comment = format!("// mantra:checksum:{checksum:x}");
 
         if let Some(checksum_pos) = text.find(&checksum_comment) {
             // Find the end of the function by parsing the tree
             let tree = doc
-                .editor
+                .generation_editor
                 .tree()
                 .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
-            let rope = doc.editor.rope();
-            let snapshot = doc.editor.fork();
+            let rope = doc.generation_editor.rope();
+            let snapshot = doc.generation_editor.fork();
 
             let targets = Target::find_targets(tree, rope, &snapshot, &doc.uri);
 
@@ -334,7 +403,7 @@ impl DocumentService {
         // Log final CRDT state for debugging
         {
             let document = self.document.read();
-            tracing::info!("CRDT after generation:\n{}", document.get_text());
+            tracing::info!("CRDT after generation:\n{}", document.get_generation_text());
         }
 
         Ok(())
@@ -380,7 +449,7 @@ impl DocumentService {
             let targets = document.find_targets()?;
 
             if targets.is_empty() {
-                return Ok(document.get_text());
+                return Ok(document.get_generation_text());
             }
 
             targets
@@ -388,7 +457,7 @@ impl DocumentService {
 
         self.generate_targets_sequential(targets).await?;
 
-        Ok(self.document.read().get_text())
+        Ok(self.document.read().get_generation_text())
     }
 
     async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {
@@ -397,7 +466,7 @@ impl DocumentService {
 
         let changes = {
             let mut doc = self.document.write();
-            let version_before = doc.editor.get_version();
+            let version_before = doc.generation_editor.get_version();
             let changes = doc.apply_generation(&target, new_body).map_err(|e| {
                 tracing::error!(
                     "Failed to apply generation for checksum {:x}: {:?}",
@@ -408,7 +477,7 @@ impl DocumentService {
             })?;
             // Mark this generation as complete
             doc.complete_generation(checksum);
-            let version_after = doc.editor.get_version();
+            let version_after = doc.generation_editor.get_version();
 
             tracing::debug!(
                 "Generation applied for checksum {:x} (version: {} -> {})",
@@ -431,7 +500,7 @@ impl DocumentService {
     async fn send_did_change(&self, changes: Vec<TextDocumentContentChangeEvent>) -> Result<()> {
         let (current_version, uri) = {
             let doc = self.document.read();
-            let current_version = doc.editor.get_version();
+            let current_version = doc.generation_editor.get_version();
             let uri: lsp_types::Uri = doc.uri.parse()?;
             (current_version, uri)
         };
@@ -467,16 +536,17 @@ impl DocumentService {
     }
 
     /// Get the full definition at a range using tree-sitter
+    /// Uses `generation_editor` since this is called for LSP communication with other servers
     pub fn get_full_definition_at(&self, range: &lsp_types::Range) -> Result<ScopedCode> {
         use crate::parser::ast_utils::{extract_definition_content, find_node_at_byte_position};
 
-        // Use the existing tree from this document
+        // Use the existing tree from generation_editor (used for LSP communication)
         let doc = self.document.read();
         let tree = doc
-            .editor
+            .generation_editor
             .tree()
             .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
-        let rope = doc.editor.rope();
+        let rope = doc.generation_editor.rope();
 
         // Calculate byte position from LSP position
         let line = range.start.line as usize;
@@ -517,6 +587,7 @@ impl DocumentService {
     }
 
     /// Get definition location for a node or symbol within the node at the given AST path
+    /// Uses `generation_editor` since this is called for LSP communication with other servers
     pub async fn get_definition_at_path_with_symbol(
         &self,
         ast_path: &[crate::parser::target::PathSegment],
@@ -524,18 +595,18 @@ impl DocumentService {
     ) -> Result<Option<lsp_types::GotoDefinitionResponse>> {
         use crate::parser::ast_utils::{find_node_by_path, get_definition_target_node};
 
-        // Get tree, rope, snapshot and uri
+        // Get tree, rope, snapshot and uri from generation_editor (used for LSP communication)
         let (tree, rope, snapshot, uri) = {
             let doc = self.document.read();
 
             let tree = doc
-                .editor
+                .generation_editor
                 .tree()
                 .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?
                 .clone();
 
-            let rope = doc.editor.rope().clone();
-            let snapshot = doc.editor.fork();
+            let rope = doc.generation_editor.rope().clone();
+            let snapshot = doc.generation_editor.fork();
             let uri = doc.uri.clone();
 
             (tree, rope, snapshot, uri)
@@ -557,6 +628,7 @@ impl DocumentService {
     }
 
     /// Format document using LSP
+    /// Applies formatting to `generation_editor` (used for LSP communication)
     async fn format_document(&self) -> Result<()> {
         if !self.lsp_client.supports_document_formatting().await {
             tracing::trace!("Document formatting not supported");
@@ -565,8 +637,12 @@ impl DocumentService {
 
         let (uri_str, version, snapshot) = {
             let doc = self.document.read();
-            let snapshot = doc.editor.fork();
-            (doc.uri.clone(), doc.editor.get_version(), snapshot)
+            let snapshot = doc.generation_editor.fork();
+            (
+                doc.uri.clone(),
+                doc.generation_editor.get_version(),
+                snapshot,
+            )
         };
 
         let uri: lsp_types::Uri = uri_str.parse()?;
@@ -596,14 +672,14 @@ impl DocumentService {
             Some(edits) if !edits.is_empty() => {
                 let changes = {
                     let mut doc = self.document.write();
-                    let current_version = doc.editor.get_version();
+                    let current_version = doc.generation_editor.get_version();
                     tracing::debug!(
                         "Applying {} formatting edits (version: {} -> {})",
                         edits.len(),
                         version,
                         current_version
                     );
-                    doc.editor.apply_text_edits(&edits, snapshot)?
+                    doc.generation_editor.apply_text_edits(&edits, snapshot)?
                 };
                 // Send incremental changes to LSP
                 self.send_did_change(changes).await?;
