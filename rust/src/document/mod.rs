@@ -11,29 +11,6 @@ use tokio::sync::oneshot;
 
 use crate::editor::crdt::{lsp_position_to_byte, CrdtEditor};
 
-/// Find the end of a function in Go code (simple brace matching)
-fn find_function_end(text: &str) -> Option<usize> {
-    let mut depth = 0;
-    let mut found_first_brace = false;
-
-    for (i, ch) in text.char_indices() {
-        match ch {
-            '{' => {
-                depth += 1;
-                found_first_brace = true;
-            }
-            '}' => {
-                depth -= 1;
-                if found_first_brace && depth == 0 {
-                    return Some(i + 1);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 use crate::generation::spawn_generation_task;
 use crate::inspector::ScopedCode;
 use crate::llm::LLMClient;
@@ -319,44 +296,30 @@ impl DocumentService {
     pub fn get_generated_text_by_checksum(&self, checksum: u64) -> Result<String> {
         let doc = self.document.read();
 
-        let text = doc.get_generation_text();
-        let checksum_comment = format!("// mantra:checksum:{checksum:x}");
+        let tree = doc
+            .generation_editor
+            .tree()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
+        let rope = doc.generation_editor.rope();
+        let snapshot = doc.generation_editor.fork();
 
-        if let Some(checksum_pos) = text.find(&checksum_comment) {
-            // Find the end of the function by parsing the tree
-            let tree = doc
-                .generation_editor
-                .tree()
-                .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
-            let rope = doc.generation_editor.rope();
-            let snapshot = doc.generation_editor.fork();
+        let targets = Target::find_targets(tree, rope, &snapshot, &doc.uri);
 
-            let targets = Target::find_targets(tree, rope, &snapshot, &doc.uri);
+        // Find the target with matching checksum
+        let target = targets
+            .into_iter()
+            .find(|t| t.checksum == checksum)
+            .ok_or_else(|| anyhow::anyhow!("Target with checksum {checksum:x} not found"))?;
 
-            // Find the target that starts right after the checksum comment
-            // The checksum comment is on the line before the function
-            for target in targets {
-                let target_start = target.byte_range.start;
-                // Check if checksum comment is just before this target
-                if target_start > checksum_pos
-                    && target_start < checksum_pos + checksum_comment.len() + 50
-                {
-                    // Return from checksum comment to end of function
-                    let end = target.byte_range.end;
-                    return Ok(text[checksum_pos..end].to_string());
-                }
-            }
+        // Get the full range including checksum comment if it exists
+        let start = target
+            .checksum_comment_range
+            .as_ref()
+            .map(|r| r.start)
+            .unwrap_or(target.byte_range.start);
+        let end = target.byte_range.end;
 
-            // Fallback: find the closing brace after checksum comment
-            // This is a simple heuristic for Go code
-            if let Some(func_end) = find_function_end(&text[checksum_pos..]) {
-                return Ok(text[checksum_pos..checksum_pos + func_end].to_string());
-            }
-        }
-
-        Err(anyhow::anyhow!(
-            "Generated text not found for checksum {checksum:x}"
-        ))
+        Ok(rope.byte_slice(start..end).to_string())
     }
 
     /// Generate code for a single target

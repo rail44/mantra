@@ -41,6 +41,8 @@ pub struct Target {
     pub type_references: Vec<TypeReference>,
     /// Whether this target has already been generated (checksum comment exists)
     pub is_generated: bool,
+    /// Range of the checksum comment if it exists (for extracting full generated text)
+    pub checksum_comment_range: Option<Range<usize>>,
 }
 
 impl Target {
@@ -72,8 +74,11 @@ impl Target {
                             uri,
                             &instruction,
                         );
-                        // Check if this target's checksum already exists
-                        target.is_generated = existing_checksums.contains(&target.checksum);
+                        // Check if this target's checksum already exists and get comment range
+                        if let Some(comment_range) = existing_checksums.get(&target.checksum) {
+                            target.is_generated = true;
+                            target.checksum_comment_range = Some(comment_range.clone());
+                        }
                         targets.push(target);
                     }
                 }
@@ -94,14 +99,18 @@ impl Target {
 }
 
 /// Collect all existing checksum comments from the tree
-fn collect_existing_checksums(tree: &Tree, rope: &Rope) -> std::collections::HashSet<u64> {
-    let mut checksums = std::collections::HashSet::new();
+/// Returns a map of checksum -> comment byte range
+fn collect_existing_checksums(
+    tree: &Tree,
+    rope: &Rope,
+) -> rustc_hash::FxHashMap<u64, Range<usize>> {
+    let mut checksums = rustc_hash::FxHashMap::default();
     let mut stack = vec![tree.root_node()];
 
     while let Some(node) = stack.pop() {
         if node.kind() == "comment" {
             if let Some(checksum) = extract_checksum_comment(&node, rope) {
-                checksums.insert(checksum);
+                checksums.insert(checksum, node.start_byte()..node.end_byte());
             }
         }
 
@@ -192,7 +201,8 @@ fn create_target_from_function(
         byte_range,
         start_anchor,
         type_references,
-        is_generated: false, // Will be set later in find_targets
+        is_generated: false,          // Will be set later in find_targets
+        checksum_comment_range: None, // Will be set later in find_targets if exists
     };
 
     // Calculate checksum
