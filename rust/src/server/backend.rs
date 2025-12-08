@@ -160,13 +160,14 @@ impl MantraBackend {
         // Spawn a task to publish diagnostics when generation completes
         let client = self.client.clone();
         tokio::spawn(async move {
-            if completion_rx.await.is_err() {
+            let Ok(succeeded_checksums) = completion_rx.await else {
                 return;
-            }
+            };
 
-            // Publish diagnostics for the newly generated targets
+            // Publish diagnostics only for successfully generated targets
             let diagnostics: Vec<Diagnostic> = targets_for_diagnostics
                 .iter()
+                .filter(|t| succeeded_checksums.contains(&t.checksum))
                 .map(|t| {
                     let (start_pos, end_pos) =
                         byte_range_to_lsp_range(&original_text, &t.byte_range);

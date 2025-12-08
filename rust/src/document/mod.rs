@@ -331,7 +331,8 @@ impl DocumentService {
     }
 
     /// Generate all targets and apply to CRDT
-    async fn generate_targets_sequential(&self, targets: Vec<Target>) -> Result<()> {
+    /// Returns the list of checksums that were successfully generated
+    async fn generate_targets_sequential(&self, targets: Vec<Target>) -> Vec<u64> {
         use futures::future::join_all;
 
         // Mark all targets as pending first
@@ -353,7 +354,7 @@ impl DocumentService {
                     }
                     match clone.generate_target_body(&target).await {
                         Ok(body) => Ok((target, Some(body))),
-                        Err(e) => Err(e),
+                        Err(e) => Err((target, e)),
                     }
                 }
             })
@@ -362,21 +363,34 @@ impl DocumentService {
         let results = join_all(generation_futures).await;
 
         // Apply all generations sequentially to CRDT
+        let mut succeeded = Vec::new();
         for result in results {
             match result {
                 Ok((target, Some(new_body))) => {
-                    self.apply_generation(target.clone(), &new_body).await?;
-                    {
-                        let mut document = self.document.write();
-                        document.mark_generated(target.checksum);
+                    let checksum = target.checksum;
+                    if self.apply_generation(target, &new_body).await.is_ok() {
+                        {
+                            let mut document = self.document.write();
+                            document.mark_generated(checksum);
+                        }
+                        succeeded.push(checksum);
                     }
                 }
                 Ok((target, None)) => {
+                    // Already generated - mark as succeeded
                     let mut document = self.document.write();
                     document.complete_generation(target.checksum);
+                    succeeded.push(target.checksum);
                 }
-                Err(e) => {
-                    tracing::error!("LLM generation failed: {:?}", e);
+                Err((target, e)) => {
+                    tracing::error!(
+                        "LLM generation failed for checksum {:x}: {:?}",
+                        target.checksum,
+                        e
+                    );
+                    // Mark as complete (no longer pending) but don't add to succeeded
+                    let mut document = self.document.write();
+                    document.complete_generation(target.checksum);
                 }
             }
         }
@@ -387,16 +401,16 @@ impl DocumentService {
             tracing::info!("CRDT after generation:\n{}", document.get_generation_text());
         }
 
-        Ok(())
+        succeeded
     }
 
     /// Spawn background generation tasks
-    /// Returns a receiver that will receive () when all generations complete
+    /// Returns a receiver that will receive succeeded checksums when all generations complete
     /// Used by LSP for pre-generation
     pub fn spawn_background_generation(
         &self,
         targets: Vec<Target>,
-    ) -> Option<oneshot::Receiver<()>> {
+    ) -> Option<oneshot::Receiver<Vec<u64>>> {
         if targets.is_empty() {
             return None;
         }
@@ -406,11 +420,9 @@ impl DocumentService {
 
         // Spawn a single task that generates sequentially
         tokio::spawn(async move {
-            if let Err(e) = clone.generate_targets_sequential(targets).await {
-                tracing::error!("Background generation failed: {:?}", e);
-            }
-            // Signal completion (ignore error if receiver was dropped)
-            let _ = tx.send(());
+            let succeeded = clone.generate_targets_sequential(targets).await;
+            // Signal completion with succeeded checksums (ignore error if receiver was dropped)
+            let _ = tx.send(succeeded);
         });
 
         Some(rx)
@@ -418,8 +430,18 @@ impl DocumentService {
 
     /// Generate code for a single target and wait for completion
     /// Used by LSP code action when code wasn't pre-generated
+    /// Returns Ok if generation succeeded, Err if it failed
     pub async fn generate_single(&self, target: Target) -> Result<()> {
-        self.generate_targets_sequential(vec![target]).await
+        let checksum = target.checksum;
+        let succeeded = self.generate_targets_sequential(vec![target]).await;
+        if succeeded.contains(&checksum) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Generation failed for checksum {:x}",
+                checksum
+            ))
+        }
     }
 
     /// Generate code for all targets in the document (CLI mode)
@@ -436,7 +458,8 @@ impl DocumentService {
             targets
         };
 
-        self.generate_targets_sequential(targets).await?;
+        // Generate all targets - for CLI mode we just proceed regardless of individual failures
+        let _succeeded = self.generate_targets_sequential(targets).await;
 
         Ok(self.document.read().get_generation_text())
     }
