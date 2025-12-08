@@ -3,7 +3,7 @@ use automerge::{
     patches::PatchAction, transaction::Transactable, AutoCommit, ObjType, ReadDoc, ROOT,
 };
 use crop::Rope;
-use lsp_types::{Position, Range, TextDocumentContentChangeEvent, TextEdit};
+use lsp_types::{Position, TextEdit};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range as StdRange;
 use tree_sitter::Tree;
@@ -26,36 +26,6 @@ pub fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
     let line_start_utf16 = rope.utf16_code_unit_of_byte(line_start_byte);
     let target_utf16 = line_start_utf16 + position.character as usize;
     rope.byte_of_utf16_code_unit(target_utf16)
-}
-
-/// Snapshot for compatibility with existing Target code
-/// Now backed by automerge + rope instead of cola
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    /// The rope for position calculations
-    pub(crate) rope: Rope,
-    /// Document version
-    pub(crate) version: i32,
-}
-
-impl Snapshot {
-    /// Convert byte position to LSP position
-    pub fn byte_to_lsp_position(&self, byte_pos: usize) -> Position {
-        let line = self.rope.line_of_byte(byte_pos);
-        let line_start_byte = self.rope.byte_of_line(line);
-
-        let byte_offset = byte_pos - line_start_byte;
-        let line_start_utf16 = self.rope.utf16_code_unit_of_byte(line_start_byte);
-        let target_utf16 = self
-            .rope
-            .utf16_code_unit_of_byte(line_start_byte + byte_offset);
-        let utf16_col = target_utf16 - line_start_utf16;
-
-        Position {
-            line: u32::try_from(line).unwrap_or(0),
-            character: u32::try_from(utf16_col).unwrap_or(0),
-        }
-    }
 }
 
 /// Automerge-based text editor with overlay support and tree-sitter parsing
@@ -172,60 +142,6 @@ impl CrdtEditor {
         self.version
     }
 
-    /// Create a snapshot of the current state (for compatibility with Target)
-    pub fn fork(&self) -> Snapshot {
-        Snapshot {
-            rope: self.rope.clone(),
-            version: self.version,
-        }
-    }
-
-    /// Apply an edit using byte offsets
-    /// This is for user edits to the base document
-    pub fn apply_byte_edit(
-        &mut self,
-        byte_range: &StdRange<usize>,
-        new_text: &str,
-        _snapshot: Snapshot, // Kept for API compatibility
-    ) -> Result<TextDocumentContentChangeEvent> {
-        // Get LSP range before the edit
-        let start_pos = self.byte_to_lsp_position(byte_range.start);
-        let end_pos = self.byte_to_lsp_position(byte_range.end);
-
-        // Convert byte positions to character positions for automerge
-        let start_char = self.byte_to_char_position(byte_range.start);
-        let end_char = self.byte_to_char_position(byte_range.end);
-        let delete_count_char = end_char - start_char;
-
-        // Apply to automerge base (using character positions)
-        self.base
-            .splice_text(
-                &self.text_id,
-                start_char,
-                delete_count_char as isize,
-                new_text,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to apply edit: {e}"))?;
-
-        // Apply to rope (using byte positions)
-        let delete_count_bytes = byte_range.end - byte_range.start;
-        if delete_count_bytes > 0 {
-            self.rope.delete(byte_range.clone());
-        }
-        if !new_text.is_empty() {
-            self.rope.insert(byte_range.start, new_text);
-        }
-
-        self.reparse()?;
-        self.increment_version();
-
-        Ok(TextDocumentContentChangeEvent {
-            range: Some(Range::new(start_pos, end_pos)),
-            range_length: None,
-            text: new_text.to_string(),
-        })
-    }
-
     /// Apply an edit and record it (for propagation to overlays via merge)
     /// This replaces the cola-based `apply_byte_edit_with_ops`
     pub fn apply_byte_edit_with_ops(
@@ -239,13 +155,10 @@ impl CrdtEditor {
         let delete_count_char = end_char - start_char;
 
         // Apply to automerge base (using character positions)
+        let delete_count_isize = isize::try_from(delete_count_char)
+            .map_err(|_| anyhow::anyhow!("Delete count too large"))?;
         self.base
-            .splice_text(
-                &self.text_id,
-                start_char,
-                delete_count_char as isize,
-                new_text,
-            )
+            .splice_text(&self.text_id, start_char, delete_count_isize, new_text)
             .map_err(|e| anyhow::anyhow!("Failed to apply edit: {e}"))?;
 
         // Apply to rope (using byte positions)
@@ -287,13 +200,10 @@ impl CrdtEditor {
         let mut forked = self.base.fork();
 
         // Apply the generated code replacement (using character positions)
+        let delete_count_isize = isize::try_from(delete_count)
+            .map_err(|_| anyhow::anyhow!("Delete count too large"))?;
         forked
-            .splice_text(
-                &self.text_id,
-                start_char,
-                delete_count as isize,
-                replacement,
-            )
+            .splice_text(&self.text_id, start_char, delete_count_isize, replacement)
             .map_err(|e| anyhow::anyhow!("Failed to apply overlay: {e}"))?;
 
         self.overlays.insert(checksum, forked);
@@ -385,11 +295,6 @@ impl CrdtEditor {
         let text = merged.text(&self.text_id).unwrap_or_else(|_| String::new());
 
         Ok((text, ranges))
-    }
-
-    /// Get the composed view as a Rope
-    pub fn composed_rope(&mut self) -> Result<Rope> {
-        Ok(Rope::from(self.composed_view()?.as_str()))
     }
 
     /// Apply formatting edits to overlays based on their ranges in composed view
@@ -514,8 +419,10 @@ impl CrdtEditor {
                         delete_count,
                         new_text
                     );
+                    let delete_count_isize = isize::try_from(delete_count)
+                        .map_err(|_| anyhow::anyhow!("Delete count too large"))?;
                     overlay
-                        .splice_text(&self.text_id, start, delete_count as isize, &new_text)
+                        .splice_text(&self.text_id, start, delete_count_isize, &new_text)
                         .map_err(|e| anyhow::anyhow!("Failed to apply format edit: {e}"))?;
                 }
 
@@ -531,79 +438,10 @@ impl CrdtEditor {
         self.composed_view()
     }
 
-    /// Get the number of active overlays
+    /// Get the number of active overlays (test only)
+    #[cfg(test)]
     pub fn overlay_count(&self) -> usize {
         self.overlays.len()
-    }
-
-    /// Fork this editor to create a new independent editor
-    /// For compatibility with existing code that uses `fork_editor`
-    pub fn fork_editor(&self) -> Result<Self> {
-        // Create a new editor with the same content
-        let text = self.get_text();
-        Self::new(&text)
-    }
-
-    /// Apply text edits (for formatting results)
-    pub fn apply_text_edits(
-        &mut self,
-        edits: &[TextEdit],
-        _snapshot: Snapshot, // Kept for API compatibility
-    ) -> Result<Vec<TextDocumentContentChangeEvent>> {
-        let mut changes = Vec::new();
-
-        // Apply edits in reverse order to maintain correct positions
-        for edit in edits.iter().rev() {
-            let start_byte = lsp_position_to_byte(edit.range.start, &self.rope);
-            let end_byte = lsp_position_to_byte(edit.range.end, &self.rope);
-
-            let start_pos = self.byte_to_lsp_position(start_byte);
-            let end_pos = self.byte_to_lsp_position(end_byte);
-
-            // Convert byte positions to character positions for automerge
-            let start_char = self.byte_to_char_position(start_byte);
-            let end_char = self.byte_to_char_position(end_byte);
-            let delete_count_char = end_char - start_char;
-
-            // Apply to automerge base (using character positions)
-            self.base
-                .splice_text(
-                    &self.text_id,
-                    start_char,
-                    delete_count_char as isize,
-                    &edit.new_text,
-                )
-                .map_err(|e| anyhow::anyhow!("Failed to apply text edit: {e}"))?;
-
-            // Apply to rope (using byte positions)
-            let delete_count_bytes = end_byte - start_byte;
-            if delete_count_bytes > 0 {
-                self.rope.delete(start_byte..end_byte);
-            }
-            if !edit.new_text.is_empty() {
-                self.rope.insert(start_byte, &edit.new_text);
-            }
-
-            changes.push(TextDocumentContentChangeEvent {
-                range: Some(Range::new(start_pos, end_pos)),
-                range_length: None,
-                text: edit.new_text.clone(),
-            });
-        }
-
-        self.reparse()?;
-        self.increment_version();
-        changes.reverse();
-        Ok(changes)
-    }
-
-    // Legacy methods for API compatibility (now no-ops or simplified)
-
-    /// Integrate ops from another editor (legacy - now a no-op since we use merge)
-    pub fn integrate_ops(&mut self, _ops: &()) -> Result<()> {
-        // With automerge, we don't need explicit integrate_ops
-        // The merge happens when we call composed_view()
-        Ok(())
     }
 }
 
@@ -617,8 +455,7 @@ mod tests {
         assert_eq!(editor.get_text(), "Hello, world!");
 
         // Test edit
-        let snapshot = editor.fork();
-        editor.apply_byte_edit(&(7..12), "Rust", snapshot)?;
+        editor.apply_byte_edit_with_ops(&(7..12), "Rust")?;
         assert_eq!(editor.get_text(), "Hello, Rust!");
 
         Ok(())
