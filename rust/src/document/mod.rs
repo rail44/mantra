@@ -438,8 +438,7 @@ impl DocumentService {
             Ok(())
         } else {
             Err(anyhow::anyhow!(
-                "Generation failed for checksum {:x}",
-                checksum
+                "Generation failed for checksum {checksum:x}"
             ))
         }
     }
