@@ -1,7 +1,5 @@
-use crate::editor::crdt::Snapshot;
 use crate::parser::checksum::calculate_checksum;
 use crate::parser::type_collector::collect_function_types;
-use cola::{Anchor, AnchorBias};
 use crop::Rope;
 use std::ops::Range;
 use tree_sitter::{Node, Tree};
@@ -35,8 +33,6 @@ pub struct Target {
     pub signature: String,
     pub checksum: u64,
     pub byte_range: Range<usize>,
-    /// Anchor at the start of the function for position tracking across edits
-    pub start_anchor: Anchor,
     /// Type references found in the function signature
     pub type_references: Vec<TypeReference>,
     /// Whether this target has already been generated (checksum comment exists)
@@ -47,7 +43,7 @@ pub struct Target {
 
 impl Target {
     /// Find all targets (functions with mantra comments) in a parsed tree
-    pub fn find_targets(tree: &Tree, rope: &Rope, snapshot: &Snapshot, uri: &str) -> Vec<Target> {
+    pub fn find_targets(tree: &Tree, rope: &Rope, uri: &str) -> Vec<Target> {
         // First pass: collect all existing checksum comments
         let existing_checksums = collect_existing_checksums(tree, rope);
 
@@ -66,14 +62,8 @@ impl Target {
 
                 "function_declaration" | "method_declaration" => {
                     if let Some(instruction) = pending_instruction.take() {
-                        let mut target = create_target_from_function(
-                            &node,
-                            tree,
-                            rope,
-                            snapshot,
-                            uri,
-                            &instruction,
-                        );
+                        let mut target =
+                            create_target_from_function(&node, tree, rope, uri, &instruction);
                         // Check if this target's checksum already exists and get comment range
                         if let Some(comment_range) = existing_checksums.get(&target.checksum) {
                             target.is_generated = true;
@@ -162,7 +152,6 @@ fn create_target_from_function(
     node: &Node,
     tree: &Tree,
     rope: &Rope,
-    snapshot: &Snapshot,
     uri: &str,
     instruction: &str,
 ) -> Target {
@@ -185,13 +174,6 @@ fn create_target_from_function(
     // byte_range is the function only (not including the mantra comment)
     let byte_range = node.start_byte()..node.end_byte();
 
-    // Create anchor at the start of the function
-    // Using AnchorBias::Right so the anchor stays at the function start
-    // even if text is inserted right before it
-    let start_anchor = snapshot
-        .replica
-        .create_anchor(node.start_byte(), AnchorBias::Right);
-
     // Create the base target for checksum calculation
     let base_target = Target {
         uri: uri.to_string(),
@@ -199,7 +181,6 @@ fn create_target_from_function(
         signature: signature.clone(),
         checksum: 0, // Will be calculated next
         byte_range,
-        start_anchor,
         type_references,
         is_generated: false,          // Will be set later in find_targets
         checksum_comment_range: None, // Will be set later in find_targets if exists

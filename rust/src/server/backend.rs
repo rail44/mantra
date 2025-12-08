@@ -135,9 +135,15 @@ impl MantraBackend {
                 .await;
         }
 
-        // Filter out already generated targets for background generation
-        let generation_targets: Vec<Target> =
-            targets.into_iter().filter(|t| !t.is_generated).collect();
+        // Filter out already generated or currently generating targets
+        let generation_targets: Vec<Target> = targets
+            .into_iter()
+            .filter(|t| {
+                !t.is_generated
+                    && !doc_service.is_generated(t.checksum)
+                    && !doc_service.is_pending_generation(t.checksum)
+            })
+            .collect();
 
         if generation_targets.is_empty() {
             // No new targets to generate, but we already published diagnostics above
@@ -439,8 +445,16 @@ impl LanguageServer for MantraBackend {
                     continue;
                 }
             };
+
+            let edit_range = lsp_types::Range::new(start_pos, end_pos);
+
+            // Note: With automerge, we don't need to filter didChange events.
+            // When the editor applies the WorkspaceEdit and sends didChange,
+            // the base will be updated and overlays will be automatically
+            // merged correctly via automerge's merge.
+
             let edits = vec![lsp_types::TextEdit {
-                range: lsp_types::Range::new(start_pos, end_pos),
+                range: edit_range,
                 new_text: generated_text,
             }];
 
