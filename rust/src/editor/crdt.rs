@@ -1,6 +1,6 @@
 use anyhow::Result;
 use automerge::{
-    patches::PatchAction, transaction::Transactable, AutoCommit, ObjType, PatchLog, ReadDoc, ROOT,
+    patches::PatchAction, transaction::Transactable, AutoCommit, ObjType, ReadDoc, ROOT,
 };
 use crop::Rope;
 use lsp_types::{Position, Range, TextDocumentContentChangeEvent, TextEdit};
@@ -60,7 +60,7 @@ impl Snapshot {
 
 /// Automerge-based text editor with overlay support and tree-sitter parsing
 ///
-/// This replaces the previous cola-based CrdtEditor with automerge fork/merge.
+/// This replaces the previous cola-based `CrdtEditor` with automerge fork/merge.
 pub struct CrdtEditor {
     /// Base automerge document
     base: AutoCommit,
@@ -84,9 +84,9 @@ impl CrdtEditor {
         let mut base = AutoCommit::new();
         let text_id = base
             .put_object(ROOT, "text", ObjType::Text)
-            .map_err(|e| anyhow::anyhow!("Failed to create text object: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create text object: {e}"))?;
         base.splice_text(&text_id, 0, 0, initial_text)
-            .map_err(|e| anyhow::anyhow!("Failed to splice initial text: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to splice initial text: {e}"))?;
 
         let parser = GoParser::new()?;
 
@@ -205,7 +205,7 @@ impl CrdtEditor {
                 delete_count_char as isize,
                 new_text,
             )
-            .map_err(|e| anyhow::anyhow!("Failed to apply edit: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to apply edit: {e}"))?;
 
         // Apply to rope (using byte positions)
         let delete_count_bytes = byte_range.end - byte_range.start;
@@ -227,7 +227,7 @@ impl CrdtEditor {
     }
 
     /// Apply an edit and record it (for propagation to overlays via merge)
-    /// This replaces the cola-based apply_byte_edit_with_ops
+    /// This replaces the cola-based `apply_byte_edit_with_ops`
     pub fn apply_byte_edit_with_ops(
         &mut self,
         byte_range: &StdRange<usize>,
@@ -246,7 +246,7 @@ impl CrdtEditor {
                 delete_count_char as isize,
                 new_text,
             )
-            .map_err(|e| anyhow::anyhow!("Failed to apply edit: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to apply edit: {e}"))?;
 
         // Apply to rope (using byte positions)
         let delete_count_bytes = byte_range.end - byte_range.start;
@@ -294,7 +294,7 @@ impl CrdtEditor {
                 delete_count as isize,
                 replacement,
             )
-            .map_err(|e| anyhow::anyhow!("Failed to apply overlay: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to apply overlay: {e}"))?;
 
         self.overlays.insert(checksum, forked);
         Ok(())
@@ -318,7 +318,7 @@ impl CrdtEditor {
     }
 
     /// Get the composed view along with the ranges of each overlay
-    /// Returns (composed_text, overlay_ranges)
+    /// Returns (`composed_text`, `overlay_ranges`)
     pub fn composed_view_with_ranges(&mut self) -> Result<(String, Vec<OverlayRange>)> {
         if self.overlays.is_empty() {
             return Ok((self.get_text(), vec![]));
@@ -328,7 +328,7 @@ impl CrdtEditor {
         let base_heads = self.base.get_heads();
         let mut overlay_start_positions: Vec<(u64, usize)> = Vec::new();
 
-        for (&checksum, overlay) in self.overlays.iter_mut() {
+        for (&checksum, overlay) in &mut self.overlays {
             let overlay_heads = overlay.get_heads();
             let patches = overlay.diff(&base_heads, &overlay_heads);
 
@@ -358,7 +358,7 @@ impl CrdtEditor {
             // Merge this overlay
             merged
                 .merge(overlay)
-                .map_err(|e| anyhow::anyhow!("Failed to merge overlay: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to merge overlay: {e}"))?;
 
             // Get heads after merge
             let after_heads = merged.get_heads();
@@ -412,7 +412,7 @@ impl CrdtEditor {
         // Build a map of checksum -> replacement start position in overlay.doc
         // by diffing each overlay against base
         let mut overlay_replacement_starts: HashMap<u64, usize> = HashMap::new();
-        for (&checksum, overlay) in self.overlays.iter_mut() {
+        for (&checksum, overlay) in &mut self.overlays {
             let overlay_heads = overlay.get_heads();
             let patches = overlay.diff(&base_heads, &overlay_heads);
 
@@ -516,7 +516,7 @@ impl CrdtEditor {
                     );
                     overlay
                         .splice_text(&self.text_id, start, delete_count as isize, &new_text)
-                        .map_err(|e| anyhow::anyhow!("Failed to apply format edit: {}", e))?;
+                        .map_err(|e| anyhow::anyhow!("Failed to apply format edit: {e}"))?;
                 }
 
                 tracing::debug!(
@@ -537,7 +537,7 @@ impl CrdtEditor {
     }
 
     /// Fork this editor to create a new independent editor
-    /// For compatibility with existing code that uses fork_editor
+    /// For compatibility with existing code that uses `fork_editor`
     pub fn fork_editor(&self) -> Result<Self> {
         // Create a new editor with the same content
         let text = self.get_text();
@@ -573,7 +573,7 @@ impl CrdtEditor {
                     delete_count_char as isize,
                     &edit.new_text,
                 )
-                .map_err(|e| anyhow::anyhow!("Failed to apply text edit: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to apply text edit: {e}"))?;
 
             // Apply to rope (using byte positions)
             let delete_count_bytes = end_byte - start_byte;

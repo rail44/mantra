@@ -21,7 +21,7 @@ use crate::workspace::WorkspaceService;
 /// Document managing a single document's state with automerge overlay support
 pub struct Document {
     pub uri: String,
-    /// Single editor with base + overlays (replaces editor_sync + generation_editor)
+    /// Single editor with base + overlays (replaces `editor_sync` + `generation_editor`)
     pub editor: CrdtEditor,
     /// Set of checksums for currently pending generation tasks
     pending_generations: HashSet<u64>,
@@ -253,7 +253,7 @@ impl DocumentService {
 
         // Get composed view and parse it to find the target
         let composed = doc.get_generation_text();
-        let checksum_comment = format!("// mantra:checksum:{:x}", checksum);
+        let checksum_comment = format!("// mantra:checksum:{checksum:x}");
 
         // Find the checksum comment and extract the function
         if let Some(start) = composed.find(&checksum_comment) {
@@ -262,14 +262,12 @@ impl DocumentService {
             // Simple heuristic: find next "// mantra:" or end
             let end = rest[checksum_comment.len()..]
                 .find("// mantra:")
-                .map(|i| start + checksum_comment.len() + i)
-                .unwrap_or(composed.len());
+                .map_or(composed.len(), |i| start + checksum_comment.len() + i);
 
             Ok(composed[start..end].trim().to_string())
         } else {
             Err(anyhow::anyhow!(
-                "Target with checksum {:x} not found",
-                checksum
+                "Target with checksum {checksum:x} not found"
             ))
         }
     }
@@ -383,7 +381,7 @@ impl DocumentService {
         if succeeded.contains(&checksum) {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("Generation failed for {:x}", checksum))
+            Err(anyhow::anyhow!("Generation failed for {checksum:x}"))
         }
     }
 
