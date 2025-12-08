@@ -315,8 +315,7 @@ impl DocumentService {
         let start = target
             .checksum_comment_range
             .as_ref()
-            .map(|r| r.start)
-            .unwrap_or(target.byte_range.start);
+            .map_or(target.byte_range.start, |r| r.start);
         let end = target.byte_range.end;
 
         Ok(rope.byte_slice(start..end).to_string())
