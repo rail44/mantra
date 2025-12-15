@@ -277,8 +277,8 @@ impl CrdtEditor {
     /// Check if a checksum exists as a comment in the base text
     pub fn has_checksum_in_base(&self, checksum: u64) -> bool {
         let base_text = self.get_text();
-        let checksum_str = format!("{:x}", checksum);
-        let search_pattern = format!("{}{}", CHECKSUM_PREFIX, checksum_str);
+        let checksum_str = format!("{checksum:x}");
+        let search_pattern = format!("{CHECKSUM_PREFIX}{checksum_str}");
         base_text.contains(&search_pattern)
     }
 
