@@ -3,7 +3,6 @@ use lsp_types::{
     DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
 };
 use parking_lot::RwLock;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -18,10 +17,8 @@ use crate::workspace::WorkspaceService;
 /// Document managing a single document's state with automerge overlay support
 pub struct Document {
     pub uri: String,
-    /// Single editor with base + overlays (replaces `editor_sync` + `generation_editor`)
+    /// Single editor with base + overlays
     pub editor: CrdtEditor,
-    /// Set of checksums for currently pending generation tasks
-    pending_generations: HashSet<u64>,
 }
 
 impl Document {
@@ -29,11 +26,7 @@ impl Document {
     pub fn from_text(uri: String, content: &str) -> Result<Self> {
         let editor = CrdtEditor::new(content)?;
 
-        Ok(Self {
-            uri,
-            editor,
-            pending_generations: HashSet::new(),
-        })
+        Ok(Self { uri, editor })
     }
 
     /// Get targets for generation (uses base text)
@@ -113,26 +106,6 @@ impl Document {
         }
         Ok(())
     }
-
-    /// Start tracking a generation task
-    pub fn start_generation(&mut self, checksum: u64) {
-        self.pending_generations.insert(checksum);
-    }
-
-    /// Complete a generation task
-    pub fn complete_generation(&mut self, checksum: u64) {
-        self.pending_generations.remove(&checksum);
-    }
-
-    /// Check if a generation is currently pending for a checksum
-    pub fn is_pending_generation(&self, checksum: u64) -> bool {
-        self.pending_generations.contains(&checksum)
-    }
-
-    /// Check if formatting should be applied
-    pub fn should_format(&self) -> bool {
-        self.pending_generations.is_empty()
-    }
 }
 
 /// Service wrapper for Document with external dependencies
@@ -186,15 +159,21 @@ impl DocumentService {
             .map(|targets| targets.into_iter().find(|t| t.checksum == checksum))
     }
 
-    /// Check if a target has already been generated (has overlay)
+    /// Check if a target has overlay ready for code action
     pub fn is_generated(&self, checksum: u64) -> bool {
         let document = self.document.read();
-        document.editor.has_overlay(checksum)
+        document.editor.is_overlay_ready(checksum)
+    }
+
+    /// Check if a target has already been applied (checksum exists in base)
+    pub fn is_already_applied(&self, checksum: u64) -> bool {
+        let document = self.document.read();
+        document.editor.has_checksum_in_base(checksum)
     }
 
     /// Check if a generation is currently pending for a checksum
     pub fn is_pending_generation(&self, checksum: u64) -> bool {
-        self.document.read().is_pending_generation(checksum)
+        self.document.read().editor.is_pending(checksum)
     }
 
     /// Convert byte position to LSP position
@@ -229,11 +208,11 @@ impl DocumentService {
     async fn generate_targets_sequential(&self, targets: Vec<Target>) -> Vec<u64> {
         use futures::future::join_all;
 
-        // Mark all targets as pending
+        // Mark all targets as generating
         {
             let mut document = self.document.write();
             for target in &targets {
-                document.start_generation(target.checksum);
+                document.editor.start_generation(target.checksum);
             }
         }
 
@@ -263,8 +242,9 @@ impl DocumentService {
                 Ok((target, Some(new_body))) => {
                     let checksum = target.checksum;
                     if self.is_generated(checksum) {
+                        // Already generated, cancel generation
                         let mut document = self.document.write();
-                        document.complete_generation(checksum);
+                        document.editor.cancel_generation(checksum);
                         succeeded.push(checksum);
                         continue;
                     }
@@ -273,14 +253,16 @@ impl DocumentService {
                     }
                 }
                 Ok((target, None)) => {
+                    // Already generated, cancel generation
                     let mut document = self.document.write();
-                    document.complete_generation(target.checksum);
+                    document.editor.cancel_generation(target.checksum);
                     succeeded.push(target.checksum);
                 }
                 Err((target, e)) => {
                     tracing::error!("Generation failed for {:x}: {:?}", target.checksum, e);
+                    // Cancel generation on failure
                     let mut document = self.document.write();
-                    document.complete_generation(target.checksum);
+                    document.editor.cancel_generation(target.checksum);
                 }
             }
         }
@@ -340,15 +322,20 @@ impl DocumentService {
     async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {
         let checksum = target.checksum;
 
+        // Apply generation creates overlay in Formatting status
         let change = {
             let mut doc = self.document.write();
-            let change = doc.apply_generation(&target, new_body);
-            doc.complete_generation(checksum);
-            change
+            doc.apply_generation(&target, new_body)
         };
 
         self.send_did_change(vec![change]).await?;
         self.format_if_needed().await?;
+
+        // After formatting, set overlay to Ready
+        {
+            let mut doc = self.document.write();
+            doc.editor.set_overlay_ready(checksum);
+        }
 
         Ok(())
     }
@@ -380,7 +367,7 @@ impl DocumentService {
     async fn format_if_needed(&self) -> Result<()> {
         let should_format = {
             let doc = self.document.read();
-            doc.should_format()
+            doc.editor.should_format()
         };
 
         if should_format {

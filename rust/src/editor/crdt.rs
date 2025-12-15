@@ -2,7 +2,7 @@ use anyhow::Result;
 use automerge::{transaction::Transactable, AutoCommit, ObjType, ReadDoc, ROOT};
 use crop::Rope;
 use lsp_types::{Position, TextEdit};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range as StdRange;
 use tree_sitter::Tree;
 
@@ -29,6 +29,15 @@ pub fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
     rope.byte_of_utf16_code_unit(target_utf16)
 }
 
+/// Status of an overlay for a target
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayStatus {
+    /// Generation complete, formatting in progress
+    Formatting,
+    /// Ready for code action application
+    Ready,
+}
+
 /// Overlay content for a target (identified by signature)
 #[derive(Debug, Clone)]
 struct OverlayContent {
@@ -36,6 +45,8 @@ struct OverlayContent {
     checksum: u64,
     /// The generated code (including checksum comment)
     replacement: String,
+    /// Current status of this overlay
+    status: OverlayStatus,
 }
 
 /// Text editor with overlay support and tree-sitter parsing
@@ -46,6 +57,8 @@ pub struct CrdtEditor {
     base: AutoCommit,
     /// Signature -> overlay content
     overlays: HashMap<String, OverlayContent>,
+    /// Checksums currently being generated (LLM call in progress)
+    generating: HashSet<u64>,
     /// Automerge object ID for the text
     text_id: automerge::ObjId,
     /// Rope for tree-sitter parsing and LSP position conversion (synced with base)
@@ -73,6 +86,7 @@ impl CrdtEditor {
         let mut editor = Self {
             base,
             overlays: HashMap::new(),
+            generating: HashSet::new(),
             text_id,
             rope: Rope::from(initial_text),
             version: 0,
@@ -204,19 +218,68 @@ impl CrdtEditor {
     }
 
     /// Add a generated code overlay for a target (keyed by signature)
+    /// Initially in Formatting status
     pub fn add_overlay(&mut self, signature: &str, checksum: u64, replacement: &str) {
+        // Remove from generating set since we now have an overlay
+        self.generating.remove(&checksum);
         self.overlays.insert(
             signature.to_string(),
             OverlayContent {
                 checksum,
                 replacement: replacement.to_string(),
+                status: OverlayStatus::Formatting,
             },
         );
     }
 
-    /// Check if an overlay exists for the given checksum
-    pub fn has_overlay(&self, checksum: u64) -> bool {
-        self.overlays.values().any(|o| o.checksum == checksum)
+    /// Start tracking a generation task
+    pub fn start_generation(&mut self, checksum: u64) {
+        self.generating.insert(checksum);
+    }
+
+    /// Cancel a generation task (on failure or if already generated)
+    pub fn cancel_generation(&mut self, checksum: u64) {
+        self.generating.remove(&checksum);
+    }
+
+    /// Set overlay status to Ready (after formatting completes)
+    pub fn set_overlay_ready(&mut self, checksum: u64) {
+        for overlay in self.overlays.values_mut() {
+            if overlay.checksum == checksum {
+                overlay.status = OverlayStatus::Ready;
+                break;
+            }
+        }
+    }
+
+    /// Check if a generation is currently pending (generating or formatting)
+    pub fn is_pending(&self, checksum: u64) -> bool {
+        if self.generating.contains(&checksum) {
+            return true;
+        }
+        self.overlays
+            .values()
+            .any(|o| o.checksum == checksum && o.status == OverlayStatus::Formatting)
+    }
+
+    /// Check if all generations are complete (no Generating status)
+    pub fn should_format(&self) -> bool {
+        self.generating.is_empty()
+    }
+
+    /// Check if overlay is ready for code action
+    pub fn is_overlay_ready(&self, checksum: u64) -> bool {
+        self.overlays
+            .values()
+            .any(|o| o.checksum == checksum && o.status == OverlayStatus::Ready)
+    }
+
+    /// Check if a checksum exists as a comment in the base text
+    pub fn has_checksum_in_base(&self, checksum: u64) -> bool {
+        let base_text = self.get_text();
+        let checksum_str = format!("{:x}", checksum);
+        let search_pattern = format!("{}{}", CHECKSUM_PREFIX, checksum_str);
+        base_text.contains(&search_pattern)
     }
 
     /// Get overlay replacement text by checksum
@@ -251,9 +314,18 @@ impl CrdtEditor {
             search_start = line_end;
         }
 
+        let before_count = self.overlays.len();
         // Remove overlays whose checksums are now in base
         self.overlays
             .retain(|_, overlay| !base_checksums.contains(&overlay.checksum));
+        let after_count = self.overlays.len();
+
+        if before_count != after_count {
+            tracing::info!(
+                "Removed {} overlays (checksums now in base)",
+                before_count - after_count
+            );
+        }
     }
 
     /// Get the composed view (base with overlays applied)

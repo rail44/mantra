@@ -134,11 +134,12 @@ impl MantraBackend {
             })
             .collect();
 
-        // Filter out already generated or currently generating targets
+        // Filter out already generated, applied, or currently generating targets
         let generation_targets: Vec<Target> = targets
             .into_iter()
             .filter(|t| {
                 !doc_service.is_generated(t.checksum)
+                    && !doc_service.is_already_applied(t.checksum)
                     && !doc_service.is_pending_generation(t.checksum)
             })
             .collect();
