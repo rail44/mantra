@@ -24,8 +24,6 @@ pub struct Document {
     pub editor: CrdtEditor,
     /// Set of checksums for currently pending generation tasks
     pending_generations: HashSet<u64>,
-    /// Set of checksums that have been generated but not yet applied to the editor
-    generated_not_applied: HashSet<u64>,
 }
 
 impl Document {
@@ -44,24 +42,7 @@ impl Document {
             uri,
             editor,
             pending_generations: HashSet::new(),
-            generated_not_applied: HashSet::new(),
         })
-    }
-
-    /// Mark a checksum as generated but not yet applied to editor
-    pub fn mark_generated(&mut self, checksum: u64) {
-        self.generated_not_applied.insert(checksum);
-    }
-
-    /// Check if a checksum is generated but not yet applied
-    #[allow(dead_code)]
-    pub fn is_generated_not_applied(&self, checksum: u64) -> bool {
-        self.generated_not_applied.contains(&checksum)
-    }
-
-    /// Remove checksum from `generated_not_applied` (called after code action applied)
-    pub fn mark_applied(&mut self, checksum: u64) {
-        self.generated_not_applied.remove(&checksum);
     }
 
     /// Get targets for generation (uses base text)
@@ -135,17 +116,9 @@ impl Document {
             // After applying the change, check if any overlay's checksum now exists in base
             // This handles code action application where the overlay content is now in base
             self.editor.remove_overlays_matching_base();
-
-            // Clean up generated_not_applied to keep in sync
-            let current_targets = self.find_targets()?;
-            let current_checksums: HashSet<u64> =
-                current_targets.iter().map(|t| t.checksum).collect();
-            self.generated_not_applied
-                .retain(|checksum| current_checksums.contains(checksum));
         } else {
             // Full document replacement
             self.editor = CrdtEditor::new(&change.text)?;
-            self.generated_not_applied.clear();
         }
         Ok(())
     }
@@ -227,40 +200,24 @@ impl DocumentService {
         self.document.read().is_pending_generation(checksum)
     }
 
-    /// Check if a target is generated but not yet applied to editor
-    #[allow(dead_code)]
-    pub fn is_generated_not_applied(&self, checksum: u64) -> bool {
-        self.document.read().is_generated_not_applied(checksum)
+    /// Convert byte position to LSP position
+    pub fn byte_to_lsp_position(&self, byte_pos: usize) -> lsp_types::Position {
+        self.document.read().editor.byte_to_lsp_position(byte_pos)
     }
 
-    /// Mark a checksum as applied (remove from `generated_not_applied`)
-    pub fn mark_applied(&self, checksum: u64) {
-        self.document.write().mark_applied(checksum);
+    /// Convert byte range to LSP range
+    pub fn byte_range_to_lsp_range(&self, range: &std::ops::Range<usize>) -> lsp_types::Range {
+        self.document.read().editor.byte_range_to_lsp_range(range)
     }
 
-    /// Get generated text by checksum (from composed view)
+    /// Get generated text by checksum (from overlay)
     pub fn get_generated_text_by_checksum(&self, checksum: u64) -> Result<String> {
-        let mut doc = self.document.write();
+        let doc = self.document.read();
 
-        // Get composed view and parse it to find the target
-        let composed = doc.get_generation_text();
-        let checksum_comment = format!("// mantra:checksum:{checksum:x}");
-
-        // Find the checksum comment and extract the function
-        if let Some(start) = composed.find(&checksum_comment) {
-            // Find the end of the function (next function or EOF)
-            let rest = &composed[start..];
-            // Simple heuristic: find next "// mantra:" or end
-            let end = rest[checksum_comment.len()..]
-                .find("// mantra:")
-                .map_or(composed.len(), |i| start + checksum_comment.len() + i);
-
-            Ok(composed[start..end].trim().to_string())
-        } else {
-            Err(anyhow::anyhow!(
-                "Target with checksum {checksum:x} not found"
-            ))
-        }
+        doc.editor
+            .get_overlay_by_checksum(checksum)
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Target with checksum {checksum:x} not found"))
     }
 
     /// Generate code for a single target
@@ -316,10 +273,6 @@ impl DocumentService {
                         continue;
                     }
                     if self.apply_generation(target, &new_body).await.is_ok() {
-                        {
-                            let mut document = self.document.write();
-                            document.mark_generated(checksum);
-                        }
                         succeeded.push(checksum);
                     }
                 }

@@ -1,4 +1,5 @@
 mod backend;
+mod diagnostic;
 
 pub use backend::MantraBackend;
 

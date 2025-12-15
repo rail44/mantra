@@ -3,16 +3,18 @@ use tokio::sync::RwLock as AsyncRwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CodeActionResponse, Diagnostic, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, InitializeResult,
-    InitializedParams, Position, Range, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri, WorkspaceEdit,
+    CodeActionProviderCapability, CodeActionResponse, Diagnostic, DidChangeTextDocumentParams,
+    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams, Position,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    WorkspaceEdit,
 };
 use tower_lsp_server::{Client, LanguageServer};
 
 use crate::config::Config;
 use crate::parser::target::Target;
 use crate::workspace::WorkspaceService;
+
+use super::diagnostic::{create_diagnostic, MantraDiagnosticData};
 
 /// Mantra LSP backend
 pub struct MantraBackend {
@@ -120,9 +122,15 @@ impl MantraBackend {
             .iter()
             .filter(|t| doc_service.is_generated(t.checksum))
             .map(|t| {
-                let (start_pos, end_pos) = byte_range_to_lsp_range(text, &t.byte_range);
-                let edit_start_pos = byte_offset_to_position(text, t.edit_start_byte);
-                create_diagnostic(t, start_pos, end_pos, edit_start_pos)
+                let range = doc_service.byte_range_to_lsp_range(&t.byte_range);
+                let edit_start = doc_service.byte_to_lsp_position(t.edit_start_byte);
+                create_diagnostic(
+                    &t.instruction,
+                    t.checksum,
+                    range.start,
+                    range.end,
+                    edit_start,
+                )
             })
             .collect();
 
@@ -166,10 +174,10 @@ impl MantraBackend {
                 .iter()
                 .filter(|t| succeeded_checksums.contains(&t.checksum))
                 .map(|t| {
-                    let (start_pos, end_pos) =
+                    let (func_start, func_end) =
                         byte_range_to_lsp_range(&original_text, &t.byte_range);
-                    let edit_start_pos = byte_offset_to_position(&original_text, t.edit_start_byte);
-                    create_diagnostic(t, start_pos, end_pos, edit_start_pos)
+                    let edit_start = byte_offset_to_position(&original_text, t.edit_start_byte);
+                    create_diagnostic(&t.instruction, t.checksum, func_start, func_end, edit_start)
                 })
                 .collect();
 
@@ -317,89 +325,20 @@ impl LanguageServer for MantraBackend {
         };
 
         for diagnostic in mantra_diagnostics {
-            // Extract checksum and instruction from diagnostic data
-            let checksum_str = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("checksum"))
-                .and_then(|v| v.as_str());
-
-            let instruction = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("instruction"))
-                .and_then(|v| v.as_str());
-
-            let checksum = if let Some(s) = checksum_str {
-                match u64::from_str_radix(s, 16) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("Failed to parse checksum '{}': {}", s, e);
-                        continue;
-                    }
-                }
-            } else {
-                tracing::warn!("No checksum in diagnostic data");
+            // Extract diagnostic data using structured type
+            let Some(data) = MantraDiagnosticData::from_diagnostic(diagnostic) else {
+                tracing::warn!("Failed to parse diagnostic data");
                 continue;
             };
 
-            let instruction = if let Some(i) = instruction {
-                i.to_string()
-            } else {
-                tracing::warn!("No instruction in diagnostic data");
+            let Some(checksum) = data.parse_checksum() else {
+                tracing::warn!("Failed to parse checksum '{}'", data.checksum);
                 continue;
             };
 
-            // Extract target range from diagnostic data
-            let target_end_line = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("target_end_line"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32);
-
-            let target_end_character = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("target_end_character"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32);
-
-            // Extract edit start position (includes any preceding checksum comments)
-            let edit_start_line = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("edit_start_line"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32);
-
-            let edit_start_character = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("edit_start_character"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32);
-
-            let (start_pos, end_pos) = if let (Some(esl), Some(esc), Some(el), Some(ec)) = (
-                edit_start_line,
-                edit_start_character,
-                target_end_line,
-                target_end_character,
-            ) {
-                (
-                    Position {
-                        line: esl,
-                        character: esc,
-                    },
-                    Position {
-                        line: el,
-                        character: ec,
-                    },
-                )
-            } else {
-                tracing::warn!("No target range in diagnostic data");
-                continue;
-            };
+            let instruction = data.instruction;
+            let start_pos = data.edit_start;
+            let end_pos = data.target_end;
 
             // Check if code has been generated (either via background or now)
             let is_generated = doc_service.is_generated(checksum);
@@ -474,9 +413,6 @@ impl LanguageServer for MantraBackend {
                 data: None,
             };
 
-            // Mark as applied (optimistically - assumes user will apply the action)
-            doc_service.mark_applied(checksum);
-
             actions.push(CodeActionOrCommand::CodeAction(action));
         }
 
@@ -550,39 +486,4 @@ fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
 
     // Handle offset at end of file
     Position { line, character }
-}
-
-/// Create a diagnostic for a target
-fn create_diagnostic(
-    target: &Target,
-    start_pos: Position,
-    end_pos: Position,
-    edit_start_pos: Position,
-) -> Diagnostic {
-    Diagnostic {
-        range: Range {
-            start: Position {
-                line: start_pos.line,
-                character: 0,
-            },
-            end: Position {
-                line: start_pos.line,
-                character: start_pos.character,
-            },
-        },
-        severity: Some(DiagnosticSeverity::HINT),
-        source: Some("mantra".to_string()),
-        message: format!("Generate implementation: {}", target.instruction),
-        data: Some(serde_json::json!({
-            "instruction": target.instruction,
-            "checksum": format!("{:x}", target.checksum),
-            "target_start_line": start_pos.line,
-            "target_start_character": start_pos.character,
-            "target_end_line": end_pos.line,
-            "target_end_character": end_pos.character,
-            "edit_start_line": edit_start_pos.line,
-            "edit_start_character": edit_start_pos.character,
-        })),
-        ..Default::default()
-    }
 }

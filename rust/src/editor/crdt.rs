@@ -182,6 +182,14 @@ impl CrdtEditor {
         }
     }
 
+    /// Convert byte range to LSP range
+    pub fn byte_range_to_lsp_range(&self, range: &StdRange<usize>) -> lsp_types::Range {
+        lsp_types::Range {
+            start: self.byte_to_lsp_position(range.start),
+            end: self.byte_to_lsp_position(range.end),
+        }
+    }
+
     /// Get the current document version
     pub fn get_version(&self) -> i32 {
         self.version
@@ -250,6 +258,14 @@ impl CrdtEditor {
     /// Check if an overlay exists for the given checksum
     pub fn has_overlay(&self, checksum: u64) -> bool {
         self.overlays.values().any(|o| o.checksum == checksum)
+    }
+
+    /// Get overlay replacement text by checksum
+    pub fn get_overlay_by_checksum(&self, checksum: u64) -> Option<&str> {
+        self.overlays
+            .values()
+            .find(|o| o.checksum == checksum)
+            .map(|o| o.replacement.as_str())
     }
 
     /// Remove overlays whose checksums now exist in the base text
