@@ -271,7 +271,7 @@ impl LanguageServer for MantraBackend {
         let uri = params.text_document.uri;
         let changes = params.content_changes;
 
-        tracing::debug!(
+        tracing::trace!(
             "Document changed: {} ({} changes)",
             uri.as_str(),
             changes.len()

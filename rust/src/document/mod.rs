@@ -4,8 +4,6 @@ use lsp_types::{
 };
 use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -27,14 +25,7 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn new(file_path: &PathBuf, uri: String) -> Result<Self> {
-        let content = fs::read_to_string(file_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", file_path.display(), e))?;
-
-        Self::from_text(uri, &content)
-    }
-
-    /// Create a Document from provided text (without reading from disk)
+    /// Create a Document from provided text
     pub fn from_text(uri: String, content: &str) -> Result<Self> {
         let editor = CrdtEditor::new(content)?;
 
@@ -272,7 +263,6 @@ impl DocumentService {
                 Ok((target, Some(new_body))) => {
                     let checksum = target.checksum;
                     if self.is_generated(checksum) {
-                        tracing::debug!("Skipping {:x} - already generated", checksum);
                         let mut document = self.document.write();
                         document.complete_generation(checksum);
                         succeeded.push(checksum);
@@ -293,12 +283,6 @@ impl DocumentService {
                     document.complete_generation(target.checksum);
                 }
             }
-        }
-
-        // Log final state
-        {
-            let mut document = self.document.write();
-            tracing::info!("After generation:\n{}", document.get_generation_text());
         }
 
         succeeded
@@ -355,22 +339,11 @@ impl DocumentService {
 
     async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {
         let checksum = target.checksum;
-        tracing::debug!("Applying generation for {:x}", checksum);
 
         let change = {
             let mut doc = self.document.write();
-            let version_before = doc.editor.get_version();
             let change = doc.apply_generation(&target, new_body);
             doc.complete_generation(checksum);
-            let version_after = doc.editor.get_version();
-
-            tracing::debug!(
-                "Generation applied for {:x} (version: {} -> {})",
-                checksum,
-                version_before,
-                version_after
-            );
-
             change
         };
 
@@ -530,12 +503,6 @@ impl DocumentService {
         };
         self.lsp_client.did_change(full_sync_params).await?;
 
-        tracing::debug!(
-            "Requesting formatting for {} (version: {})",
-            uri_str,
-            version
-        );
-
         let formatting_options = lsp_types::FormattingOptions {
             tab_size: 4,
             insert_spaces: false,
@@ -554,17 +521,6 @@ impl DocumentService {
             .await?
         {
             Some(edits) if !edits.is_empty() => {
-                let current_version = {
-                    let doc = self.document.read();
-                    doc.editor.get_version()
-                };
-                tracing::debug!(
-                    "Applying {} formatting edits (version: {} -> {})",
-                    edits.len(),
-                    version,
-                    current_version
-                );
-
                 // Apply formatting edits to overlays (not base)
                 // This preserves the overlay structure while formatting the generated code
                 let formatted_text = {

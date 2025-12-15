@@ -110,10 +110,10 @@ async fn generate_for_target(
 
                     match result {
                         Ok(result) => {
-                            tracing::debug!(
-                                "Tool call executed: {} -> {}",
+                            tracing::trace!(
+                                "Tool call executed: {} (response: {} bytes)",
                                 tool_call.function.name,
-                                result.content
+                                result.content.len()
                             );
                             messages.push(Message::tool(result.content, result.tool_call_id));
                         }

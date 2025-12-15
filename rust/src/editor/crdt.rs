@@ -260,12 +260,7 @@ impl CrdtEditor {
             .map(|(sig, v)| (sig.clone(), v.checksum))
             .collect();
 
-        for (sig, checksum) in &removed {
-            tracing::debug!(
-                signature = sig,
-                checksum = format!("{:x}", checksum),
-                "Removing overlay - checksum now exists in base"
-            );
+        for (sig, _checksum) in &removed {
             self.overlays.remove(sig);
         }
     }
@@ -410,12 +405,6 @@ impl CrdtEditor {
                     replacement.replace_range(byte_start..byte_end, &new_text);
                 }
                 overlay.replacement = replacement;
-
-                tracing::debug!(
-                    signature = signature,
-                    checksum = format!("{:x}", overlay.checksum),
-                    "Overlay text after formatting edit"
-                );
             }
         }
 

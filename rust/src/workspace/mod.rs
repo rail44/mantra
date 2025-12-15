@@ -79,68 +79,20 @@ impl WorkspaceService {
             std::env::current_dir()?.join(&file_path)
         };
 
-        // Validate file exists
-        if !absolute_path.exists() {
-            return Err(anyhow::anyhow!(
-                "File does not exist: {}",
-                absolute_path.display()
-            ));
-        }
-
         let file_uri = format!("file://{}", absolute_path.display());
 
-        // Check if document already exists
-        let existing_doc = {
-            let workspace = self.workspace.read().unwrap();
-            workspace.documents.get(&file_uri).cloned()
-        };
+        // Open document (handles caching, LSP, and storage)
+        let document = self.open_document(&file_uri).await?;
 
-        if let Some(document) = existing_doc {
-            return document.generate().await;
-        }
-
-        // Read file content
-        let source = tokio::fs::read_to_string(&absolute_path).await?;
-
-        // Open document in LSP
-        let doc_uri: lsp_types::Uri = file_uri.parse()?;
-        self.lsp_client
-            .did_open(lsp_types::TextDocumentItem {
-                uri: doc_uri,
-                language_id: "go".to_string(),
-                version: 1,
-                text: source,
-            })
-            .await?;
-
-        // Create document service
-        let d = Document::new(&absolute_path, file_uri.clone())?;
-        let document = DocumentService::new(
-            d,
-            self.lsp_client.clone(),
-            self.llm_client.clone(),
-            self.clone(),
-        );
-
-        let result = document.generate().await?;
-
-        // Store the document
-        {
-            let mut workspace = self.workspace.write().unwrap();
-            workspace.documents.insert(file_uri, document);
-        }
-
-        Ok(result)
+        // Generate code
+        document.generate().await
     }
 
     /// Open a document with provided text (from editor), creating if not exists
     pub async fn open_document_with_text(&self, uri: &str, text: &str) -> Result<DocumentService> {
         // Check if document already exists
-        {
-            let workspace = self.workspace.read().unwrap();
-            if let Some(document) = workspace.documents.get(uri) {
-                return Ok(document.clone());
-            }
+        if let Some(document) = self.get_document(uri) {
+            return Ok(document);
         }
 
         let parsed_uri: lsp_types::Uri = uri.parse()?;
@@ -184,19 +136,12 @@ impl WorkspaceService {
     /// Open a document by URI, reusing existing if already open
     pub async fn open_document(&self, uri: &str) -> Result<DocumentService> {
         // Check if document already exists
-        {
-            let workspace = self.workspace.read().unwrap();
-            if let Some(document) = workspace.documents.get(uri) {
-                return Ok(document.clone());
-            }
+        if let Some(document) = self.get_document(uri) {
+            return Ok(document);
         }
 
-        // Parse URI to get file path
-        let parsed_uri: lsp_types::Uri = uri.parse()?;
-
         // Extract path from file:// URI
-        let path_str = parsed_uri
-            .as_str()
+        let path_str = uri
             .strip_prefix("file://")
             .ok_or_else(|| anyhow::anyhow!("URI must be a file:// URI: {uri}"))?;
 
@@ -207,36 +152,8 @@ impl WorkspaceService {
             return Err(anyhow::anyhow!("File does not exist: {}", path.display()));
         }
 
-        // Read file content
+        // Read file content and delegate to open_document_with_text
         let source = tokio::fs::read_to_string(&path).await?;
-
-        // Open document in LSP
-        self.lsp_client
-            .did_open(lsp_types::TextDocumentItem {
-                uri: parsed_uri,
-                language_id: "go".to_string(),
-                version: 1,
-                text: source,
-            })
-            .await?;
-
-        // Create document service
-        let d = Document::new(&path, uri.to_string())?;
-        let document = DocumentService::new(
-            d,
-            self.lsp_client.clone(),
-            self.llm_client.clone(),
-            self.clone(),
-        );
-
-        // Store the document
-        {
-            let mut workspace = self.workspace.write().unwrap();
-            workspace
-                .documents
-                .insert(uri.to_string(), document.clone());
-        }
-
-        Ok(document)
+        self.open_document_with_text(uri, &source).await
     }
 }
