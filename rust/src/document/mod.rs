@@ -82,7 +82,7 @@ impl Document {
         &mut self,
         target: &Target,
         new_body: &str,
-    ) -> Result<TextDocumentContentChangeEvent> {
+    ) -> TextDocumentContentChangeEvent {
         // Create replacement with checksum comment
         let replacement = format!(
             "// mantra:checksum:{:x}\n{} {{\n{}\n}}",
@@ -93,17 +93,17 @@ impl Document {
 
         // Add as overlay keyed by signature (doesn't modify base)
         self.editor
-            .add_overlay(&target.signature, target.checksum, &replacement)?;
+            .add_overlay(&target.signature, target.checksum, &replacement);
 
         // Get LSP range for the change notification (in composed view coordinates)
         let start_pos = self.editor.byte_to_lsp_position(target.byte_range.start);
         let end_pos = self.editor.byte_to_lsp_position(target.byte_range.end);
 
-        Ok(TextDocumentContentChangeEvent {
+        TextDocumentContentChangeEvent {
             range: Some(lsp_types::Range::new(start_pos, end_pos)),
             range_length: None,
             text: replacement,
-        })
+        }
     }
 
     /// Get base text (user's editor view)
@@ -401,7 +401,7 @@ impl DocumentService {
         let change = {
             let mut doc = self.document.write();
             let version_before = doc.editor.get_version();
-            let change = doc.apply_generation(&target, new_body)?;
+            let change = doc.apply_generation(&target, new_body);
             doc.complete_generation(checksum);
             let version_after = doc.editor.get_version();
 

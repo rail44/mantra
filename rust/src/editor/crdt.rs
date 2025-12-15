@@ -237,12 +237,7 @@ impl CrdtEditor {
     }
 
     /// Add a generated code overlay for a target (keyed by signature)
-    pub fn add_overlay(
-        &mut self,
-        signature: &str,
-        checksum: u64,
-        replacement: &str,
-    ) -> Result<()> {
+    pub fn add_overlay(&mut self, signature: &str, checksum: u64, replacement: &str) {
         self.overlays.insert(
             signature.to_string(),
             OverlayContent {
@@ -250,7 +245,6 @@ impl CrdtEditor {
                 replacement: replacement.to_string(),
             },
         );
-        Ok(())
     }
 
     /// Check if an overlay exists for the given checksum
@@ -433,13 +427,11 @@ impl CrdtEditor {
                     let byte_start = replacement
                         .char_indices()
                         .nth(start)
-                        .map(|(i, _)| i)
-                        .unwrap_or(replacement.len());
+                        .map_or(replacement.len(), |(i, _)| i);
                     let byte_end = replacement
                         .char_indices()
                         .nth(end)
-                        .map(|(i, _)| i)
-                        .unwrap_or(replacement.len());
+                        .map_or(replacement.len(), |(i, _)| i);
 
                     replacement.replace_range(byte_start..byte_end, &new_text);
                 }
@@ -506,7 +498,7 @@ func Get() any {
             &target.signature,
             target.checksum,
             "func Get() any {\n\treturn 42\n}\n// mantra:checksum:test",
-        )?;
+        );
 
         // Base should be unchanged
         assert!(editor.get_text().contains("panic"));
@@ -531,11 +523,7 @@ func Get() any {
         let old_checksum = target.checksum;
         let signature = target.signature.clone();
 
-        editor.add_overlay(
-            &signature,
-            old_checksum,
-            "func Get() any {\n\treturn 42\n}",
-        )?;
+        editor.add_overlay(&signature, old_checksum, "func Get() any {\n\treturn 42\n}");
 
         // Verify overlay works
         let composed = editor.composed_view()?;
@@ -556,7 +544,10 @@ func Get() any {
 
         println!("Old checksum: {:x}", old_checksum);
         println!("New checksum: {:x}", new_checksum);
-        assert_ne!(old_checksum, new_checksum, "Checksum should change after instruction edit");
+        assert_ne!(
+            old_checksum, new_checksum,
+            "Checksum should change after instruction edit"
+        );
 
         // Overlay still exists but checksum doesn't match
         // So composed view should use base text
@@ -564,8 +555,14 @@ func Get() any {
         println!("Composed after instruction edit:\n{}", composed);
 
         // Should fall back to base (panic) because checksum doesn't match
-        assert!(composed.contains("panic"), "Should use base when checksum doesn't match");
-        assert!(!composed.contains("return 42"), "Should not use stale overlay");
+        assert!(
+            composed.contains("panic"),
+            "Should use base when checksum doesn't match"
+        );
+        assert!(
+            !composed.contains("return 42"),
+            "Should not use stale overlay"
+        );
 
         Ok(())
     }
@@ -581,20 +578,23 @@ func Get() any {
         let checksum = target.checksum;
 
         // Add first overlay
-        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 1\n}")?;
+        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 1\n}");
         assert_eq!(editor.overlay_count(), 1);
 
         let composed = editor.composed_view()?;
         assert!(composed.contains("return 1"));
 
         // Add second overlay with same signature (replaces)
-        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 2\n}")?;
+        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 2\n}");
         assert_eq!(editor.overlay_count(), 1); // Still only one overlay
 
         let composed = editor.composed_view()?;
         println!("Composed after replacement:\n{}", composed);
         assert!(composed.contains("return 2"));
-        assert!(!composed.contains("return 1"), "Old overlay should be replaced");
+        assert!(
+            !composed.contains("return 1"),
+            "Old overlay should be replaced"
+        );
 
         Ok(())
     }
@@ -627,7 +627,7 @@ func Second() string {
             } else {
                 "func Second() string {\n\treturn \"two\"\n}"
             };
-            editor.add_overlay(&target.signature, target.checksum, replacement)?;
+            editor.add_overlay(&target.signature, target.checksum, replacement);
         }
 
         assert_eq!(editor.overlay_count(), 2);
@@ -655,7 +655,7 @@ func Second() string {
             } else {
                 "func Second() string {\n\treturn \"two\"\n}"
             };
-            editor.add_overlay(&target.signature, target.checksum, replacement)?;
+            editor.add_overlay(&target.signature, target.checksum, replacement);
         }
 
         let (text, ranges) = editor.composed_view_with_ranges()?;
@@ -668,8 +668,15 @@ func Second() string {
         // Verify each range covers a replacement
         for range in &ranges {
             let slice = &text[range.start..range.end];
-            println!("Range {:x}: '{}...'", range.checksum, &slice[..30.min(slice.len())]);
-            assert!(slice.contains("return"), "Range should contain generated code");
+            println!(
+                "Range {:x}: '{}...'",
+                range.checksum,
+                &slice[..30.min(slice.len())]
+            );
+            assert!(
+                slice.contains("return"),
+                "Range should contain generated code"
+            );
         }
 
         Ok(())
@@ -688,7 +695,7 @@ func Second() string {
             &target.signature,
             target.checksum,
             "func Get() any {\nreturn 42\n}",
-        )?;
+        );
 
         let composed = editor.composed_view()?;
         println!("Before formatting:\n{}", composed);
@@ -697,7 +704,10 @@ func Second() string {
         let composed_rope = Rope::from(composed.as_str());
 
         // Find the line with "return 42" and add a tab
-        let return_line = composed.lines().position(|l| l.contains("return 42")).unwrap();
+        let return_line = composed
+            .lines()
+            .position(|l| l.contains("return 42"))
+            .unwrap();
         println!("return 42 is on line {}", return_line);
 
         let edits = vec![TextEdit {
@@ -717,7 +727,10 @@ func Second() string {
         let formatted = editor.apply_format_edits_to_overlays(&edits, &composed_rope)?;
         println!("After formatting:\n{}", formatted);
 
-        assert!(formatted.contains("\treturn 42"), "Should have tab before return");
+        assert!(
+            formatted.contains("\treturn 42"),
+            "Should have tab before return"
+        );
 
         // Base unchanged
         assert!(editor.get_text().contains("panic"));
