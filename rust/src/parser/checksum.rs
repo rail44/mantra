@@ -23,7 +23,7 @@ pub fn calculate_checksum(target: &Target) -> u64 {
 pub fn extract_checksum_from_text(text: &str) -> Option<u64> {
     let text = text.trim();
     text.strip_prefix(CHECKSUM_PREFIX).and_then(|s| {
-        let hex_str = s.trim().split_whitespace().next().unwrap_or(s.trim());
+        let hex_str = s.split_whitespace().next().unwrap_or(s.trim());
         u64::from_str_radix(hex_str, 16).ok()
     })
 }
