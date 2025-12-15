@@ -36,20 +36,13 @@ pub struct Target {
     pub byte_range: Range<usize>,
     /// Type references found in the function signature
     pub type_references: Vec<TypeReference>,
-    /// Whether this target has already been generated (checksum comment exists)
-    pub is_generated: bool,
     /// Start byte position including any preceding checksum comments (for edit range)
-    /// This is set regardless of whether the checksum matches
     pub edit_start_byte: usize,
 }
 
 impl Target {
     /// Find all targets (functions with mantra comments) in a parsed tree
     pub fn find_targets(tree: &Tree, rope: &Rope, uri: &str) -> Vec<Target> {
-        // First pass: collect all existing checksum comments
-        let existing_checksums = collect_existing_checksums(tree, rope);
-
-        // Second pass: find targets
         let mut targets = Vec::new();
         let mut pending_instruction: Option<String> = None;
         let mut stack = vec![tree.root_node()];
@@ -64,12 +57,8 @@ impl Target {
 
                 "function_declaration" | "method_declaration" => {
                     if let Some(instruction) = pending_instruction.take() {
-                        let mut target =
+                        let target =
                             create_target_from_function(&node, tree, rope, uri, &instruction);
-                        // Check if this target's checksum already exists
-                        if existing_checksums.contains(&target.checksum) {
-                            target.is_generated = true;
-                        }
                         targets.push(target);
                     }
                 }
@@ -89,28 +78,6 @@ impl Target {
     }
 }
 
-/// Collect all existing checksum comments from the tree
-fn collect_existing_checksums(tree: &Tree, rope: &Rope) -> rustc_hash::FxHashSet<u64> {
-    let mut checksums = rustc_hash::FxHashSet::default();
-    let mut stack = vec![tree.root_node()];
-
-    while let Some(node) = stack.pop() {
-        if node.kind() == "comment" {
-            if let Some(checksum) = extract_checksum_comment(&node, rope) {
-                checksums.insert(checksum);
-            }
-        }
-
-        let mut cursor = node.walk();
-        let children: Vec<_> = node.children(&mut cursor).collect();
-        for child in children.into_iter().rev() {
-            stack.push(child);
-        }
-    }
-
-    checksums
-}
-
 /// Extract mantra instruction from a comment node
 /// Returns None for checksum comments (// mantra:checksum:xxx)
 fn extract_mantra_instruction(node: &Node, rope: &Rope) -> Option<String> {
@@ -125,20 +92,6 @@ fn extract_mantra_instruction(node: &Node, rope: &Rope) -> Option<String> {
             return None;
         }
         Some(instruction.to_string())
-    } else {
-        None
-    }
-}
-
-/// Extract checksum from a mantra checksum comment
-fn extract_checksum_comment(node: &Node, rope: &Rope) -> Option<u64> {
-    let text = rope
-        .byte_slice(node.start_byte()..node.end_byte())
-        .to_string();
-    let text = text.trim();
-    if text.starts_with("// mantra:checksum:") {
-        let checksum_str = text.strip_prefix("// mantra:checksum:").unwrap().trim();
-        u64::from_str_radix(checksum_str, 16).ok()
     } else {
         None
     }
@@ -183,7 +136,6 @@ fn create_target_from_function(
         checksum: 0, // Will be calculated next
         byte_range,
         type_references,
-        is_generated: false, // Will be set later in find_targets
         edit_start_byte,
     };
 

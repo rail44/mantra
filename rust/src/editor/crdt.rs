@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::ops::Range as StdRange;
 use tree_sitter::Tree;
 
+use crate::parser::checksum::{extract_checksum_from_text, CHECKSUM_PREFIX};
 use crate::parser::position_utils::find_checksum_region_start;
 use crate::parser::target::Target;
 use crate::parser::GoParser;
@@ -198,8 +199,8 @@ impl CrdtEditor {
 
     /// Convert byte position to character position (for automerge which uses char indices)
     fn byte_to_char_position(&self, byte_pos: usize) -> usize {
-        let text = self.get_text();
-        text[..byte_pos.min(text.len())].chars().count()
+        let clamped_pos = byte_pos.min(self.rope.byte_len());
+        self.rope.byte_slice(..clamped_pos).chars().count()
     }
 
     /// Add a generated code overlay for a target (keyed by signature)
@@ -237,32 +238,22 @@ impl CrdtEditor {
         let base_text = self.get_text();
         let mut base_checksums = std::collections::HashSet::new();
 
-        // Find all checksum comments in base
-        let prefix = "// mantra:checksum:";
+        // Find all checksum comments in base using shared utility
         let mut search_start = 0;
-        while let Some(pos) = base_text[search_start..].find(prefix) {
+        while let Some(pos) = base_text[search_start..].find(CHECKSUM_PREFIX) {
             let abs_pos = search_start + pos;
-            let hex_start = abs_pos + prefix.len();
-            let hex_end = base_text[hex_start..]
-                .find(|c: char| !c.is_ascii_hexdigit())
-                .map_or(base_text.len(), |i| hex_start + i);
-            if let Ok(checksum) = u64::from_str_radix(&base_text[hex_start..hex_end], 16) {
+            let line_end = base_text[abs_pos..]
+                .find('\n')
+                .map_or(base_text.len(), |i| abs_pos + i);
+            if let Some(checksum) = extract_checksum_from_text(&base_text[abs_pos..line_end]) {
                 base_checksums.insert(checksum);
             }
-            search_start = hex_end;
+            search_start = line_end;
         }
 
         // Remove overlays whose checksums are now in base
-        let removed: Vec<_> = self
-            .overlays
-            .iter()
-            .filter(|(_, v)| base_checksums.contains(&v.checksum))
-            .map(|(sig, v)| (sig.clone(), v.checksum))
-            .collect();
-
-        for (sig, _checksum) in &removed {
-            self.overlays.remove(sig);
-        }
+        self.overlays
+            .retain(|_, overlay| !base_checksums.contains(&overlay.checksum));
     }
 
     /// Get the composed view (base with overlays applied)

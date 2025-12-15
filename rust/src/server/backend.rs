@@ -138,8 +138,7 @@ impl MantraBackend {
         let generation_targets: Vec<Target> = targets
             .into_iter()
             .filter(|t| {
-                !t.is_generated
-                    && !doc_service.is_generated(t.checksum)
+                !doc_service.is_generated(t.checksum)
                     && !doc_service.is_pending_generation(t.checksum)
             })
             .collect();
