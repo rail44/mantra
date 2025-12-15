@@ -159,8 +159,13 @@ impl MantraBackend {
             .map(|t| {
                 let range = doc_service.byte_range_to_lsp_range(&t.byte_range);
                 let edit_start = doc_service.byte_to_lsp_position(t.edit_start_byte);
-                let diag =
-                    create_diagnostic(&t.instruction, t.checksum, range.start, range.end, edit_start);
+                let diag = create_diagnostic(
+                    &t.instruction,
+                    t.checksum,
+                    range.start,
+                    range.end,
+                    edit_start,
+                );
                 (t.checksum, diag)
             })
             .collect();
@@ -420,4 +425,3 @@ impl LanguageServer for MantraBackend {
         Ok(Some(actions))
     }
 }
-

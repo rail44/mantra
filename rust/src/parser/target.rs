@@ -144,7 +144,6 @@ fn extract_checksum_comment(node: &Node, rope: &Rope) -> Option<u64> {
     }
 }
 
-
 /// Create a Target from a function/method node
 fn create_target_from_function(
     node: &Node,

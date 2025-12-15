@@ -53,8 +53,7 @@ mod tests {
 
     #[test]
     fn test_multiple_checksum_comments() {
-        let text =
-            "package main\n\n// mantra:checksum:abc\n// mantra:checksum:def\nfunc Foo() {}";
+        let text = "package main\n\n// mantra:checksum:abc\n// mantra:checksum:def\nfunc Foo() {}";
         let func_start = text.find("func").unwrap();
         let expected = text.find("// mantra:checksum:abc").unwrap();
         assert_eq!(find_checksum_region_start(text, func_start), expected);
