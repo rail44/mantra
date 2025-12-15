@@ -10,7 +10,6 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 use crate::editor::crdt::{lsp_position_to_byte, CrdtEditor};
-
 use crate::generation::spawn_generation_task;
 use crate::inspector::ScopedCode;
 use crate::llm::LLMClient;
@@ -65,11 +64,6 @@ impl Document {
         self.generated_not_applied.remove(&checksum);
     }
 
-    /// Get all checksums that are generated but not applied
-    pub fn get_generated_not_applied(&self) -> &HashSet<u64> {
-        &self.generated_not_applied
-    }
-
     /// Get targets for generation (uses base text)
     pub fn find_targets(&self) -> Result<Vec<Target>> {
         let tree = self
@@ -97,13 +91,9 @@ impl Document {
             new_body.trim()
         );
 
-        // Add as overlay (doesn't modify base)
-        self.editor.add_overlay(
-            target.checksum,
-            target.byte_range.start,
-            target.byte_range.end,
-            &replacement,
-        )?;
+        // Add as overlay keyed by signature (doesn't modify base)
+        self.editor
+            .add_overlay(&target.signature, target.checksum, &replacement)?;
 
         // Get LSP range for the change notification (in composed view coordinates)
         let start_pos = self.editor.byte_to_lsp_position(target.byte_range.start);
@@ -128,7 +118,7 @@ impl Document {
             .unwrap_or_else(|_| self.editor.get_text())
     }
 
-    /// Apply incremental change from LSP (user edit)
+    /// Apply incremental change from LSP (user edit or code action)
     pub fn apply_incremental_change(
         &mut self,
         change: &TextDocumentContentChangeEvent,
@@ -138,18 +128,24 @@ impl Document {
             let start_byte = lsp_position_to_byte(range.start, rope);
             let end_byte = lsp_position_to_byte(range.end, rope);
 
-            // Apply to base
+            // Apply to base first
             self.editor
                 .apply_byte_edit_with_ops(&(start_byte..end_byte), &change.text)?;
 
-            // Invalidate overlays if checksums changed
+            // After applying the change, check if any overlay's checksum now exists in base
+            // This handles code action application where the overlay content is now in base
+            self.editor.remove_overlays_matching_base();
+
+            // Clean up generated_not_applied to keep in sync
             let current_targets = self.find_targets()?;
             let current_checksums: HashSet<u64> =
                 current_targets.iter().map(|t| t.checksum).collect();
-            self.editor.invalidate_stale_overlays(&current_checksums);
+            self.generated_not_applied
+                .retain(|checksum| current_checksums.contains(checksum));
         } else {
             // Full document replacement
             self.editor = CrdtEditor::new(&change.text)?;
+            self.generated_not_applied.clear();
         }
         Ok(())
     }
@@ -240,11 +236,6 @@ impl DocumentService {
     /// Mark a checksum as applied (remove from `generated_not_applied`)
     pub fn mark_applied(&self, checksum: u64) {
         self.document.write().mark_applied(checksum);
-    }
-
-    /// Get all checksums that are generated but not applied
-    pub fn get_generated_not_applied_checksums(&self) -> HashSet<u64> {
-        self.document.read().get_generated_not_applied().clone()
     }
 
     /// Get generated text by checksum (from composed view)

@@ -115,25 +115,16 @@ impl MantraBackend {
             }
         };
 
-        // Get checksums that are generated but not yet applied to editor
-        let not_applied = doc_service.get_generated_not_applied_checksums();
-
-        // Publish diagnostics for targets that are in generated_not_applied
-        // This ensures diagnostics persist after code action is applied to other targets
-        if !not_applied.is_empty() {
-            let diagnostics: Vec<Diagnostic> = targets
-                .iter()
-                .filter(|t| not_applied.contains(&t.checksum))
-                .map(|t| {
-                    let (start_pos, end_pos) = byte_range_to_lsp_range(text, &t.byte_range);
-                    create_diagnostic(t, start_pos, end_pos)
-                })
-                .collect();
-
-            self.client
-                .publish_diagnostics(uri.clone(), diagnostics, None)
-                .await;
-        }
+        // Collect diagnostics for targets that have overlays (ready for code action)
+        let diagnostics_for_overlays: Vec<Diagnostic> = targets
+            .iter()
+            .filter(|t| doc_service.is_generated(t.checksum))
+            .map(|t| {
+                let (start_pos, end_pos) = byte_range_to_lsp_range(text, &t.byte_range);
+                let edit_start_pos = byte_offset_to_position(text, t.edit_start_byte);
+                create_diagnostic(t, start_pos, end_pos, edit_start_pos)
+            })
+            .collect();
 
         // Filter out already generated or currently generating targets
         let generation_targets: Vec<Target> = targets
@@ -146,10 +137,10 @@ impl MantraBackend {
             .collect();
 
         if generation_targets.is_empty() {
-            // No new targets to generate, but we already published diagnostics above
-            if not_applied.is_empty() {
-                self.client.publish_diagnostics(uri, vec![], None).await;
-            }
+            // No new targets to generate, publish diagnostics for existing overlays
+            self.client
+                .publish_diagnostics(uri, diagnostics_for_overlays, None)
+                .await;
             return;
         }
 
@@ -170,16 +161,20 @@ impl MantraBackend {
                 return;
             };
 
-            // Publish diagnostics only for successfully generated targets
-            let diagnostics: Vec<Diagnostic> = targets_for_diagnostics
+            // Publish diagnostics for newly generated targets AND existing overlays
+            let mut diagnostics: Vec<Diagnostic> = targets_for_diagnostics
                 .iter()
                 .filter(|t| succeeded_checksums.contains(&t.checksum))
                 .map(|t| {
                     let (start_pos, end_pos) =
                         byte_range_to_lsp_range(&original_text, &t.byte_range);
-                    create_diagnostic(t, start_pos, end_pos)
+                    let edit_start_pos = byte_offset_to_position(&original_text, t.edit_start_byte);
+                    create_diagnostic(t, start_pos, end_pos, edit_start_pos)
                 })
                 .collect();
+
+            // Include diagnostics for existing overlays
+            diagnostics.extend(diagnostics_for_overlays);
 
             let uri: Uri = match uri_str.parse() {
                 Ok(u) => u,
@@ -356,20 +351,6 @@ impl LanguageServer for MantraBackend {
             };
 
             // Extract target range from diagnostic data
-            let target_start_line = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("target_start_line"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32);
-
-            let target_start_character = diagnostic
-                .data
-                .as_ref()
-                .and_then(|d| d.get("target_start_character"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32);
-
             let target_end_line = diagnostic
                 .data
                 .as_ref()
@@ -384,16 +365,31 @@ impl LanguageServer for MantraBackend {
                 .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
 
-            let (start_pos, end_pos) = if let (Some(sl), Some(sc), Some(el), Some(ec)) = (
-                target_start_line,
-                target_start_character,
+            // Extract edit start position (includes any preceding checksum comments)
+            let edit_start_line = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("edit_start_line"))
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as u32);
+
+            let edit_start_character = diagnostic
+                .data
+                .as_ref()
+                .and_then(|d| d.get("edit_start_character"))
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as u32);
+
+            let (start_pos, end_pos) = if let (Some(esl), Some(esc), Some(el), Some(ec)) = (
+                edit_start_line,
+                edit_start_character,
                 target_end_line,
                 target_end_character,
             ) {
                 (
                     Position {
-                        line: sl,
-                        character: sc,
+                        line: esl,
+                        character: esc,
                     },
                     Position {
                         line: el,
@@ -534,8 +530,35 @@ fn byte_range_to_lsp_range(
     (start_pos, end_pos)
 }
 
+/// Convert byte offset to LSP position
+fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
+    let mut line = 0u32;
+    let mut character = 0u32;
+
+    for (byte_idx, ch) in text.char_indices() {
+        if byte_idx == byte_offset {
+            return Position { line, character };
+        }
+
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+
+    // Handle offset at end of file
+    Position { line, character }
+}
+
 /// Create a diagnostic for a target
-fn create_diagnostic(target: &Target, start_pos: Position, end_pos: Position) -> Diagnostic {
+fn create_diagnostic(
+    target: &Target,
+    start_pos: Position,
+    end_pos: Position,
+    edit_start_pos: Position,
+) -> Diagnostic {
     Diagnostic {
         range: Range {
             start: Position {
@@ -557,6 +580,8 @@ fn create_diagnostic(target: &Target, start_pos: Position, end_pos: Position) ->
             "target_start_character": start_pos.character,
             "target_end_line": end_pos.line,
             "target_end_character": end_pos.character,
+            "edit_start_line": edit_start_pos.line,
+            "edit_start_character": edit_start_pos.character,
         })),
         ..Default::default()
     }

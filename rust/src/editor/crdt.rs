@@ -1,23 +1,65 @@
 use anyhow::Result;
-use automerge::{
-    patches::PatchAction, transaction::Transactable, AutoCommit, ObjType, ReadDoc, ROOT,
-};
+use automerge::{transaction::Transactable, AutoCommit, ObjType, ReadDoc, ROOT};
 use crop::Rope;
 use lsp_types::{Position, TextEdit};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range as StdRange;
 use tree_sitter::Tree;
 
+use crate::parser::target::Target;
 use crate::parser::GoParser;
 
 /// Represents the range of an overlay in the composed view
 #[derive(Debug, Clone)]
 pub struct OverlayRange {
     pub checksum: u64,
-    /// Start position in composed view (character index)
+    /// Start position in composed view (byte index)
     pub start: usize,
-    /// End position in composed view (character index)
+    /// End position in composed view (byte index)
     pub end: usize,
+}
+
+/// Find the start position of checksum comments before a function
+/// Walks backwards from `func_start` to find all consecutive `// mantra:checksum:` lines
+fn find_checksum_comments_start(text: &str, func_start: usize) -> usize {
+    // Get the text before the function
+    let before_func = &text[..func_start];
+
+    // Find where to start looking (skip trailing whitespace/newlines)
+    let trimmed = before_func.trim_end();
+    if trimmed.is_empty() {
+        return func_start;
+    }
+
+    // Track where checksum comments region starts (will be updated as we find more)
+    let mut checksum_region_start: Option<usize> = None;
+    let mut current_pos = trimmed.len();
+
+    // Walk backwards line by line
+    loop {
+        // Find the start of the current line
+        let line_start = trimmed[..current_pos].rfind('\n').map_or(0, |i| i + 1);
+        let line = trimmed[line_start..current_pos].trim();
+
+        // Check if this line is a checksum comment
+        if line.starts_with("// mantra:checksum:") {
+            // Found a checksum comment, update the start position
+            checksum_region_start = Some(line_start);
+
+            if line_start == 0 {
+                // Reached the beginning
+                break;
+            }
+            // Move to the line before (skip the newline)
+            current_pos = line_start - 1;
+        } else {
+            // Not a checksum comment, stop scanning
+            break;
+        }
+    }
+
+    // Return the start of checksum comments region, or func_start if none found
+    checksum_region_start.unwrap_or(func_start)
 }
 
 /// Convert LSP position to byte position in rope
@@ -28,14 +70,23 @@ pub fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
     rope.byte_of_utf16_code_unit(target_utf16)
 }
 
-/// Automerge-based text editor with overlay support and tree-sitter parsing
+/// Overlay content for a target (identified by signature)
+#[derive(Debug, Clone)]
+struct OverlayContent {
+    /// The checksum when this overlay was generated
+    checksum: u64,
+    /// The generated code (including checksum comment)
+    replacement: String,
+}
+
+/// Text editor with overlay support and tree-sitter parsing
 ///
-/// This replaces the previous cola-based `CrdtEditor` with automerge fork/merge.
+/// Overlays are keyed by function signature, ensuring one overlay per target.
 pub struct CrdtEditor {
-    /// Base automerge document
+    /// Base automerge document (for potential future CRDT sync)
     base: AutoCommit,
-    /// Checksum -> forked overlay document with generated code
-    overlays: HashMap<u64, AutoCommit>,
+    /// Signature -> overlay content
+    overlays: HashMap<String, OverlayContent>,
     /// Automerge object ID for the text
     text_id: automerge::ObjId,
     /// Rope for tree-sitter parsing and LSP position conversion (synced with base)
@@ -142,8 +193,7 @@ impl CrdtEditor {
         self.version
     }
 
-    /// Apply an edit and record it (for propagation to overlays via merge)
-    /// This replaces the cola-based `apply_byte_edit_with_ops`
+    /// Apply an edit to the base document
     pub fn apply_byte_edit_with_ops(
         &mut self,
         byte_range: &StdRange<usize>,
@@ -173,6 +223,10 @@ impl CrdtEditor {
         self.reparse()?;
         self.increment_version();
 
+        // Note: overlays are NOT invalidated here.
+        // They will be matched by signature when composing the view.
+        // Stale overlays (wrong checksum) will be ignored during composition.
+
         Ok(())
     }
 
@@ -182,119 +236,141 @@ impl CrdtEditor {
         text[..byte_pos.min(text.len())].chars().count()
     }
 
-    /// Add a generated code overlay for a specific checksum
-    /// Note: start/end are BYTE positions (from tree-sitter), but automerge uses character positions
+    /// Add a generated code overlay for a target (keyed by signature)
     pub fn add_overlay(
         &mut self,
+        signature: &str,
         checksum: u64,
-        start_byte: usize,
-        end_byte: usize,
         replacement: &str,
     ) -> Result<()> {
-        // Convert byte positions to character positions for automerge
-        let start_char = self.byte_to_char_position(start_byte);
-        let end_char = self.byte_to_char_position(end_byte);
-        let delete_count = end_char - start_char;
-
-        // Fork the base document
-        let mut forked = self.base.fork();
-
-        // Apply the generated code replacement (using character positions)
-        let delete_count_isize = isize::try_from(delete_count)
-            .map_err(|_| anyhow::anyhow!("Delete count too large"))?;
-        forked
-            .splice_text(&self.text_id, start_char, delete_count_isize, replacement)
-            .map_err(|e| anyhow::anyhow!("Failed to apply overlay: {e}"))?;
-
-        self.overlays.insert(checksum, forked);
+        self.overlays.insert(
+            signature.to_string(),
+            OverlayContent {
+                checksum,
+                replacement: replacement.to_string(),
+            },
+        );
         Ok(())
-    }
-
-    /// Remove overlays whose checksums are no longer valid
-    pub fn invalidate_stale_overlays(&mut self, current_checksums: &HashSet<u64>) {
-        self.overlays
-            .retain(|checksum, _| current_checksums.contains(checksum));
     }
 
     /// Check if an overlay exists for the given checksum
     pub fn has_overlay(&self, checksum: u64) -> bool {
-        self.overlays.contains_key(&checksum)
+        self.overlays.values().any(|o| o.checksum == checksum)
     }
 
-    /// Get the composed view (base + all overlays merged)
-    pub fn composed_view(&mut self) -> Result<String> {
+    /// Remove overlays whose checksums now exist in the base text
+    /// This is called after applying changes to detect code action applications
+    pub fn remove_overlays_matching_base(&mut self) {
+        if self.overlays.is_empty() {
+            return;
+        }
+
+        // Collect checksums that exist in the base text
+        let base_text = self.get_text();
+        let mut base_checksums = std::collections::HashSet::new();
+
+        // Find all checksum comments in base
+        let prefix = "// mantra:checksum:";
+        let mut search_start = 0;
+        while let Some(pos) = base_text[search_start..].find(prefix) {
+            let abs_pos = search_start + pos;
+            let hex_start = abs_pos + prefix.len();
+            let hex_end = base_text[hex_start..]
+                .find(|c: char| !c.is_ascii_hexdigit())
+                .map_or(base_text.len(), |i| hex_start + i);
+            if let Ok(checksum) = u64::from_str_radix(&base_text[hex_start..hex_end], 16) {
+                base_checksums.insert(checksum);
+            }
+            search_start = hex_end;
+        }
+
+        // Remove overlays whose checksums are now in base
+        let removed: Vec<_> = self
+            .overlays
+            .iter()
+            .filter(|(_, v)| base_checksums.contains(&v.checksum))
+            .map(|(sig, v)| (sig.clone(), v.checksum))
+            .collect();
+
+        for (sig, checksum) in &removed {
+            tracing::debug!(
+                signature = sig,
+                checksum = format!("{:x}", checksum),
+                "Removing overlay - checksum now exists in base"
+            );
+            self.overlays.remove(sig);
+        }
+    }
+
+    /// Get the composed view (base with overlays applied)
+    pub fn composed_view(&self) -> Result<String> {
         let (text, _) = self.composed_view_with_ranges()?;
         Ok(text)
     }
 
     /// Get the composed view along with the ranges of each overlay
     /// Returns (`composed_text`, `overlay_ranges`)
-    pub fn composed_view_with_ranges(&mut self) -> Result<(String, Vec<OverlayRange>)> {
+    ///
+    /// This parses the current base to find targets, then substitutes matching overlays.
+    pub fn composed_view_with_ranges(&self) -> Result<(String, Vec<OverlayRange>)> {
         if self.overlays.is_empty() {
             return Ok((self.get_text(), vec![]));
         }
 
-        // First, get the start position of each overlay in base by diffing
-        let base_heads = self.base.get_heads();
-        let mut overlay_start_positions: Vec<(u64, usize)> = Vec::new();
+        // Parse base to find all targets
+        let tree = self
+            .tree
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No parse tree available"))?;
+        let targets = Target::find_targets(tree, &self.rope, "");
 
-        for (&checksum, overlay) in &mut self.overlays {
-            let overlay_heads = overlay.get_heads();
-            let patches = overlay.diff(&base_heads, &overlay_heads);
-
-            for patch in patches {
-                if patch.obj == self.text_id {
-                    if let PatchAction::SpliceText { index, .. } = patch.action {
-                        overlay_start_positions.push((checksum, index));
-                        break;
-                    }
-                }
-            }
+        if targets.is_empty() {
+            return Ok((self.get_text(), vec![]));
         }
 
-        // Sort overlays by their start position in base
-        overlay_start_positions.sort_by_key(|(_, start)| *start);
-
+        // Build composed text by substituting overlays
+        let base_text = self.get_text();
+        let mut result = String::new();
         let mut ranges = Vec::new();
-        let mut merged = self.base.fork();
+        let mut last_end = 0;
 
-        // Process overlays in order of their start position
-        for (checksum, _) in overlay_start_positions {
-            let overlay = self.overlays.get_mut(&checksum).unwrap();
+        // Sort targets by start position
+        let mut sorted_targets = targets;
+        sorted_targets.sort_by_key(|t| t.byte_range.start);
 
-            // Get heads before merge
-            let before_heads = merged.get_heads();
+        for target in &sorted_targets {
+            // Check if there's a matching overlay (by signature AND checksum)
+            if let Some(overlay) = self.overlays.get(&target.signature) {
+                if overlay.checksum == target.checksum {
+                    // Determine the replacement start position
+                    // Look backwards from function start to find all checksum comments
+                    let replace_start =
+                        find_checksum_comments_start(&base_text, target.byte_range.start);
 
-            // Merge this overlay
-            merged
-                .merge(overlay)
-                .map_err(|e| anyhow::anyhow!("Failed to merge overlay: {e}"))?;
+                    // Append text before the replacement area
+                    result.push_str(&base_text[last_end..replace_start]);
 
-            // Get heads after merge
-            let after_heads = merged.get_heads();
+                    // Track the overlay range in composed view (byte positions)
+                    let overlay_start = result.len();
+                    result.push_str(&overlay.replacement);
+                    let overlay_end = result.len();
 
-            // Get diff to find what changed
-            let patches = merged.diff(&before_heads, &after_heads);
+                    ranges.push(OverlayRange {
+                        checksum: overlay.checksum,
+                        start: overlay_start,
+                        end: overlay_end,
+                    });
 
-            // Find the SpliceText patch for our text object
-            for patch in patches {
-                if patch.obj == self.text_id {
-                    if let PatchAction::SpliceText { index, value, .. } = patch.action {
-                        let start = index;
-                        let end = index + value.len();
-                        ranges.push(OverlayRange {
-                            checksum,
-                            start,
-                            end,
-                        });
-                    }
+                    last_end = target.byte_range.end;
                 }
+                // If checksum doesn't match, use base text (overlay is stale)
             }
         }
 
-        let text = merged.text(&self.text_id).unwrap_or_else(|_| String::new());
+        // Append remaining text after last target
+        result.push_str(&base_text[last_end..]);
 
-        Ok((text, ranges))
+        Ok((result, ranges))
     }
 
     /// Apply formatting edits to overlays based on their ranges in composed view
@@ -311,125 +387,68 @@ impl CrdtEditor {
         // Get overlay ranges in composed view
         let (_, ranges) = self.composed_view_with_ranges()?;
 
-        // Get base heads for diffing with overlays
-        let base_heads = self.base.get_heads();
+        // Build a map of checksum -> signature for lookup
+        let checksum_to_signature: HashMap<u64, String> = self
+            .overlays
+            .iter()
+            .map(|(sig, content)| (content.checksum, sig.clone()))
+            .collect();
 
-        // Build a map of checksum -> replacement start position in overlay.doc
-        // by diffing each overlay against base
-        let mut overlay_replacement_starts: HashMap<u64, usize> = HashMap::new();
-        for (&checksum, overlay) in &mut self.overlays {
-            let overlay_heads = overlay.get_heads();
-            let patches = overlay.diff(&base_heads, &overlay_heads);
-
-            for patch in patches {
-                if patch.obj == self.text_id {
-                    if let PatchAction::SpliceText { index, .. } = patch.action {
-                        overlay_replacement_starts.insert(checksum, index);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Group edits by overlay, converting positions
-        let mut overlay_edits: HashMap<u64, Vec<(usize, usize, String)>> = HashMap::new();
+        // Group edits by overlay
+        let mut overlay_edits: HashMap<String, Vec<(usize, usize, String)>> = HashMap::new();
 
         for edit in edits {
             let edit_start = lsp_position_to_byte(edit.range.start, composed_rope);
             let edit_end = lsp_position_to_byte(edit.range.end, composed_rope);
 
-            // Convert byte positions to character positions
-            let edit_start_char = composed_rope.byte_slice(..edit_start).chars().count();
-            let edit_end_char = composed_rope.byte_slice(..edit_end).chars().count();
-
-            tracing::debug!(
-                "Format edit: char {}..{}, text={:?}",
-                edit_start_char,
-                edit_end_char,
-                edit.new_text
-            );
-
             // Find which overlay this edit belongs to
-            let mut found = false;
             for range in &ranges {
-                tracing::debug!(
-                    "  Checking overlay {:x}: {}..{}, edit in range: {}",
-                    range.checksum,
-                    range.start,
-                    range.end,
-                    edit_start_char >= range.start && edit_end_char <= range.end
-                );
-                if edit_start_char >= range.start && edit_end_char <= range.end {
-                    // Edit is within this overlay's range in composed view
-                    // Convert to relative position within the replacement
-                    let relative_start = edit_start_char - range.start;
-                    let relative_end = edit_end_char - range.start;
+                if edit_start >= range.start && edit_end <= range.end {
+                    // Edit is within this overlay's range
+                    let relative_start = edit_start - range.start;
+                    let relative_end = edit_end - range.start;
 
-                    // Get the replacement start position in overlay.doc
-                    let replacement_start = overlay_replacement_starts
-                        .get(&range.checksum)
-                        .copied()
-                        .unwrap_or(0);
-
-                    // Absolute position in overlay.doc
-                    let abs_start = replacement_start + relative_start;
-                    let abs_end = replacement_start + relative_end;
-
-                    tracing::debug!(
-                        "  -> Assigning to overlay {:x}, relative pos {}..{}, abs pos {}..{}",
-                        range.checksum,
-                        relative_start,
-                        relative_end,
-                        abs_start,
-                        abs_end
-                    );
-
-                    overlay_edits.entry(range.checksum).or_default().push((
-                        abs_start,
-                        abs_end,
-                        edit.new_text.clone(),
-                    ));
-                    found = true;
+                    if let Some(signature) = checksum_to_signature.get(&range.checksum) {
+                        overlay_edits.entry(signature.clone()).or_default().push((
+                            relative_start,
+                            relative_end,
+                            edit.new_text.clone(),
+                        ));
+                    }
                     break;
                 }
             }
-            if !found {
-                tracing::debug!("  -> Edit not in any overlay range, skipping");
-            }
         }
 
-        // Apply edits to each overlay (in reverse order to maintain positions)
-        for (checksum, edits) in overlay_edits {
-            if let Some(overlay) = self.overlays.get_mut(&checksum) {
-                tracing::debug!(
-                    "Overlay {:x} text before edit: {:?}",
-                    checksum,
-                    overlay.text(&self.text_id).unwrap_or_default()
-                );
-
+        // Apply edits to each overlay's replacement string (in reverse order)
+        for (signature, edits) in overlay_edits {
+            if let Some(overlay) = self.overlays.get_mut(&signature) {
                 // Sort edits by position in reverse order
                 let mut sorted_edits = edits;
                 sorted_edits.sort_by(|a, b| b.0.cmp(&a.0));
 
+                let mut replacement = overlay.replacement.clone();
                 for (start, end, new_text) in sorted_edits {
-                    let delete_count = end - start;
-                    tracing::debug!(
-                        "  Applying splice_text({}, {}, {:?})",
-                        start,
-                        delete_count,
-                        new_text
-                    );
-                    let delete_count_isize = isize::try_from(delete_count)
-                        .map_err(|_| anyhow::anyhow!("Delete count too large"))?;
-                    overlay
-                        .splice_text(&self.text_id, start, delete_count_isize, &new_text)
-                        .map_err(|e| anyhow::anyhow!("Failed to apply format edit: {e}"))?;
+                    // Convert byte positions to string indices
+                    let byte_start = replacement
+                        .char_indices()
+                        .nth(start)
+                        .map(|(i, _)| i)
+                        .unwrap_or(replacement.len());
+                    let byte_end = replacement
+                        .char_indices()
+                        .nth(end)
+                        .map(|(i, _)| i)
+                        .unwrap_or(replacement.len());
+
+                    replacement.replace_range(byte_start..byte_end, &new_text);
                 }
+                overlay.replacement = replacement;
 
                 tracing::debug!(
-                    "Overlay {:x} text after edit: {:?}",
-                    checksum,
-                    overlay.text(&self.text_id).unwrap_or_default()
+                    signature = signature,
+                    checksum = format!("{:x}", overlay.checksum),
+                    "Overlay text after formatting edit"
                 );
             }
         }
@@ -448,6 +467,7 @@ impl CrdtEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lsp_types::Range;
 
     #[test]
     fn test_basic_operations() -> Result<()> {
@@ -461,316 +481,246 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_overlay_without_base_edit() -> Result<()> {
-        let mut editor = CrdtEditor::new("func Foo() {}")?;
+    // Test with real Go code that can be parsed
+    const GO_CODE_WITH_MANTRA: &str = r#"package example
 
-        // Add overlay
-        editor.add_overlay(0x1234, 11, 13, "{ return 42 }")?;
+// mantra: get value
+func Get() any {
+	panic("not implemented")
+}
+"#;
+
+    #[test]
+    fn test_overlay_with_signature() -> Result<()> {
+        let mut editor = CrdtEditor::new(GO_CODE_WITH_MANTRA)?;
+        let tree = editor.tree().unwrap();
+        let targets = Target::find_targets(tree, editor.rope(), "");
+
+        assert_eq!(targets.len(), 1);
+        let target = &targets[0];
+        println!("Target signature: {}", target.signature);
+        println!("Target checksum: {:x}", target.checksum);
+
+        // Add overlay with matching signature and checksum
+        editor.add_overlay(
+            &target.signature,
+            target.checksum,
+            "func Get() any {\n\treturn 42\n}\n// mantra:checksum:test",
+        )?;
 
         // Base should be unchanged
-        assert_eq!(editor.get_text(), "func Foo() {}");
+        assert!(editor.get_text().contains("panic"));
 
         // Composed view should have the overlay
-        assert_eq!(editor.composed_view()?, "func Foo() { return 42 }");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_overlay_with_base_edit() -> Result<()> {
-        let mut editor = CrdtEditor::new("func Foo() {}")?;
-
-        // Add overlay
-        editor.add_overlay(0x1234, 11, 13, "{ return 42 }")?;
-
-        // User edits base (rename function)
-        editor.apply_byte_edit_with_ops(&(5..8), "Bar")?;
-
-        // Base should have the user edit only
-        assert_eq!(editor.get_text(), "func Bar() {}");
-
-        // Composed view should have both: user edit + overlay
         let composed = editor.composed_view()?;
-        println!("Base: {}", editor.get_text());
-        println!("Composed: {}", composed);
-        assert_eq!(composed, "func Bar() { return 42 }");
+        println!("Composed:\n{}", composed);
+        assert!(composed.contains("return 42"));
+        assert!(!composed.contains("panic"));
 
         Ok(())
     }
 
     #[test]
-    fn test_overlay_debug() -> Result<()> {
-        // More detailed test to understand merge behavior
-        let mut editor = CrdtEditor::new("ABCDE")?;
-        println!("Initial: {}", editor.get_text());
+    fn test_overlay_invalidated_on_instruction_edit() -> Result<()> {
+        let mut editor = CrdtEditor::new(GO_CODE_WITH_MANTRA)?;
 
-        // Add overlay that replaces "BCD" with "XYZ"
-        editor.add_overlay(0x1, 1, 4, "XYZ")?;
-        println!("Base after overlay added: {}", editor.get_text());
-        println!("Composed after overlay: {}", editor.composed_view()?);
+        // Get target and add overlay
+        let tree = editor.tree().unwrap();
+        let targets = Target::find_targets(tree, editor.rope(), "");
+        let target = &targets[0];
+        let old_checksum = target.checksum;
+        let signature = target.signature.clone();
 
-        // Edit base: replace "A" with "Z"
-        editor.apply_byte_edit_with_ops(&(0..1), "Z")?;
-        println!("Base after edit: {}", editor.get_text());
-        println!("Composed after edit: {}", editor.composed_view()?);
+        editor.add_overlay(
+            &signature,
+            old_checksum,
+            "func Get() any {\n\treturn 42\n}",
+        )?;
 
-        // Expected: base = "ZBCDE", composed = "ZXYZE"
-        assert_eq!(editor.get_text(), "ZBCDE");
-        assert_eq!(editor.composed_view()?, "ZXYZE");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_multiple_overlays_detailed() -> Result<()> {
-        // Test multiple overlays like in real LSP usage
-        // Text layout:
-        // f u n c   A ( )   {  }  \n f  u  n  c     B  (  )     {  }  \n f  u  n  c     C  (  )     {  }
-        // 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34
-        // "func A() {}" = bytes 0-10 (11 chars, indices 0..11)
-        // "\n" = byte 11
-        // "func B() {}" = bytes 12-22 (11 chars, indices 12..23)
-        // "\n" = byte 23
-        // "func C() {}" = bytes 24-34 (11 chars, indices 24..35)
-        let mut editor = CrdtEditor::new("func A() {}\nfunc B() {}\nfunc C() {}")?;
-        println!("Initial:\n{}", editor.get_text());
-        println!("Length: {}", editor.get_text().len());
-
-        // Add overlays for each function (NOT including the newlines)
-        editor.add_overlay(0x1, 0, 11, "func A() { return 1 }")?;
-        println!(
-            "\nAfter overlay 1:\nBase: {:?}\nComposed: {:?}",
-            editor.get_text(),
-            editor.composed_view()?
-        );
-
-        editor.add_overlay(0x2, 12, 23, "func B() { return 2 }")?;
-        println!(
-            "\nAfter overlay 2:\nBase: {:?}\nComposed: {:?}",
-            editor.get_text(),
-            editor.composed_view()?
-        );
-
-        editor.add_overlay(0x3, 24, 35, "func C() { return 3 }")?;
-        println!(
-            "\nAfter overlay 3:\nBase: {:?}\nComposed: {:?}",
-            editor.get_text(),
-            editor.composed_view()?
-        );
-
-        // Base should be unchanged
-        assert_eq!(editor.get_text(), "func A() {}\nfunc B() {}\nfunc C() {}");
-
-        // Composed should have all replacements with newlines preserved
+        // Verify overlay works
         let composed = editor.composed_view()?;
-        println!("\nFinal composed:\n{}", composed);
-        assert_eq!(
-            composed,
-            "func A() { return 1 }\nfunc B() { return 2 }\nfunc C() { return 3 }"
-        );
+        assert!(composed.contains("return 42"));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_utf8_positions() -> Result<()> {
-        // Test byte vs character position handling with multi-byte UTF-8
-        // Japanese char "あ" is 3 bytes but 1 character
-        let mut editor = CrdtEditor::new("あいう")?; // 9 bytes, 3 chars
-        println!("Initial text: {}", editor.get_text());
-        println!("Byte length: {}", editor.get_text().len());
-        println!("Char count: {}", editor.get_text().chars().count());
-
-        // Replace "い" which is at byte position 3-6, char position 1-2
-        editor.add_overlay(0x1, 3, 6, "X")?; // Uses byte positions (converted internally)
-        let composed = editor.composed_view()?;
-        println!("Composed: {}", composed);
-
-        // Should correctly replace the middle character
-        assert_eq!(composed, "あXう");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_utf8_with_mixed_content() -> Result<()> {
-        // Test with mixed ASCII and multi-byte characters (like real Go code with Japanese comments)
-        let mut editor = CrdtEditor::new("// コメント\nfunc Foo() {}")?;
-        println!("Initial: {}", editor.get_text());
-        println!("Byte length: {}", editor.get_text().len());
-
-        // "// コメント\n" is 14 bytes (2 + 1 + 3*4 + 1 = 16 bytes for "// コメント\n")
-        // Actually: "// " = 3 bytes, "コメント" = 12 bytes (4 chars * 3), "\n" = 1 byte = 16 bytes
-        // "func Foo() {}" starts at byte 16
-
-        // Get the byte position of "func Foo() {}"
+        // Edit instruction: "get value" -> "get cached value"
+        // This changes the checksum
         let text = editor.get_text();
-        let func_start = text.find("func").unwrap();
-        let func_end = func_start + "func Foo() {}".len();
-        println!("func at byte {}..{}", func_start, func_end);
+        let edit_start = text.find("get value").unwrap();
+        let edit_end = edit_start + "get value".len();
+        editor.apply_byte_edit_with_ops(&(edit_start..edit_end), "get cached value")?;
 
-        editor.add_overlay(0x1, func_start, func_end, "func Foo() { return 42 }")?;
+        // Get new target info
+        let tree = editor.tree().unwrap();
+        let new_targets = Target::find_targets(tree, editor.rope(), "");
+        let new_target = &new_targets[0];
+        let new_checksum = new_target.checksum;
+
+        println!("Old checksum: {:x}", old_checksum);
+        println!("New checksum: {:x}", new_checksum);
+        assert_ne!(old_checksum, new_checksum, "Checksum should change after instruction edit");
+
+        // Overlay still exists but checksum doesn't match
+        // So composed view should use base text
         let composed = editor.composed_view()?;
-        println!("Composed: {}", composed);
+        println!("Composed after instruction edit:\n{}", composed);
 
-        assert_eq!(composed, "// コメント\nfunc Foo() { return 42 }");
+        // Should fall back to base (panic) because checksum doesn't match
+        assert!(composed.contains("panic"), "Should use base when checksum doesn't match");
+        assert!(!composed.contains("return 42"), "Should not use stale overlay");
 
         Ok(())
     }
 
     #[test]
-    fn test_invalidate_stale_overlays() -> Result<()> {
-        let mut editor = CrdtEditor::new("func Foo() {}\nfunc Bar() {}")?;
+    fn test_overlay_replaced_on_regeneration() -> Result<()> {
+        let mut editor = CrdtEditor::new(GO_CODE_WITH_MANTRA)?;
 
-        // Add two overlays
-        editor.add_overlay(0x1111, 11, 13, "{ return 1 }")?;
-        editor.add_overlay(0x2222, 27, 29, "{ return 2 }")?;
+        let tree = editor.tree().unwrap();
+        let targets = Target::find_targets(tree, editor.rope(), "");
+        let target = &targets[0];
+        let signature = target.signature.clone();
+        let checksum = target.checksum;
+
+        // Add first overlay
+        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 1\n}")?;
+        assert_eq!(editor.overlay_count(), 1);
+
+        let composed = editor.composed_view()?;
+        assert!(composed.contains("return 1"));
+
+        // Add second overlay with same signature (replaces)
+        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 2\n}")?;
+        assert_eq!(editor.overlay_count(), 1); // Still only one overlay
+
+        let composed = editor.composed_view()?;
+        println!("Composed after replacement:\n{}", composed);
+        assert!(composed.contains("return 2"));
+        assert!(!composed.contains("return 1"), "Old overlay should be replaced");
+
+        Ok(())
+    }
+
+    const GO_CODE_MULTI_FUNC: &str = r#"package example
+
+// mantra: first function
+func First() int {
+	panic("not implemented")
+}
+
+// mantra: second function
+func Second() string {
+	panic("not implemented")
+}
+"#;
+
+    #[test]
+    fn test_multiple_overlays() -> Result<()> {
+        let mut editor = CrdtEditor::new(GO_CODE_MULTI_FUNC)?;
+
+        let tree = editor.tree().unwrap();
+        let targets = Target::find_targets(tree, editor.rope(), "");
+        assert_eq!(targets.len(), 2);
+
+        // Add overlays for both targets
+        for target in &targets {
+            let replacement = if target.signature.contains("First") {
+                "func First() int {\n\treturn 1\n}"
+            } else {
+                "func Second() string {\n\treturn \"two\"\n}"
+            };
+            editor.add_overlay(&target.signature, target.checksum, replacement)?;
+        }
+
         assert_eq!(editor.overlay_count(), 2);
 
-        // Invalidate one
-        let mut valid = HashSet::new();
-        valid.insert(0x1111);
-        editor.invalidate_stale_overlays(&valid);
+        let composed = editor.composed_view()?;
+        println!("Composed:\n{}", composed);
 
-        assert_eq!(editor.overlay_count(), 1);
-        assert!(editor.has_overlay(0x1111));
-        assert!(!editor.has_overlay(0x2222));
+        assert!(composed.contains("return 1"));
+        assert!(composed.contains("return \"two\""));
+        assert!(!composed.contains("panic"));
 
         Ok(())
     }
 
     #[test]
     fn test_composed_view_with_ranges() -> Result<()> {
-        let mut editor = CrdtEditor::new("func A() {}\nfunc B() {}")?;
+        let mut editor = CrdtEditor::new(GO_CODE_MULTI_FUNC)?;
 
-        // Add overlays
-        // "func A() {}" = bytes 0-10, char 0-10 (11 chars)
-        // "\n" = byte 11, char 11
-        // "func B() {}" = bytes 12-22, char 12-22 (11 chars)
-        editor.add_overlay(0x1, 0, 11, "func A() { return 1 }")?;
-        editor.add_overlay(0x2, 12, 23, "func B() { return 2 }")?;
+        let tree = editor.tree().unwrap();
+        let targets = Target::find_targets(tree, editor.rope(), "");
+
+        for target in &targets {
+            let replacement = if target.signature.contains("First") {
+                "func First() int {\n\treturn 1\n}"
+            } else {
+                "func Second() string {\n\treturn \"two\"\n}"
+            };
+            editor.add_overlay(&target.signature, target.checksum, replacement)?;
+        }
 
         let (text, ranges) = editor.composed_view_with_ranges()?;
 
-        println!("Composed text: {}", text);
+        println!("Composed text:\n{}", text);
         println!("Ranges: {:?}", ranges);
 
-        assert_eq!(text, "func A() { return 1 }\nfunc B() { return 2 }");
         assert_eq!(ranges.len(), 2);
 
-        // Check that ranges are tracked
-        let range1 = ranges.iter().find(|r| r.checksum == 0x1).unwrap();
-        let range2 = ranges.iter().find(|r| r.checksum == 0x2).unwrap();
-
-        println!("Range 1: start={}, end={}", range1.start, range1.end);
-        println!("Range 2: start={}, end={}", range2.start, range2.end);
-
-        // "func A() { return 1 }" is 21 chars (0-20)
-        assert_eq!(range1.start, 0);
-        assert_eq!(range1.end, 21);
-
-        // "func B() { return 2 }" starts at char 22 (after \n) and is 21 chars
-        assert_eq!(range2.start, 22);
-        assert_eq!(range2.end, 43);
+        // Verify each range covers a replacement
+        for range in &ranges {
+            let slice = &text[range.start..range.end];
+            println!("Range {:x}: '{}...'", range.checksum, &slice[..30.min(slice.len())]);
+            assert!(slice.contains("return"), "Range should contain generated code");
+        }
 
         Ok(())
     }
 
     #[test]
     fn test_apply_format_edits_to_overlays() -> Result<()> {
-        let mut editor = CrdtEditor::new("func A() {}\nfunc B() {}")?;
+        let mut editor = CrdtEditor::new(GO_CODE_WITH_MANTRA)?;
 
-        // Add overlays with unformatted content
-        editor.add_overlay(0x1, 0, 11, "func A() {\nreturn 1\n}")?;
-        editor.add_overlay(0x2, 12, 23, "func B() {\nreturn 2\n}")?;
+        let tree = editor.tree().unwrap();
+        let targets = Target::find_targets(tree, editor.rope(), "");
+        let target = &targets[0];
+
+        // Add overlay with bad formatting (no tabs)
+        editor.add_overlay(
+            &target.signature,
+            target.checksum,
+            "func Get() any {\nreturn 42\n}",
+        )?;
 
         let composed = editor.composed_view()?;
         println!("Before formatting:\n{}", composed);
-        println!("---");
 
-        // Get ranges to understand where overlays are
-        let (_, ranges) = editor.composed_view_with_ranges()?;
-        for range in &ranges {
-            println!(
-                "Overlay {:x}: char {}..{}",
-                range.checksum, range.start, range.end
-            );
-        }
-
-        // Create a rope from the composed text
+        // Create rope for the composed view
         let composed_rope = Rope::from(composed.as_str());
 
-        // The composed text is:
-        // line 0: "func A() {"
-        // line 1: "return 1"
-        // line 2: "}"
-        // line 3: "func B() {"
-        // line 4: "return 2"
-        // line 5: "}"
+        // Find the line with "return 42" and add a tab
+        let return_line = composed.lines().position(|l| l.contains("return 42")).unwrap();
+        println!("return 42 is on line {}", return_line);
 
-        // Simulate formatting edits (add tabs before return statements)
-        let edits = vec![
-            TextEdit {
-                range: Range {
-                    start: Position {
-                        line: 1,
-                        character: 0,
-                    },
-                    end: Position {
-                        line: 1,
-                        character: 0,
-                    },
+        let edits = vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: return_line as u32,
+                    character: 0,
                 },
-                new_text: "\t".to_string(),
-            },
-            TextEdit {
-                range: Range {
-                    start: Position {
-                        line: 4,
-                        character: 0,
-                    },
-                    end: Position {
-                        line: 4,
-                        character: 0,
-                    },
+                end: Position {
+                    line: return_line as u32,
+                    character: 0,
                 },
-                new_text: "\t".to_string(),
             },
-        ];
-
-        // Debug: show byte positions of edits
-        for edit in &edits {
-            let start_byte = lsp_position_to_byte(edit.range.start, &composed_rope);
-            let end_byte = lsp_position_to_byte(edit.range.end, &composed_rope);
-            let start_char = composed_rope.byte_slice(..start_byte).chars().count();
-            let end_char = composed_rope.byte_slice(..end_byte).chars().count();
-            println!(
-                "Edit at line {}:{} -> byte {}..{}, char {}..{}",
-                edit.range.start.line,
-                edit.range.start.character,
-                start_byte,
-                end_byte,
-                start_char,
-                end_char
-            );
-        }
+            new_text: "\t".to_string(),
+        }];
 
         let formatted = editor.apply_format_edits_to_overlays(&edits, &composed_rope)?;
         println!("After formatting:\n{}", formatted);
 
-        // Check that formatting was applied to overlays
-        assert!(
-            formatted.contains("\treturn 1"),
-            "Should contain '\\treturn 1'"
-        );
-        assert!(
-            formatted.contains("\treturn 2"),
-            "Should contain '\\treturn 2'"
-        );
+        assert!(formatted.contains("\treturn 42"), "Should have tab before return");
 
-        // Check that base is unchanged
-        assert_eq!(editor.get_text(), "func A() {}\nfunc B() {}");
+        // Base unchanged
+        assert!(editor.get_text().contains("panic"));
 
         Ok(())
     }

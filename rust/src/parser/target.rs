@@ -39,6 +39,9 @@ pub struct Target {
     pub is_generated: bool,
     /// Range of the checksum comment if it exists (for extracting full generated text)
     pub checksum_comment_range: Option<Range<usize>>,
+    /// Start byte position including any preceding checksum comments (for edit range)
+    /// This is set regardless of whether the checksum matches
+    pub edit_start_byte: usize,
 }
 
 impl Target {
@@ -147,6 +150,44 @@ fn extract_checksum_comment(node: &Node, rope: &Rope) -> Option<u64> {
     }
 }
 
+/// Find the start position including any checksum comments before the function
+/// Returns the byte position where the edit should start (including any preceding checksum comments)
+fn find_edit_start(text: &str, func_start: usize) -> usize {
+    let before_func = &text[..func_start];
+    let trimmed = before_func.trim_end();
+    if trimmed.is_empty() {
+        return func_start;
+    }
+
+    // Track where checksum comments region starts (will be updated as we find more)
+    let mut checksum_region_start: Option<usize> = None;
+    let mut current_pos = trimmed.len();
+
+    loop {
+        // Find the start of the current line
+        let line_start = trimmed[..current_pos].rfind('\n').map_or(0, |i| i + 1);
+        let line = trimmed[line_start..current_pos].trim();
+
+        if line.starts_with("// mantra:checksum:") {
+            // Found a checksum comment, update the start position
+            checksum_region_start = Some(line_start);
+
+            if line_start == 0 {
+                // Reached the beginning
+                break;
+            }
+            // Move to the line before (skip the newline)
+            current_pos = line_start - 1;
+        } else {
+            // Not a checksum comment, stop scanning
+            break;
+        }
+    }
+
+    // Return the start of checksum comments region, or func_start if none found
+    checksum_region_start.unwrap_or(func_start)
+}
+
 /// Create a Target from a function/method node
 fn create_target_from_function(
     node: &Node,
@@ -174,6 +215,10 @@ fn create_target_from_function(
     // byte_range is the function only (not including the mantra comment)
     let byte_range = node.start_byte()..node.end_byte();
 
+    // Calculate edit_start_byte including any preceding checksum comments
+    let full_text = rope.to_string();
+    let edit_start_byte = find_edit_start(&full_text, node.start_byte());
+
     // Create the base target for checksum calculation
     let base_target = Target {
         uri: uri.to_string(),
@@ -184,6 +229,7 @@ fn create_target_from_function(
         type_references,
         is_generated: false,          // Will be set later in find_targets
         checksum_comment_range: None, // Will be set later in find_targets if exists
+        edit_start_byte,
     };
 
     // Calculate checksum
