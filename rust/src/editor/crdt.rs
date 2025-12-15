@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::ops::Range as StdRange;
 use tree_sitter::Tree;
 
+use crate::parser::position_utils::find_checksum_region_start;
 use crate::parser::target::Target;
 use crate::parser::GoParser;
 
@@ -17,49 +18,6 @@ pub struct OverlayRange {
     pub start: usize,
     /// End position in composed view (byte index)
     pub end: usize,
-}
-
-/// Find the start position of checksum comments before a function
-/// Walks backwards from `func_start` to find all consecutive `// mantra:checksum:` lines
-fn find_checksum_comments_start(text: &str, func_start: usize) -> usize {
-    // Get the text before the function
-    let before_func = &text[..func_start];
-
-    // Find where to start looking (skip trailing whitespace/newlines)
-    let trimmed = before_func.trim_end();
-    if trimmed.is_empty() {
-        return func_start;
-    }
-
-    // Track where checksum comments region starts (will be updated as we find more)
-    let mut checksum_region_start: Option<usize> = None;
-    let mut current_pos = trimmed.len();
-
-    // Walk backwards line by line
-    loop {
-        // Find the start of the current line
-        let line_start = trimmed[..current_pos].rfind('\n').map_or(0, |i| i + 1);
-        let line = trimmed[line_start..current_pos].trim();
-
-        // Check if this line is a checksum comment
-        if line.starts_with("// mantra:checksum:") {
-            // Found a checksum comment, update the start position
-            checksum_region_start = Some(line_start);
-
-            if line_start == 0 {
-                // Reached the beginning
-                break;
-            }
-            // Move to the line before (skip the newline)
-            current_pos = line_start - 1;
-        } else {
-            // Not a checksum comment, stop scanning
-            break;
-        }
-    }
-
-    // Return the start of checksum comments region, or func_start if none found
-    checksum_region_start.unwrap_or(func_start)
 }
 
 /// Convert LSP position to byte position in rope
@@ -355,7 +313,7 @@ impl CrdtEditor {
                     // Determine the replacement start position
                     // Look backwards from function start to find all checksum comments
                     let replace_start =
-                        find_checksum_comments_start(&base_text, target.byte_range.start);
+                        find_checksum_region_start(&base_text, target.byte_range.start);
 
                     // Append text before the replacement area
                     result.push_str(&base_text[last_end..replace_start]);

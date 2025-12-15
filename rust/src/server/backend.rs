@@ -4,7 +4,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, Diagnostic, DidChangeTextDocumentParams,
-    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams, Position,
+    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
     ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
     WorkspaceEdit,
 };
@@ -152,9 +152,18 @@ impl MantraBackend {
             return;
         }
 
-        // Clone targets for diagnostics (need original positions)
-        let targets_for_diagnostics = generation_targets.clone();
-        let original_text = text.to_string();
+        // Pre-compute diagnostics for generation targets (before spawning async task)
+        // This avoids needing position conversion functions in the async closure
+        let generation_diagnostics: Vec<(u64, Diagnostic)> = generation_targets
+            .iter()
+            .map(|t| {
+                let range = doc_service.byte_range_to_lsp_range(&t.byte_range);
+                let edit_start = doc_service.byte_to_lsp_position(t.edit_start_byte);
+                let diag =
+                    create_diagnostic(&t.instruction, t.checksum, range.start, range.end, edit_start);
+                (t.checksum, diag)
+            })
+            .collect();
 
         // Start background generation and get completion receiver
         let Some(completion_rx) = doc_service.spawn_background_generation(generation_targets)
@@ -169,16 +178,11 @@ impl MantraBackend {
                 return;
             };
 
-            // Publish diagnostics for newly generated targets AND existing overlays
-            let mut diagnostics: Vec<Diagnostic> = targets_for_diagnostics
-                .iter()
-                .filter(|t| succeeded_checksums.contains(&t.checksum))
-                .map(|t| {
-                    let (func_start, func_end) =
-                        byte_range_to_lsp_range(&original_text, &t.byte_range);
-                    let edit_start = byte_offset_to_position(&original_text, t.edit_start_byte);
-                    create_diagnostic(&t.instruction, t.checksum, func_start, func_end, edit_start)
-                })
+            // Filter pre-computed diagnostics by succeeded checksums
+            let mut diagnostics: Vec<Diagnostic> = generation_diagnostics
+                .into_iter()
+                .filter(|(checksum, _)| succeeded_checksums.contains(checksum))
+                .map(|(_, diag)| diag)
                 .collect();
 
             // Include diagnostics for existing overlays
@@ -350,15 +354,12 @@ impl LanguageServer for MantraBackend {
             );
 
             if !is_generated {
-                // Find target from CRDT
-                let target = match doc_service.find_targets() {
-                    Ok(targets) => {
-                        if let Some(t) = targets.into_iter().find(|t| t.checksum == checksum) {
-                            t
-                        } else {
-                            tracing::warn!("Target with checksum {:x} not found", checksum);
-                            continue;
-                        }
+                // Find target from CRDT and generate
+                let target = match doc_service.find_target_by_checksum(checksum) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        tracing::warn!("Target with checksum {:x} not found", checksum);
+                        continue;
                     }
                     Err(e) => {
                         tracing::error!("Failed to find targets: {}", e);
@@ -420,70 +421,3 @@ impl LanguageServer for MantraBackend {
     }
 }
 
-/// Convert byte range to LSP position range
-fn byte_range_to_lsp_range(
-    text: &str,
-    byte_range: &std::ops::Range<usize>,
-) -> (Position, Position) {
-    let mut line = 0u32;
-    let mut character = 0u32;
-    let mut start_pos = Position {
-        line: 0,
-        character: 0,
-    };
-    let mut end_pos = Position {
-        line: 0,
-        character: 0,
-    };
-    let mut found_start = false;
-
-    for (byte_idx, ch) in text.char_indices() {
-        if byte_idx == byte_range.start {
-            start_pos = Position { line, character };
-            found_start = true;
-        }
-        if byte_idx == byte_range.end {
-            end_pos = Position { line, character };
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += 1;
-        }
-    }
-
-    // Handle end position at end of file
-    if !found_start {
-        start_pos = Position { line, character };
-    }
-    if byte_range.end >= text.len() {
-        end_pos = Position { line, character };
-    }
-
-    (start_pos, end_pos)
-}
-
-/// Convert byte offset to LSP position
-fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
-    let mut line = 0u32;
-    let mut character = 0u32;
-
-    for (byte_idx, ch) in text.char_indices() {
-        if byte_idx == byte_offset {
-            return Position { line, character };
-        }
-
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += 1;
-        }
-    }
-
-    // Handle offset at end of file
-    Position { line, character }
-}

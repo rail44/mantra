@@ -189,6 +189,12 @@ impl DocumentService {
         document.find_targets()
     }
 
+    /// Find a specific target by checksum
+    pub fn find_target_by_checksum(&self, checksum: u64) -> Result<Option<Target>> {
+        self.find_targets()
+            .map(|targets| targets.into_iter().find(|t| t.checksum == checksum))
+    }
+
     /// Check if a target has already been generated (has overlay)
     pub fn is_generated(&self, checksum: u64) -> bool {
         let document = self.document.read();

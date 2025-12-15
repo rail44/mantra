@@ -1,6 +1,7 @@
 pub mod ast_utils;
 pub mod checksum;
 pub mod error;
+pub mod position_utils;
 pub mod target;
 pub mod type_collector;
 
