@@ -33,7 +33,7 @@ impl MantraDiagnosticData {
         u64::from_str_radix(&self.checksum, 16).ok()
     }
 
-    /// Try to extract MantraDiagnosticData from a diagnostic's data field
+    /// Try to extract `MantraDiagnosticData` from a diagnostic's data field
     pub fn from_diagnostic(diagnostic: &Diagnostic) -> Option<Self> {
         diagnostic
             .data

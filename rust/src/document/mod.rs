@@ -216,7 +216,7 @@ impl DocumentService {
 
         doc.editor
             .get_overlay_by_checksum(checksum)
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| anyhow::anyhow!("Target with checksum {checksum:x} not found"))
     }
 
