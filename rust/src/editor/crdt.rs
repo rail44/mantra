@@ -57,8 +57,8 @@ pub struct CrdtEditor {
     base: AutoCommit,
     /// Signature -> overlay content
     overlays: HashMap<String, OverlayContent>,
-    /// Checksums currently being generated (LLM call in progress)
-    generating: HashSet<u64>,
+    /// Signatures currently being generated (LLM call in progress)
+    generating: HashSet<String>,
     /// Automerge object ID for the text
     text_id: automerge::ObjId,
     /// Rope for tree-sitter parsing and LSP position conversion (synced with base)
@@ -221,7 +221,7 @@ impl CrdtEditor {
     /// Initially in Formatting status
     pub fn add_overlay(&mut self, signature: &str, checksum: u64, replacement: &str) {
         // Remove from generating set since we now have an overlay
-        self.generating.remove(&checksum);
+        self.generating.remove(signature);
         self.overlays.insert(
             signature.to_string(),
             OverlayContent {
@@ -233,33 +233,30 @@ impl CrdtEditor {
     }
 
     /// Start tracking a generation task
-    pub fn start_generation(&mut self, checksum: u64) {
-        self.generating.insert(checksum);
+    pub fn start_generation(&mut self, signature: &str) {
+        self.generating.insert(signature.to_string());
     }
 
     /// Cancel a generation task (on failure or if already generated)
-    pub fn cancel_generation(&mut self, checksum: u64) {
-        self.generating.remove(&checksum);
+    pub fn cancel_generation(&mut self, signature: &str) {
+        self.generating.remove(signature);
     }
 
     /// Set overlay status to Ready (after formatting completes)
-    pub fn set_overlay_ready(&mut self, checksum: u64) {
-        for overlay in self.overlays.values_mut() {
-            if overlay.checksum == checksum {
-                overlay.status = OverlayStatus::Ready;
-                break;
-            }
+    pub fn set_overlay_ready(&mut self, signature: &str) {
+        if let Some(overlay) = self.overlays.get_mut(signature) {
+            overlay.status = OverlayStatus::Ready;
         }
     }
 
     /// Check if a generation is currently pending (generating or formatting)
-    pub fn is_pending(&self, checksum: u64) -> bool {
-        if self.generating.contains(&checksum) {
+    pub fn is_pending(&self, signature: &str) -> bool {
+        if self.generating.contains(signature) {
             return true;
         }
         self.overlays
-            .values()
-            .any(|o| o.checksum == checksum && o.status == OverlayStatus::Formatting)
+            .get(signature)
+            .map_or(false, |o| o.status == OverlayStatus::Formatting)
     }
 
     /// Check if all generations are complete (no Generating status)
@@ -268,10 +265,10 @@ impl CrdtEditor {
     }
 
     /// Check if overlay is ready for code action
-    pub fn is_overlay_ready(&self, checksum: u64) -> bool {
+    pub fn is_overlay_ready(&self, signature: &str) -> bool {
         self.overlays
-            .values()
-            .any(|o| o.checksum == checksum && o.status == OverlayStatus::Ready)
+            .get(signature)
+            .map_or(false, |o| o.status == OverlayStatus::Ready)
     }
 
     /// Check if a checksum exists as a comment in the base text
@@ -282,12 +279,9 @@ impl CrdtEditor {
         base_text.contains(&search_pattern)
     }
 
-    /// Get overlay replacement text by checksum
-    pub fn get_overlay_by_checksum(&self, checksum: u64) -> Option<&str> {
-        self.overlays
-            .values()
-            .find(|o| o.checksum == checksum)
-            .map(|o| o.replacement.as_str())
+    /// Get overlay replacement text by signature
+    pub fn get_overlay(&self, signature: &str) -> Option<&str> {
+        self.overlays.get(signature).map(|o| o.replacement.as_str())
     }
 
     /// Remove overlays whose checksums now exist in the base text

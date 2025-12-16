@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantraDiagnosticData {
     pub instruction: String,
-    /// Checksum in hex format
-    pub checksum: String,
+    /// Function signature for overlay lookup
+    pub signature: String,
     /// End position of the target (function end)
     pub target_end: Position,
     /// Start position for editing (includes any preceding checksum comments)
@@ -16,21 +16,16 @@ pub struct MantraDiagnosticData {
 impl MantraDiagnosticData {
     pub fn new(
         instruction: String,
-        checksum: u64,
+        signature: &str,
         target_end: Position,
         edit_start: Position,
     ) -> Self {
         Self {
             instruction,
-            checksum: format!("{checksum:x}"),
+            signature: signature.to_string(),
             target_end,
             edit_start,
         }
-    }
-
-    /// Parse checksum from hex string
-    pub fn parse_checksum(&self) -> Option<u64> {
-        u64::from_str_radix(&self.checksum, 16).ok()
     }
 
     /// Try to extract `MantraDiagnosticData` from a diagnostic's data field
@@ -45,12 +40,12 @@ impl MantraDiagnosticData {
 /// Create a diagnostic for a mantra target
 pub fn create_diagnostic(
     instruction: &str,
-    checksum: u64,
+    signature: &str,
     func_start: Position,
     func_end: Position,
     edit_start: Position,
 ) -> Diagnostic {
-    let data = MantraDiagnosticData::new(instruction.to_string(), checksum, func_end, edit_start);
+    let data = MantraDiagnosticData::new(instruction.to_string(), signature, func_end, edit_start);
 
     Diagnostic {
         range: Range {

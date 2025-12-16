@@ -120,13 +120,13 @@ impl MantraBackend {
         // Collect diagnostics for targets that have overlays (ready for code action)
         let diagnostics_for_overlays: Vec<Diagnostic> = targets
             .iter()
-            .filter(|t| doc_service.is_generated(t.checksum))
+            .filter(|t| doc_service.is_generated(&t.signature))
             .map(|t| {
                 let range = doc_service.byte_range_to_lsp_range(&t.byte_range);
                 let edit_start = doc_service.byte_to_lsp_position(t.edit_start_byte);
                 create_diagnostic(
                     &t.instruction,
-                    t.checksum,
+                    &t.signature,
                     range.start,
                     range.end,
                     edit_start,
@@ -138,9 +138,9 @@ impl MantraBackend {
         let generation_targets: Vec<Target> = targets
             .into_iter()
             .filter(|t| {
-                !doc_service.is_generated(t.checksum)
+                !doc_service.is_generated(&t.signature)
                     && !doc_service.is_already_applied(t.checksum)
-                    && !doc_service.is_pending_generation(t.checksum)
+                    && !doc_service.is_pending_generation(&t.signature)
             })
             .collect();
 
@@ -161,7 +161,7 @@ impl MantraBackend {
                 let edit_start = doc_service.byte_to_lsp_position(t.edit_start_byte);
                 let diag = create_diagnostic(
                     &t.instruction,
-                    t.checksum,
+                    &t.signature,
                     range.start,
                     range.end,
                     edit_start,
@@ -340,36 +340,33 @@ impl LanguageServer for MantraBackend {
                 continue;
             };
 
-            let Some(checksum) = data.parse_checksum() else {
-                tracing::warn!("Failed to parse checksum '{}'", data.checksum);
-                continue;
-            };
-
-            let instruction = data.instruction;
+            let signature = &data.signature;
+            let instruction = &data.instruction;
             let start_pos = data.edit_start;
             let end_pos = data.target_end;
 
             // Check if code has been generated (either via background or now)
-            let is_generated = doc_service.is_generated(checksum);
+            let is_generated = doc_service.is_generated(signature);
 
             tracing::info!(
-                "Code action: checksum={:x}, is_generated={}",
-                checksum,
+                "Code action: signature={}, is_generated={}",
+                signature,
                 is_generated
             );
 
             if !is_generated {
-                // Find target from CRDT and generate
-                let target = match doc_service.find_target_by_checksum(checksum) {
-                    Ok(Some(t)) => t,
-                    Ok(None) => {
-                        tracing::warn!("Target with checksum {:x} not found", checksum);
-                        continue;
-                    }
+                // Find target from CRDT by signature and generate
+                let targets = match doc_service.find_targets() {
+                    Ok(t) => t,
                     Err(e) => {
                         tracing::error!("Failed to find targets: {}", e);
                         continue;
                     }
+                };
+
+                let Some(target) = targets.into_iter().find(|t| &t.signature == signature) else {
+                    tracing::warn!("Target with signature '{}' not found", signature);
+                    continue;
                 };
 
                 if let Err(e) = doc_service.generate_single(target).await {
@@ -378,8 +375,8 @@ impl LanguageServer for MantraBackend {
                 }
             }
 
-            // Get the generated text from CRDT using checksum
-            let generated_text = match doc_service.get_generated_text_by_checksum(checksum) {
+            // Get the generated text from CRDT using signature
+            let generated_text = match doc_service.get_generated_text(signature) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::error!("Failed to get generated text: {}", e);

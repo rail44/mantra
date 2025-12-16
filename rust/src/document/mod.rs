@@ -153,16 +153,10 @@ impl DocumentService {
         document.find_targets()
     }
 
-    /// Find a specific target by checksum
-    pub fn find_target_by_checksum(&self, checksum: u64) -> Result<Option<Target>> {
-        self.find_targets()
-            .map(|targets| targets.into_iter().find(|t| t.checksum == checksum))
-    }
-
     /// Check if a target has overlay ready for code action
-    pub fn is_generated(&self, checksum: u64) -> bool {
+    pub fn is_generated(&self, signature: &str) -> bool {
         let document = self.document.read();
-        document.editor.is_overlay_ready(checksum)
+        document.editor.is_overlay_ready(signature)
     }
 
     /// Check if a target has already been applied (checksum exists in base)
@@ -171,9 +165,9 @@ impl DocumentService {
         document.editor.has_checksum_in_base(checksum)
     }
 
-    /// Check if a generation is currently pending for a checksum
-    pub fn is_pending_generation(&self, checksum: u64) -> bool {
-        self.document.read().editor.is_pending(checksum)
+    /// Check if a generation is currently pending for a signature
+    pub fn is_pending_generation(&self, signature: &str) -> bool {
+        self.document.read().editor.is_pending(signature)
     }
 
     /// Convert byte position to LSP position
@@ -186,14 +180,14 @@ impl DocumentService {
         self.document.read().editor.byte_range_to_lsp_range(range)
     }
 
-    /// Get generated text by checksum (from overlay)
-    pub fn get_generated_text_by_checksum(&self, checksum: u64) -> Result<String> {
+    /// Get generated text by signature (from overlay)
+    pub fn get_generated_text(&self, signature: &str) -> Result<String> {
         let doc = self.document.read();
 
         doc.editor
-            .get_overlay_by_checksum(checksum)
+            .get_overlay(signature)
             .map(std::string::ToString::to_string)
-            .ok_or_else(|| anyhow::anyhow!("Target with checksum {checksum:x} not found"))
+            .ok_or_else(|| anyhow::anyhow!("Overlay not found for signature: {signature}"))
     }
 
     /// Generate code for a single target
@@ -212,7 +206,7 @@ impl DocumentService {
         {
             let mut document = self.document.write();
             for target in &targets {
-                document.editor.start_generation(target.checksum);
+                document.editor.start_generation(&target.signature);
             }
         }
 
@@ -222,7 +216,7 @@ impl DocumentService {
             .map(|target| {
                 let clone = self.clone();
                 async move {
-                    if clone.is_generated(target.checksum) {
+                    if clone.is_generated(&target.signature) {
                         return Ok((target, None));
                     }
                     match clone.generate_target_body(&target).await {
@@ -241,10 +235,10 @@ impl DocumentService {
             match result {
                 Ok((target, Some(new_body))) => {
                     let checksum = target.checksum;
-                    if self.is_generated(checksum) {
+                    if self.is_generated(&target.signature) {
                         // Already generated, cancel generation
                         let mut document = self.document.write();
-                        document.editor.cancel_generation(checksum);
+                        document.editor.cancel_generation(&target.signature);
                         succeeded.push(checksum);
                         continue;
                     }
@@ -255,14 +249,14 @@ impl DocumentService {
                 Ok((target, None)) => {
                     // Already generated, cancel generation
                     let mut document = self.document.write();
-                    document.editor.cancel_generation(target.checksum);
+                    document.editor.cancel_generation(&target.signature);
                     succeeded.push(target.checksum);
                 }
                 Err((target, e)) => {
                     tracing::error!("Generation failed for {:x}: {:?}", target.checksum, e);
                     // Cancel generation on failure
                     let mut document = self.document.write();
-                    document.editor.cancel_generation(target.checksum);
+                    document.editor.cancel_generation(&target.signature);
                 }
             }
         }
@@ -320,7 +314,7 @@ impl DocumentService {
     }
 
     async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {
-        let checksum = target.checksum;
+        let signature = target.signature.clone();
 
         // Apply generation creates overlay in Formatting status
         let change = {
@@ -334,7 +328,7 @@ impl DocumentService {
         // After formatting, set overlay to Ready
         {
             let mut doc = self.document.write();
-            doc.editor.set_overlay_ready(checksum);
+            doc.editor.set_overlay_ready(&signature);
         }
 
         Ok(())
