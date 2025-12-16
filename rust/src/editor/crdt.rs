@@ -356,9 +356,8 @@ impl CrdtEditor {
             .overlays
             .iter()
             .filter(|(sig, overlay)| {
-                !current_checksums
-                    .get(sig.as_str())
-                    .is_some_and(|&current| overlay.checksum == current)
+                current_checksums
+                    .get(sig.as_str()).is_none_or(|&current| overlay.checksum != current)
             })
             .map(|(sig, _)| sig.clone())
             .collect();
