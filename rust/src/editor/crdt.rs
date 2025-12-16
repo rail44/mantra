@@ -4,6 +4,7 @@ use crop::Rope;
 use lsp_types::{Position, TextEdit};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range as StdRange;
+use tokio_util::sync::CancellationToken;
 use tree_sitter::Tree;
 
 use crate::parser::checksum::{extract_checksum_from_text, CHECKSUM_PREFIX};
@@ -59,6 +60,8 @@ pub struct CrdtEditor {
     overlays: HashMap<String, OverlayContent>,
     /// Signatures currently being generated (LLM call in progress)
     generating: HashSet<String>,
+    /// Cancellation tokens for ongoing generation tasks (by signature)
+    cancellation_tokens: HashMap<String, CancellationToken>,
     /// Automerge object ID for the text
     text_id: automerge::ObjId,
     /// Rope for tree-sitter parsing and LSP position conversion (synced with base)
@@ -87,6 +90,7 @@ impl CrdtEditor {
             base,
             overlays: HashMap::new(),
             generating: HashSet::new(),
+            cancellation_tokens: HashMap::new(),
             text_id,
             rope: Rope::from(initial_text),
             version: 0,
@@ -232,14 +236,28 @@ impl CrdtEditor {
         );
     }
 
-    /// Start tracking a generation task
-    pub fn start_generation(&mut self, signature: &str) {
+    /// Start tracking a generation task, cancelling any existing one
+    /// Returns a CancellationToken that the generation task should monitor
+    pub fn start_generation(&mut self, signature: &str) -> CancellationToken {
+        // Cancel existing generation for this signature
+        if let Some(old_token) = self.cancellation_tokens.get(signature) {
+            old_token.cancel();
+            tracing::debug!(signature = %signature, "Cancelled previous generation task");
+        }
+
+        let token = CancellationToken::new();
+        self.cancellation_tokens
+            .insert(signature.to_string(), token.clone());
         self.generating.insert(signature.to_string());
+        token
     }
 
     /// Cancel a generation task (on failure or if already generated)
     pub fn cancel_generation(&mut self, signature: &str) {
         self.generating.remove(signature);
+        if let Some(token) = self.cancellation_tokens.remove(signature) {
+            token.cancel();
+        }
     }
 
     /// Set overlay status to Ready (after formatting completes)
@@ -279,9 +297,12 @@ impl CrdtEditor {
         base_text.contains(&search_pattern)
     }
 
-    /// Get overlay replacement text by signature
+    /// Get overlay replacement text by signature (only if Ready)
     pub fn get_overlay(&self, signature: &str) -> Option<&str> {
-        self.overlays.get(signature).map(|o| o.replacement.as_str())
+        self.overlays
+            .get(signature)
+            .filter(|o| o.status == OverlayStatus::Ready)
+            .map(|o| o.replacement.as_str())
     }
 
     /// Remove overlays whose checksums now exist in the base text
@@ -317,6 +338,40 @@ impl CrdtEditor {
         if before_count != after_count {
             tracing::info!(
                 "Removed {} overlays (checksums now in base)",
+                before_count - after_count
+            );
+        }
+    }
+
+    /// Remove stale overlays whose checksums don't match current targets
+    /// This is called after instruction edits to clean up outdated overlays
+    pub fn remove_stale_overlays(&mut self, current_targets: &[Target]) {
+        if self.overlays.is_empty() {
+            return;
+        }
+
+        // Build a map of signature -> current checksum
+        let current_checksums: HashMap<&str, u64> = current_targets
+            .iter()
+            .map(|t| (t.signature.as_str(), t.checksum))
+            .collect();
+
+        let before_count = self.overlays.len();
+
+        // Remove overlays where:
+        // - Target no longer exists (signature not in current_targets), OR
+        // - Checksum doesn't match (instruction was edited)
+        self.overlays.retain(|signature, overlay| {
+            current_checksums
+                .get(signature.as_str())
+                .is_some_and(|&current_checksum| overlay.checksum == current_checksum)
+        });
+
+        let after_count = self.overlays.len();
+
+        if before_count != after_count {
+            tracing::info!(
+                "Removed {} stale overlays (checksum mismatch or target removed)",
                 before_count - after_count
             );
         }

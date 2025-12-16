@@ -100,6 +100,8 @@ impl Document {
             // After applying the change, check if any overlay's checksum now exists in base
             // This handles code action application where the overlay content is now in base
             self.editor.remove_overlays_matching_base();
+            // Note: Stale overlay removal is done in DocumentService.remove_stale_overlays()
+            // after all changes are applied, to avoid intermediate state issues
         } else {
             // Full document replacement
             self.editor = CrdtEditor::new(&change.text)?;
@@ -170,6 +172,15 @@ impl DocumentService {
         self.document.read().editor.is_pending(signature)
     }
 
+    /// Remove stale overlays based on current targets
+    /// Call this after all changes are applied to avoid intermediate state issues
+    pub fn remove_stale_overlays(&self) {
+        let mut document = self.document.write();
+        if let Ok(targets) = document.find_targets() {
+            document.editor.remove_stale_overlays(&targets);
+        }
+    }
+
     /// Convert byte position to LSP position
     pub fn byte_to_lsp_position(&self, byte_pos: usize) -> lsp_types::Position {
         self.document.read().editor.byte_to_lsp_position(byte_pos)
@@ -201,27 +212,54 @@ impl DocumentService {
     /// Generate all targets and apply to overlays
     async fn generate_targets_sequential(&self, targets: Vec<Target>) -> Vec<u64> {
         use futures::future::join_all;
+        use tokio_util::sync::CancellationToken;
 
-        // Mark all targets as generating
-        {
+        // Mark all targets as generating and collect cancellation tokens
+        let tokens: Vec<(Target, CancellationToken)> = {
             let mut document = self.document.write();
-            for target in &targets {
-                document.editor.start_generation(&target.signature);
-            }
-        }
+            targets
+                .into_iter()
+                .map(|target| {
+                    let token = document.editor.start_generation(&target.signature);
+                    (target, token)
+                })
+                .collect()
+        };
 
         // Generate all targets in parallel (LLM calls only)
-        let generation_futures: Vec<_> = targets
+        let generation_futures: Vec<_> = tokens
             .into_iter()
-            .map(|target| {
+            .map(|(target, token)| {
                 let clone = self.clone();
                 async move {
                     if clone.is_generated(&target.signature) {
                         return Ok((target, None));
                     }
-                    match clone.generate_target_body(&target).await {
-                        Ok(body) => Ok((target, Some(body))),
-                        Err(e) => Err((target, e)),
+
+                    // Use select! to monitor cancellation
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            tracing::info!(
+                                signature = %target.signature,
+                                checksum = format!("{:x}", target.checksum),
+                                "Generation cancelled (instruction changed)"
+                            );
+                            Err((target, anyhow::anyhow!("Cancelled")))
+                        }
+                        result = clone.generate_target_body(&target) => {
+                            // Check if cancelled after LLM call completed
+                            if token.is_cancelled() {
+                                tracing::info!(
+                                    signature = %target.signature,
+                                    "Generation result discarded (cancelled after completion)"
+                                );
+                                return Err((target, anyhow::anyhow!("Cancelled")));
+                            }
+                            match result {
+                                Ok(body) => Ok((target, Some(body))),
+                                Err(e) => Err((target, e)),
+                            }
+                        }
                     }
                 }
             })
@@ -253,7 +291,10 @@ impl DocumentService {
                     succeeded.push(target.checksum);
                 }
                 Err((target, e)) => {
-                    tracing::error!("Generation failed for {:x}: {:?}", target.checksum, e);
+                    let is_cancelled = e.to_string() == "Cancelled";
+                    if !is_cancelled {
+                        tracing::error!("Generation failed for {:x}: {:?}", target.checksum, e);
+                    }
                     // Cancel generation on failure
                     let mut document = self.document.write();
                     document.editor.cancel_generation(&target.signature);
@@ -315,6 +356,34 @@ impl DocumentService {
 
     async fn apply_generation(&self, target: Target, new_body: &str) -> Result<()> {
         let signature = target.signature.clone();
+        let expected_checksum = target.checksum;
+
+        // Verify the target's checksum still matches before applying
+        // (instruction might have changed during LLM generation)
+        {
+            let current_targets = self.find_targets()?;
+            let current_target = current_targets.iter().find(|t| t.signature == signature);
+
+            match current_target {
+                Some(current) if current.checksum != expected_checksum => {
+                    tracing::info!(
+                        expected = format!("{:x}", expected_checksum),
+                        current = format!("{:x}", current.checksum),
+                        signature = %signature,
+                        "Skipping stale generation result: instruction changed during generation"
+                    );
+                    return Ok(());
+                }
+                None => {
+                    tracing::info!(
+                        signature = %signature,
+                        "Skipping generation result: target no longer exists"
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
 
         // Apply generation creates overlay in Formatting status
         let change = {

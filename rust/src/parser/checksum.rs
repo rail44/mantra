@@ -15,7 +15,16 @@ pub fn calculate_checksum(target: &Target) -> u64 {
     target.signature.hash(&mut hasher);
     target.instruction.hash(&mut hasher);
 
-    hasher.finish()
+    let checksum = hasher.finish();
+
+    tracing::debug!(
+        checksum = format!("{:x}", checksum),
+        signature = %target.signature,
+        instruction = %target.instruction,
+        "Calculated checksum"
+    );
+
+    checksum
 }
 
 /// Extract checksum from text that starts with the checksum prefix

@@ -108,6 +108,11 @@ impl MantraBackend {
             }
         };
 
+        // Remove stale overlays after all changes are applied
+        // This must be done here (not in apply_incremental_change) to avoid
+        // intermediate state issues with multi-change edits like delete+insert
+        doc_service.remove_stale_overlays();
+
         // Find targets from DocumentService's editor (correct snapshot)
         let targets = match doc_service.find_targets() {
             Ok(t) => t,
@@ -134,13 +139,14 @@ impl MantraBackend {
             })
             .collect();
 
-        // Filter out already generated, applied, or currently generating targets
+        // Filter out already generated or applied targets
+        // Note: We allow re-generation of pending targets since start_generation
+        // will cancel the old task via CancellationToken
         let generation_targets: Vec<Target> = targets
             .into_iter()
             .filter(|t| {
                 !doc_service.is_generated(&t.signature)
                     && !doc_service.is_already_applied(t.checksum)
-                    && !doc_service.is_pending_generation(&t.signature)
             })
             .collect();
 
@@ -151,6 +157,12 @@ impl MantraBackend {
                 .await;
             return;
         }
+
+        // Clear old diagnostics immediately when starting new generation
+        // This prevents stale diagnostics from being used for code actions
+        self.client
+            .publish_diagnostics(uri.clone(), diagnostics_for_overlays.clone(), None)
+            .await;
 
         // Pre-compute diagnostics for generation targets (before spawning async task)
         // This avoids needing position conversion functions in the async closure
@@ -344,6 +356,15 @@ impl LanguageServer for MantraBackend {
             let instruction = &data.instruction;
             let start_pos = data.edit_start;
             let end_pos = data.target_end;
+
+            // Skip if generation/formatting is still in progress
+            if doc_service.is_pending_generation(signature) {
+                tracing::debug!(
+                    "Code action skipped: generation/formatting in progress for {}",
+                    signature
+                );
+                continue;
+            }
 
             // Check if code has been generated (either via background or now)
             let is_generated = doc_service.is_generated(signature);
