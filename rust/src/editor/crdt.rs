@@ -256,7 +256,7 @@ impl CrdtEditor {
         }
         self.overlays
             .get(signature)
-            .map_or(false, |o| o.status == OverlayStatus::Formatting)
+            .is_some_and(|o| o.status == OverlayStatus::Formatting)
     }
 
     /// Check if all generations are complete (no Generating status)
@@ -268,7 +268,7 @@ impl CrdtEditor {
     pub fn is_overlay_ready(&self, signature: &str) -> bool {
         self.overlays
             .get(signature)
-            .map_or(false, |o| o.status == OverlayStatus::Ready)
+            .is_some_and(|o| o.status == OverlayStatus::Ready)
     }
 
     /// Check if a checksum exists as a comment in the base text
