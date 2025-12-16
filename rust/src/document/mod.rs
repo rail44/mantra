@@ -238,7 +238,7 @@ impl DocumentService {
 
                     // Use select! to monitor cancellation
                     tokio::select! {
-                        _ = token.cancelled() => {
+                        () = token.cancelled() => {
                             tracing::info!(
                                 signature = %target.signature,
                                 checksum = format!("{:x}", target.checksum),

@@ -237,7 +237,7 @@ impl CrdtEditor {
     }
 
     /// Start tracking a generation task, cancelling any existing one
-    /// Returns a CancellationToken that the generation task should monitor
+    /// Returns a `CancellationToken` that the generation task should monitor
     pub fn start_generation(&mut self, signature: &str) -> CancellationToken {
         // Cancel existing generation for this signature
         if let Some(old_token) = self.cancellation_tokens.get(signature) {
