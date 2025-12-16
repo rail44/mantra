@@ -1,0 +1,12 @@
+# Model configuration
+model = "mistralai/codestral-2508"
+
+# OpenRouter API endpoint
+url = "https://openrouter.ai/api/v1"
+
+# API key from environment variable
+api_key = "${OPENROUTER_API_KEY}"
+
+# OpenRouter-specific configuration
+[openrouter]
+providers = ["mistral"]
