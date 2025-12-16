@@ -303,6 +303,13 @@ impl CrdtEditor {
             .and_then(|o| o.replacement.as_deref())
     }
 
+    /// Get cancellation token for a signature (cloned for use during async operations)
+    pub fn get_cancellation_token(&self, signature: &str) -> Option<CancellationToken> {
+        self.overlays
+            .get(signature)
+            .and_then(|o| o.token.clone())
+    }
+
     /// Remove overlays whose checksums now exist in the base text
     /// This is called after applying changes to detect code action applications
     pub fn remove_overlays_matching_base(&mut self) {

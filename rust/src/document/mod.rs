@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::future::join_all;
 use lsp_types::{
     DidChangeTextDocumentParams, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
 };
@@ -210,123 +211,164 @@ impl DocumentService {
     }
 
     /// Generate all targets and apply to overlays
-    /// Phases: 1) LLM in parallel, 2) Add overlays, 3) Format once, 4) Set Ready
+    /// Phases: 1) Start generation, 2) LLM in parallel, 3) Apply overlays, 4) Format, 5) Finalize
     async fn generate_targets_sequential(&self, targets: Vec<Target>) -> Vec<u64> {
-        use futures::future::join_all;
-        use tokio_util::sync::CancellationToken;
-
-        // Phase 1: Mark all targets as generating and collect cancellation tokens
-        let tokens: Vec<(Target, CancellationToken)> = {
-            let mut document = self.document.write();
-            targets
-                .into_iter()
-                .map(|target| {
-                    let token = document
-                        .editor
-                        .start_generation(&target.signature, target.checksum);
-                    (target, token)
-                })
-                .collect()
-        };
+        // Phase 1: Mark targets as generating
+        self.start_generation_phase(&targets);
 
         // Phase 2: LLM generation in parallel
-        let llm_futures: Vec<_> = tokens
-            .into_iter()
-            .map(|(target, token)| {
-                let clone = self.clone();
-                async move {
-                    let signature = target.signature.clone();
+        let llm_results = self.run_llm_phase(targets).await;
 
-                    // Skip if already generated
-                    if clone.is_generated(&signature) {
-                        return Err((target, token, None::<anyhow::Error>));
-                    }
-
-                    // LLM generation with cancellation
-                    tokio::select! {
-                        () = token.cancelled() => {
-                            tracing::info!(
-                                signature = %signature,
-                                checksum = format!("{:x}", target.checksum),
-                                "Generation cancelled during LLM call"
-                            );
-                            Err((target, token, None))
-                        }
-                        result = clone.generate_target_body(&target) => {
-                            match result {
-                                Ok(body) => {
-                                    // Check cancellation after LLM completed
-                                    if token.is_cancelled() {
-                                        tracing::info!(
-                                            signature = %signature,
-                                            "Generation result discarded (cancelled after LLM)"
-                                        );
-                                        Err((target, token, None))
-                                    } else {
-                                        Ok((target, token, body))
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("LLM generation failed for {:x}: {:?}", target.checksum, e);
-                                    Err((target, token, Some(e)))
-                                }
-                            }
-                        }
-                    }
-                }
-            })
-            .collect();
-
-        let llm_results = join_all(llm_futures).await;
-
-        // Phase 3: Add overlays for successful LLM generations
-        let mut pending: Vec<(Target, CancellationToken)> = Vec::new();
-        for result in llm_results {
-            match result {
-                Ok((target, token, body)) => {
-                    // Verify checksum still matches before adding overlay
-                    let should_apply = {
-                        let current_targets = self.find_targets().unwrap_or_default();
-                        current_targets.iter().any(|t| {
-                            t.signature == target.signature && t.checksum == target.checksum
-                        })
-                    };
-
-                    if should_apply && !token.is_cancelled() {
-                        let change = {
-                            let mut doc = self.document.write();
-                            doc.apply_generation(&target, &body)
-                        };
-                        self.send_did_change(vec![change]).await.ok();
-                        pending.push((target, token));
-                    } else {
-                        self.document
-                            .write()
-                            .editor
-                            .cancel_generation(&target.signature);
-                    }
-                }
-                Err((target, _token, _)) => {
-                    self.document
-                        .write()
-                        .editor
-                        .cancel_generation(&target.signature);
-                }
-            }
-        }
+        // Phase 3: Apply successful results as overlays
+        let pending = self.apply_overlays_phase(llm_results).await;
 
         if pending.is_empty() {
             return Vec::new();
         }
 
-        // Phase 4: Format all overlays at once
+        // Phase 4 & 5: Format and finalize
+        self.finalize_generation(pending).await
+    }
+
+    /// Phase 1: Mark targets as generating
+    fn start_generation_phase(&self, targets: &[Target]) {
+        let mut document = self.document.write();
+        for target in targets {
+            document
+                .editor
+                .start_generation(&target.signature, target.checksum);
+        }
+    }
+
+    /// Phase 2: Run LLM generation in parallel with cancellation support
+    async fn run_llm_phase(&self, targets: Vec<Target>) -> Vec<(Target, String)> {
+        let llm_futures: Vec<_> = targets
+            .into_iter()
+            .map(|target| {
+                let clone = self.clone();
+                async move { clone.generate_single_target(target).await }
+            })
+            .collect();
+
+        join_all(llm_futures).await.into_iter().flatten().collect()
+    }
+
+    /// Generate a single target with cancellation support
+    /// Returns Some((target, body)) on success, None on failure/cancellation
+    async fn generate_single_target(&self, target: Target) -> Option<(Target, String)> {
+        let signature = target.signature.clone();
+
+        // Skip if already generated
+        if self.is_generated(&signature) {
+            self.document
+                .write()
+                .editor
+                .cancel_generation(&signature);
+            return None;
+        }
+
+        // Get token from overlay
+        let token = self
+            .document
+            .read()
+            .editor
+            .get_cancellation_token(&signature)?;
+
+        // LLM generation with cancellation
+        let body = tokio::select! {
+            () = token.cancelled() => {
+                tracing::info!(
+                    signature = %signature,
+                    checksum = format!("{:x}", target.checksum),
+                    "Generation cancelled during LLM call"
+                );
+                None
+            }
+            result = self.generate_target_body(&target) => {
+                match result {
+                    Ok(body) if !token.is_cancelled() => Some(body),
+                    Ok(_) => {
+                        tracing::info!(
+                            signature = %signature,
+                            "Generation result discarded (cancelled after LLM)"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!("LLM generation failed for {:x}: {:?}", target.checksum, e);
+                        None
+                    }
+                }
+            }
+        };
+
+        if let Some(body) = body {
+            Some((target, body))
+        } else {
+            self.document
+                .write()
+                .editor
+                .cancel_generation(&signature);
+            None
+        }
+    }
+
+    /// Phase 3: Apply successful LLM results as overlays
+    async fn apply_overlays_phase(&self, llm_results: Vec<(Target, String)>) -> Vec<Target> {
+        let mut pending = Vec::new();
+
+        for (target, body) in llm_results {
+            // Verify checksum still matches before adding overlay
+            let should_apply = {
+                let current_targets = self.find_targets().unwrap_or_default();
+                current_targets
+                    .iter()
+                    .any(|t| t.signature == target.signature && t.checksum == target.checksum)
+            };
+
+            // Check cancellation from overlay
+            let is_cancelled = self
+                .document
+                .read()
+                .editor
+                .get_cancellation_token(&target.signature)
+                .is_none_or(|t| t.is_cancelled());
+
+            if should_apply && !is_cancelled {
+                let change = {
+                    let mut doc = self.document.write();
+                    doc.apply_generation(&target, &body)
+                };
+                self.send_did_change(vec![change]).await.ok();
+                pending.push(target);
+            } else {
+                self.document
+                    .write()
+                    .editor
+                    .cancel_generation(&target.signature);
+            }
+        }
+
+        pending
+    }
+
+    /// Phase 4 & 5: Format all overlays and set to Ready
+    async fn finalize_generation(&self, pending: Vec<Target>) -> Vec<u64> {
+        // Format all overlays at once
         tracing::debug!("Formatting {} generated targets", pending.len());
         self.format_document().await.ok();
 
-        // Phase 5: Set overlays to Ready (check cancellation)
+        // Set overlays to Ready (check cancellation)
         let mut succeeded = Vec::new();
-        for (target, token) in pending {
-            if token.is_cancelled() {
+        for target in pending {
+            let is_cancelled = self
+                .document
+                .read()
+                .editor
+                .get_cancellation_token(&target.signature)
+                .is_none_or(|t| t.is_cancelled());
+
+            if is_cancelled {
                 tracing::info!(
                     signature = %target.signature,
                     "Generation cancelled during formatting"
