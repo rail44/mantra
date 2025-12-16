@@ -2,7 +2,7 @@ use anyhow::Result;
 use automerge::{transaction::Transactable, AutoCommit, ObjType, ReadDoc, ROOT};
 use crop::Rope;
 use lsp_types::{Position, TextEdit};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range as StdRange;
 use tokio_util::sync::CancellationToken;
 use tree_sitter::Tree;
@@ -33,6 +33,8 @@ pub fn lsp_position_to_byte(position: Position, rope: &Rope) -> usize {
 /// Status of an overlay for a target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayStatus {
+    /// LLM generation in progress
+    Generating,
     /// Generation complete, formatting in progress
     Formatting,
     /// Ready for code action application
@@ -40,14 +42,15 @@ pub enum OverlayStatus {
 }
 
 /// Overlay content for a target (identified by signature)
-#[derive(Debug, Clone)]
 struct OverlayContent {
     /// The checksum when this overlay was generated
     checksum: u64,
-    /// The generated code (including checksum comment)
-    replacement: String,
+    /// The generated code (including checksum comment), None while Generating
+    replacement: Option<String>,
     /// Current status of this overlay
     status: OverlayStatus,
+    /// Cancellation token for this generation task
+    token: Option<CancellationToken>,
 }
 
 /// Text editor with overlay support and tree-sitter parsing
@@ -56,12 +59,8 @@ struct OverlayContent {
 pub struct CrdtEditor {
     /// Base automerge document (for potential future CRDT sync)
     base: AutoCommit,
-    /// Signature -> overlay content
+    /// Signature -> overlay content (includes all generation state)
     overlays: HashMap<String, OverlayContent>,
-    /// Signatures currently being generated (LLM call in progress)
-    generating: HashSet<String>,
-    /// Cancellation tokens for ongoing generation tasks (by signature)
-    cancellation_tokens: HashMap<String, CancellationToken>,
     /// Automerge object ID for the text
     text_id: automerge::ObjId,
     /// Rope for tree-sitter parsing and LSP position conversion (synced with base)
@@ -89,8 +88,6 @@ impl CrdtEditor {
         let mut editor = Self {
             base,
             overlays: HashMap::new(),
-            generating: HashSet::new(),
-            cancellation_tokens: HashMap::new(),
             text_id,
             rope: Rope::from(initial_text),
             version: 0,
@@ -221,65 +218,66 @@ impl CrdtEditor {
         self.rope.byte_slice(..clamped_pos).chars().count()
     }
 
-    /// Add a generated code overlay for a target (keyed by signature)
-    /// Initially in Formatting status
-    pub fn add_overlay(&mut self, signature: &str, checksum: u64, replacement: &str) {
-        // Remove from generating set since we now have an overlay
-        self.generating.remove(signature);
+    /// Start tracking a generation task, cancelling any existing one
+    /// Creates overlay in Generating status
+    /// Returns a `CancellationToken` that the generation task should monitor
+    pub fn start_generation(&mut self, signature: &str, checksum: u64) -> CancellationToken {
+        // Cancel existing overlay if present
+        if let Some(old) = self.overlays.get(signature) {
+            if let Some(ref token) = old.token {
+                token.cancel();
+                tracing::debug!(signature = %signature, "Cancelled previous generation task");
+            }
+        }
+
+        let token = CancellationToken::new();
         self.overlays.insert(
             signature.to_string(),
             OverlayContent {
                 checksum,
-                replacement: replacement.to_string(),
-                status: OverlayStatus::Formatting,
+                replacement: None,
+                status: OverlayStatus::Generating,
+                token: Some(token.clone()),
             },
         );
-    }
-
-    /// Start tracking a generation task, cancelling any existing one
-    /// Returns a `CancellationToken` that the generation task should monitor
-    pub fn start_generation(&mut self, signature: &str) -> CancellationToken {
-        // Cancel existing generation for this signature
-        if let Some(old_token) = self.cancellation_tokens.get(signature) {
-            old_token.cancel();
-            tracing::debug!(signature = %signature, "Cancelled previous generation task");
-        }
-
-        let token = CancellationToken::new();
-        self.cancellation_tokens
-            .insert(signature.to_string(), token.clone());
-        self.generating.insert(signature.to_string());
         token
     }
 
-    /// Cancel a generation task (on failure or if already generated)
+    /// Set overlay content after LLM generation completes
+    /// Changes status from Generating to Formatting
+    pub fn set_overlay_content(&mut self, signature: &str, replacement: &str) {
+        if let Some(overlay) = self.overlays.get_mut(signature) {
+            overlay.replacement = Some(replacement.to_string());
+            overlay.status = OverlayStatus::Formatting;
+        }
+    }
+
+    /// Cancel a generation task and remove overlay
     pub fn cancel_generation(&mut self, signature: &str) {
-        self.generating.remove(signature);
-        if let Some(token) = self.cancellation_tokens.remove(signature) {
-            token.cancel();
+        if let Some(overlay) = self.overlays.remove(signature) {
+            if let Some(token) = overlay.token {
+                token.cancel();
+            }
         }
     }
 
     /// Set overlay status to Ready (after formatting completes)
+    /// Removes the cancellation token since the entire generation is complete
     pub fn set_overlay_ready(&mut self, signature: &str) {
         if let Some(overlay) = self.overlays.get_mut(signature) {
+            overlay.token = None;
             overlay.status = OverlayStatus::Ready;
         }
     }
 
-    /// Check if a generation is currently pending (generating or formatting)
+    /// Check if a generation is currently pending (Generating or Formatting)
     pub fn is_pending(&self, signature: &str) -> bool {
-        if self.generating.contains(signature) {
-            return true;
-        }
-        self.overlays
-            .get(signature)
-            .is_some_and(|o| o.status == OverlayStatus::Formatting)
-    }
-
-    /// Check if all generations are complete (no Generating status)
-    pub fn should_format(&self) -> bool {
-        self.generating.is_empty()
+        self.overlays.get(signature).is_some_and(|o| {
+            matches!(
+                o.status,
+                OverlayStatus::Generating | OverlayStatus::Formatting
+            )
+        })
     }
 
     /// Check if overlay is ready for code action
@@ -302,7 +300,7 @@ impl CrdtEditor {
         self.overlays
             .get(signature)
             .filter(|o| o.status == OverlayStatus::Ready)
-            .map(|o| o.replacement.as_str())
+            .and_then(|o| o.replacement.as_deref())
     }
 
     /// Remove overlays whose checksums now exist in the base text
@@ -344,36 +342,39 @@ impl CrdtEditor {
     }
 
     /// Remove stale overlays whose checksums don't match current targets
-    /// This is called after instruction edits to clean up outdated overlays
+    /// Also cancels any pending generation tasks for those signatures
+    /// This is called after instruction edits to clean up outdated state
     pub fn remove_stale_overlays(&mut self, current_targets: &[Target]) {
-        if self.overlays.is_empty() {
-            return;
-        }
-
         // Build a map of signature -> current checksum
         let current_checksums: HashMap<&str, u64> = current_targets
             .iter()
             .map(|t| (t.signature.as_str(), t.checksum))
             .collect();
 
-        let before_count = self.overlays.len();
+        // Collect signatures to remove (overlays with mismatched or missing checksums)
+        let stale_sigs: Vec<String> = self
+            .overlays
+            .iter()
+            .filter(|(sig, overlay)| {
+                !current_checksums
+                    .get(sig.as_str())
+                    .is_some_and(|&current| overlay.checksum == current)
+            })
+            .map(|(sig, _)| sig.clone())
+            .collect();
 
-        // Remove overlays where:
-        // - Target no longer exists (signature not in current_targets), OR
-        // - Checksum doesn't match (instruction was edited)
-        self.overlays.retain(|signature, overlay| {
-            current_checksums
-                .get(signature.as_str())
-                .is_some_and(|&current_checksum| overlay.checksum == current_checksum)
-        });
+        // Cancel tokens and remove stale overlays
+        for sig in &stale_sigs {
+            if let Some(overlay) = self.overlays.remove(sig) {
+                if let Some(token) = overlay.token {
+                    token.cancel();
+                    tracing::debug!(signature = %sig, "Cancelled stale generation task");
+                }
+            }
+        }
 
-        let after_count = self.overlays.len();
-
-        if before_count != after_count {
-            tracing::info!(
-                "Removed {} stale overlays (checksum mismatch or target removed)",
-                before_count - after_count
-            );
+        if !stale_sigs.is_empty() {
+            tracing::info!("Removed {} stale overlays", stale_sigs.len());
         }
     }
 
@@ -414,31 +415,33 @@ impl CrdtEditor {
         sorted_targets.sort_by_key(|t| t.byte_range.start);
 
         for target in &sorted_targets {
-            // Check if there's a matching overlay (by signature AND checksum)
+            // Check if there's a matching overlay (by signature AND checksum) with content
             if let Some(overlay) = self.overlays.get(&target.signature) {
                 if overlay.checksum == target.checksum {
-                    // Determine the replacement start position
-                    // Look backwards from function start to find all checksum comments
-                    let replace_start =
-                        find_checksum_region_start(&base_text, target.byte_range.start);
+                    if let Some(ref replacement) = overlay.replacement {
+                        // Determine the replacement start position
+                        // Look backwards from function start to find all checksum comments
+                        let replace_start =
+                            find_checksum_region_start(&base_text, target.byte_range.start);
 
-                    // Append text before the replacement area
-                    result.push_str(&base_text[last_end..replace_start]);
+                        // Append text before the replacement area
+                        result.push_str(&base_text[last_end..replace_start]);
 
-                    // Track the overlay range in composed view (byte positions)
-                    let overlay_start = result.len();
-                    result.push_str(&overlay.replacement);
-                    let overlay_end = result.len();
+                        // Track the overlay range in composed view (byte positions)
+                        let overlay_start = result.len();
+                        result.push_str(replacement);
+                        let overlay_end = result.len();
 
-                    ranges.push(OverlayRange {
-                        checksum: overlay.checksum,
-                        start: overlay_start,
-                        end: overlay_end,
-                    });
+                        ranges.push(OverlayRange {
+                            checksum: overlay.checksum,
+                            start: overlay_start,
+                            end: overlay_end,
+                        });
 
-                    last_end = target.byte_range.end;
+                        last_end = target.byte_range.end;
+                    }
                 }
-                // If checksum doesn't match, use base text (overlay is stale)
+                // If checksum doesn't match or no content, use base text
             }
         }
 
@@ -498,25 +501,25 @@ impl CrdtEditor {
         // Apply edits to each overlay's replacement string (in reverse order)
         for (signature, edits) in overlay_edits {
             if let Some(overlay) = self.overlays.get_mut(&signature) {
-                // Sort edits by position in reverse order
-                let mut sorted_edits = edits;
-                sorted_edits.sort_by(|a, b| b.0.cmp(&a.0));
+                if let Some(ref mut replacement) = overlay.replacement {
+                    // Sort edits by position in reverse order
+                    let mut sorted_edits = edits;
+                    sorted_edits.sort_by(|a, b| b.0.cmp(&a.0));
 
-                let mut replacement = overlay.replacement.clone();
-                for (start, end, new_text) in sorted_edits {
-                    // Convert byte positions to string indices
-                    let byte_start = replacement
-                        .char_indices()
-                        .nth(start)
-                        .map_or(replacement.len(), |(i, _)| i);
-                    let byte_end = replacement
-                        .char_indices()
-                        .nth(end)
-                        .map_or(replacement.len(), |(i, _)| i);
+                    for (start, end, new_text) in sorted_edits {
+                        // Convert byte positions to string indices
+                        let byte_start = replacement
+                            .char_indices()
+                            .nth(start)
+                            .map_or(replacement.len(), |(i, _)| i);
+                        let byte_end = replacement
+                            .char_indices()
+                            .nth(end)
+                            .map_or(replacement.len(), |(i, _)| i);
 
-                    replacement.replace_range(byte_start..byte_end, &new_text);
+                        replacement.replace_range(byte_start..byte_end, &new_text);
+                    }
                 }
-                overlay.replacement = replacement;
             }
         }
 
@@ -528,6 +531,20 @@ impl CrdtEditor {
     #[cfg(test)]
     pub fn overlay_count(&self) -> usize {
         self.overlays.len()
+    }
+
+    /// Add overlay directly with Ready status (test helper)
+    #[cfg(test)]
+    pub fn add_overlay_for_test(&mut self, signature: &str, checksum: u64, replacement: &str) {
+        self.overlays.insert(
+            signature.to_string(),
+            OverlayContent {
+                checksum,
+                replacement: Some(replacement.to_string()),
+                status: OverlayStatus::Ready,
+                token: None,
+            },
+        );
     }
 }
 
@@ -569,7 +586,7 @@ func Get() any {
         println!("Target checksum: {:x}", target.checksum);
 
         // Add overlay with matching signature and checksum
-        editor.add_overlay(
+        editor.add_overlay_for_test(
             &target.signature,
             target.checksum,
             "func Get() any {\n\treturn 42\n}\n// mantra:checksum:test",
@@ -598,7 +615,7 @@ func Get() any {
         let old_checksum = target.checksum;
         let signature = target.signature.clone();
 
-        editor.add_overlay(&signature, old_checksum, "func Get() any {\n\treturn 42\n}");
+        editor.add_overlay_for_test(&signature, old_checksum, "func Get() any {\n\treturn 42\n}");
 
         // Verify overlay works
         let composed = editor.composed_view()?;
@@ -653,14 +670,14 @@ func Get() any {
         let checksum = target.checksum;
 
         // Add first overlay
-        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 1\n}");
+        editor.add_overlay_for_test(&signature, checksum, "func Get() any {\n\treturn 1\n}");
         assert_eq!(editor.overlay_count(), 1);
 
         let composed = editor.composed_view()?;
         assert!(composed.contains("return 1"));
 
         // Add second overlay with same signature (replaces)
-        editor.add_overlay(&signature, checksum, "func Get() any {\n\treturn 2\n}");
+        editor.add_overlay_for_test(&signature, checksum, "func Get() any {\n\treturn 2\n}");
         assert_eq!(editor.overlay_count(), 1); // Still only one overlay
 
         let composed = editor.composed_view()?;
@@ -702,7 +719,7 @@ func Second() string {
             } else {
                 "func Second() string {\n\treturn \"two\"\n}"
             };
-            editor.add_overlay(&target.signature, target.checksum, replacement);
+            editor.add_overlay_for_test(&target.signature, target.checksum, replacement);
         }
 
         assert_eq!(editor.overlay_count(), 2);
@@ -730,7 +747,7 @@ func Second() string {
             } else {
                 "func Second() string {\n\treturn \"two\"\n}"
             };
-            editor.add_overlay(&target.signature, target.checksum, replacement);
+            editor.add_overlay_for_test(&target.signature, target.checksum, replacement);
         }
 
         let (text, ranges) = editor.composed_view_with_ranges()?;
@@ -766,7 +783,7 @@ func Second() string {
         let target = &targets[0];
 
         // Add overlay with bad formatting (no tabs)
-        editor.add_overlay(
+        editor.add_overlay_for_test(
             &target.signature,
             target.checksum,
             "func Get() any {\nreturn 42\n}",
