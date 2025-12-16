@@ -70,24 +70,6 @@ impl WorkspaceService {
 }
 
 impl WorkspaceService {
-    /// Generate code for a file
-    pub async fn generate_file(&self, file_path: PathBuf) -> Result<String> {
-        // Convert file path to absolute
-        let absolute_path = if file_path.is_absolute() {
-            file_path
-        } else {
-            std::env::current_dir()?.join(&file_path)
-        };
-
-        let file_uri = format!("file://{}", absolute_path.display());
-
-        // Open document (handles caching, LSP, and storage)
-        let document = self.open_document(&file_uri).await?;
-
-        // Generate code
-        document.generate().await
-    }
-
     /// Open a document with provided text (from editor), creating if not exists
     pub async fn open_document_with_text(&self, uri: &str, text: &str) -> Result<DocumentService> {
         // Check if document already exists

@@ -77,13 +77,6 @@ impl Document {
         self.editor.get_text()
     }
 
-    /// Get text with generated code (composed view = base + overlays)
-    pub fn get_generation_text(&mut self) -> String {
-        self.editor
-            .composed_view()
-            .unwrap_or_else(|_| self.editor.get_text())
-    }
-
     /// Apply incremental change from LSP (user edit or code action)
     pub fn apply_incremental_change(
         &mut self,
@@ -202,7 +195,7 @@ impl DocumentService {
             .ok_or_else(|| anyhow::anyhow!("Overlay not found for signature: {signature}"))
     }
 
-    /// Generate code for a single target
+    /// Call LLM to generate code for a target
     async fn generate_target_body(&self, target: &Target) -> Result<String> {
         let llm_client = self.llm_client.clone();
         let workspace = self.workspace.clone();
@@ -210,60 +203,77 @@ impl DocumentService {
         spawn_generation_task(target, llm_client, &workspace).await
     }
 
-    /// Generate all targets and apply to overlays
-    /// Phases: 1) Start generation, 2) LLM in parallel, 3) Apply overlays, 4) Format, 5) Finalize
-    async fn generate_targets_sequential(&self, targets: Vec<Target>) -> Vec<u64> {
-        // Phase 1: Mark targets as generating
-        self.start_generation_phase(&targets);
-
-        // Phase 2: LLM generation in parallel
-        let llm_results = self.run_llm_phase(targets).await;
-
-        // Phase 3: Apply successful results as overlays
-        let pending = self.apply_overlays_phase(llm_results).await;
-
-        if pending.is_empty() {
-            return Vec::new();
-        }
-
-        // Phase 4 & 5: Format and finalize
-        self.finalize_generation(pending).await
-    }
-
-    /// Phase 1: Mark targets as generating
-    fn start_generation_phase(&self, targets: &[Target]) {
-        let mut document = self.document.write();
-        for target in targets {
-            document
-                .editor
-                .start_generation(&target.signature, target.checksum);
-        }
-    }
-
-    /// Phase 2: Run LLM generation in parallel with cancellation support
-    async fn run_llm_phase(&self, targets: Vec<Target>) -> Vec<(Target, String)> {
-        let llm_futures: Vec<_> = targets
-            .into_iter()
-            .map(|target| {
-                let clone = self.clone();
-                async move { clone.generate_single_target(target).await }
-            })
-            .collect();
-
-        join_all(llm_futures).await.into_iter().flatten().collect()
-    }
-
-    /// Generate a single target with cancellation support
-    /// Returns Some((target, body)) on success, None on failure/cancellation
-    async fn generate_single_target(&self, target: Target) -> Option<(Target, String)> {
+    /// Generate code for a single target (independent, handles its own formatting)
+    pub async fn generate_single(&self, target: Target) -> Result<()> {
         let signature = target.signature.clone();
+        let checksum = target.checksum;
+
+        // 1. Start generation (creates Generating overlay)
+        self.document
+            .write()
+            .editor
+            .start_generation(&signature, checksum);
+
+        // 2. Run LLM with cancellation support
+        let body = self.run_llm_with_cancellation(&target).await;
+
+        // 3. Apply result or cancel
+        let Some(body) = body else {
+            self.document.write().editor.cancel_generation(&signature);
+            // Even on failure, formatting may be unblocked for other overlays
+            self.try_format_and_finalize().await;
+            return Err(anyhow::anyhow!("Generation failed for {checksum:x}"));
+        };
+
+        // 4. Verify checksum still matches
+        let should_apply = {
+            let current_targets = self.find_targets().unwrap_or_default();
+            current_targets
+                .iter()
+                .any(|t| t.signature == signature && t.checksum == checksum)
+        };
+
+        let is_cancelled = self
+            .document
+            .read()
+            .editor
+            .get_cancellation_token(&signature)
+            .is_none_or(|t| t.is_cancelled());
+
+        if !should_apply || is_cancelled {
+            self.document.write().editor.cancel_generation(&signature);
+            // Re-run formatting in case other overlays can now finalize
+            self.try_format_and_finalize().await;
+            return Err(anyhow::anyhow!("Generation skipped for {checksum:x}"));
+        }
+
+        // 5. Apply generation (sets to Formatting)
+        let change = self.document.write().apply_generation(&target, &body);
+        self.send_did_change(vec![change]).await.ok();
+
+        // 6. Try to format (only succeeds if all overlays are Formatting)
+        self.try_format_and_finalize().await;
+
+        // 7. Wait until our overlay is Ready (formatting might be done by another task)
+        while self.document.read().editor.is_pending(&signature) {
+            // If other generations finished/cancelled, formatting may now proceed
+            self.try_format_and_finalize().await;
+            tokio::task::yield_now().await;
+        }
+
+        if self.is_generated(&signature) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Generation cancelled for {checksum:x}"))
+        }
+    }
+
+    /// Run LLM generation with cancellation support
+    async fn run_llm_with_cancellation(&self, target: &Target) -> Option<String> {
+        let signature = &target.signature;
 
         // Skip if already generated
-        if self.is_generated(&signature) {
-            self.document
-                .write()
-                .editor
-                .cancel_generation(&signature);
+        if self.is_generated(signature) {
             return None;
         }
 
@@ -272,10 +282,10 @@ impl DocumentService {
             .document
             .read()
             .editor
-            .get_cancellation_token(&signature)?;
+            .get_cancellation_token(signature)?;
 
         // LLM generation with cancellation
-        let body = tokio::select! {
+        tokio::select! {
             () = token.cancelled() => {
                 tracing::info!(
                     signature = %signature,
@@ -284,7 +294,7 @@ impl DocumentService {
                 );
                 None
             }
-            result = self.generate_target_body(&target) => {
+            result = self.generate_target_body(target) => {
                 match result {
                     Ok(body) if !token.is_cancelled() => Some(body),
                     Ok(_) => {
@@ -300,96 +310,27 @@ impl DocumentService {
                     }
                 }
             }
-        };
-
-        if let Some(body) = body {
-            Some((target, body))
-        } else {
-            self.document
-                .write()
-                .editor
-                .cancel_generation(&signature);
-            None
         }
     }
 
-    /// Phase 3: Apply successful LLM results as overlays
-    async fn apply_overlays_phase(&self, llm_results: Vec<(Target, String)>) -> Vec<Target> {
-        let mut pending = Vec::new();
+    /// Try to format and finalize all Formatting overlays
+    /// Only succeeds if all overlays are in Formatting status
+    async fn try_format_and_finalize(&self) {
+        // Atomically check should_format and set formatting_in_progress
+        let should_format = self.document.write().editor.try_start_formatting();
 
-        for (target, body) in llm_results {
-            // Verify checksum still matches before adding overlay
-            let should_apply = {
-                let current_targets = self.find_targets().unwrap_or_default();
-                current_targets
-                    .iter()
-                    .any(|t| t.signature == target.signature && t.checksum == target.checksum)
-            };
-
-            // Check cancellation from overlay
-            let is_cancelled = self
-                .document
-                .read()
-                .editor
-                .get_cancellation_token(&target.signature)
-                .is_none_or(|t| t.is_cancelled());
-
-            if should_apply && !is_cancelled {
-                let change = {
-                    let mut doc = self.document.write();
-                    doc.apply_generation(&target, &body)
-                };
-                self.send_did_change(vec![change]).await.ok();
-                pending.push(target);
-            } else {
-                self.document
-                    .write()
-                    .editor
-                    .cancel_generation(&target.signature);
-            }
+        if !should_format {
+            return;
         }
 
-        pending
-    }
-
-    /// Phase 4 & 5: Format all overlays and set to Ready
-    async fn finalize_generation(&self, pending: Vec<Target>) -> Vec<u64> {
-        // Format all overlays at once
-        tracing::debug!("Formatting {} generated targets", pending.len());
+        tracing::debug!("Formatting generated code");
         self.format_document().await.ok();
 
-        // Set overlays to Ready (check cancellation)
-        let mut succeeded = Vec::new();
-        for target in pending {
-            let is_cancelled = self
-                .document
-                .read()
-                .editor
-                .get_cancellation_token(&target.signature)
-                .is_none_or(|t| t.is_cancelled());
-
-            if is_cancelled {
-                tracing::info!(
-                    signature = %target.signature,
-                    "Generation cancelled during formatting"
-                );
-                self.document
-                    .write()
-                    .editor
-                    .cancel_generation(&target.signature);
-            } else {
-                self.document
-                    .write()
-                    .editor
-                    .set_overlay_ready(&target.signature);
-                succeeded.push(target.checksum);
-            }
-        }
-
-        succeeded
+        // Finalize: set all Formatting overlays to Ready
+        self.document.write().editor.finalize_formatting();
     }
 
-    /// Spawn background generation tasks
+    /// Spawn background generation for multiple targets (independent tasks)
     pub fn spawn_background_generation(
         &self,
         targets: Vec<Target>,
@@ -402,40 +343,27 @@ impl DocumentService {
         let (tx, rx) = oneshot::channel();
 
         tokio::spawn(async move {
-            let succeeded = clone.generate_targets_sequential(targets).await;
+            let futures: Vec<_> = targets
+                .into_iter()
+                .map(|target| {
+                    let c = clone.clone();
+                    let checksum = target.checksum;
+                    async move {
+                        if c.generate_single(target).await.is_ok() {
+                            Some(checksum)
+                        } else {
+                            None
+                        }
+                    }
+                })
+                .collect();
+
+            let results = join_all(futures).await;
+            let succeeded: Vec<u64> = results.into_iter().flatten().collect();
             let _ = tx.send(succeeded);
         });
 
         Some(rx)
-    }
-
-    /// Generate code for a single target and wait for completion
-    pub async fn generate_single(&self, target: Target) -> Result<()> {
-        let checksum = target.checksum;
-        let succeeded = self.generate_targets_sequential(vec![target]).await;
-        if succeeded.contains(&checksum) {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Generation failed for {checksum:x}"))
-        }
-    }
-
-    /// Generate all targets in the document (CLI mode)
-    pub async fn generate(&self) -> Result<String> {
-        let targets = {
-            let document = self.document.read();
-            let targets = document.find_targets()?;
-
-            if targets.is_empty() {
-                return Ok(document.get_editor_text());
-            }
-
-            targets
-        };
-
-        let _succeeded = self.generate_targets_sequential(targets).await;
-
-        Ok(self.document.write().get_generation_text())
     }
 
     async fn send_did_change(&self, changes: Vec<TextDocumentContentChangeEvent>) -> Result<()> {
@@ -552,8 +480,11 @@ impl DocumentService {
         // First, sync the composed view to gopls (full document replacement)
         // This is needed because overlays modify the document but gopls doesn't know about them
         let (uri_str, version, composed_text) = {
-            let mut doc = self.document.write();
-            let composed = doc.get_generation_text();
+            let doc = self.document.write();
+            let composed = doc
+                .editor
+                .composed_view()
+                .unwrap_or_else(|_| doc.editor.get_text());
             (doc.uri.clone(), doc.editor.get_version(), composed)
         };
 
@@ -595,7 +526,11 @@ impl DocumentService {
                 // This preserves the overlay structure while formatting the generated code
                 let formatted_text = {
                     let mut doc = self.document.write();
-                    let composed_rope = crop::Rope::from(doc.get_generation_text().as_str());
+                    let composed = doc
+                        .editor
+                        .composed_view()
+                        .unwrap_or_else(|_| doc.editor.get_text());
+                    let composed_rope = crop::Rope::from(composed.as_str());
                     doc.editor
                         .apply_format_edits_to_overlays(&edits, &composed_rope)?
                 };

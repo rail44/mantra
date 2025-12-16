@@ -1,5 +1,5 @@
 -- Neovim LSP configuration for mantra
--- Usage: RUST_LOG=mantra=debug nvim --clean -c "luafile examples/neovim-lsp-config.lua" examples/go/simple.go
+-- Usage: nvim --clean -c "luafile examples/neovim-lsp-config.lua" examples/go/simple.go
 
 -- Update this path to your mantra binary
 local mantra_bin = vim.fn.expand("~/src/github.com/rail44/mantra/rust/target/debug/mantra")
@@ -20,7 +20,7 @@ vim.api.nvim_create_autocmd("FileType", {
     local file_dir = vim.fn.expand("%:p:h")
     local client_id = vim.lsp.start({
       name = "mantra",
-      cmd = { mantra_bin, "lsp" },
+      cmd = { mantra_bin },
       cmd_env = { RUST_LOG = "mantra=debug" },
       root_dir = file_dir,
     })
@@ -59,7 +59,7 @@ if vim.bo.filetype == "go" then
   local file_dir = vim.fn.expand("%:p:h")
   local client_id = vim.lsp.start({
     name = "mantra",
-    cmd = { mantra_bin, "lsp" },
+    cmd = { mantra_bin },
     cmd_env = { RUST_LOG = "mantra=debug" },
     root_dir = file_dir,
   })

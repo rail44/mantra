@@ -18,7 +18,7 @@ EOF
 )
 
 # Send request and capture response
-echo "$REQUEST" | RUST_LOG=mantra=debug "$MANTRA_BIN" lsp 2>&1 | head -20
+echo "$REQUEST" | RUST_LOG=mantra=debug "$MANTRA_BIN" 2>&1 | head -20
 
 echo ""
 echo "If you see 'LSP initialize request received' in the logs, the server is working!"

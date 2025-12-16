@@ -18,28 +18,6 @@ impl Timer {
         }
     }
 
-    /// Stop the timer and log the duration
-    pub fn stop(self) {
-        let duration = self.start.elapsed();
-        match self.log_level {
-            Level::INFO => {
-                info!(
-                    operation = %self.operation,
-                    duration_ms = duration.as_millis(),
-                    "Operation completed"
-                );
-            }
-            Level::DEBUG => {
-                debug!(
-                    operation = %self.operation,
-                    duration_ms = duration.as_millis(),
-                    "Operation completed"
-                );
-            }
-            _ => {}
-        }
-    }
-
     /// Stop the timer with a custom message
     pub fn stop_with_message(self, message: &str) {
         let duration = self.start.elapsed();
@@ -85,9 +63,9 @@ impl Drop for Timer {
 #[macro_export]
 macro_rules! time_operation {
     ($operation:expr, $block:block) => {{
-        let _timer = $crate::core::metrics::Timer::start($operation);
+        let timer = $crate::core::metrics::Timer::start($operation);
         let result = $block;
-        _timer.stop();
+        timer.stop_with_message("");
         result
     }};
 }
@@ -102,7 +80,7 @@ mod tests {
     fn test_timer_basic() {
         let timer = Timer::start("test_operation");
         thread::sleep(Duration::from_millis(10));
-        timer.stop();
+        timer.stop_with_message("");
     }
 
     #[test]

@@ -71,6 +71,8 @@ pub struct CrdtEditor {
     parser: GoParser,
     /// Current syntax tree (None before first parse)
     tree: Option<Tree>,
+    /// Flag to prevent concurrent formatting
+    formatting_in_progress: bool,
 }
 
 impl CrdtEditor {
@@ -93,6 +95,7 @@ impl CrdtEditor {
             version: 0,
             parser,
             tree: None,
+            formatting_in_progress: false,
         };
 
         editor.reparse()?;
@@ -261,12 +264,40 @@ impl CrdtEditor {
         }
     }
 
-    /// Set overlay status to Ready (after formatting completes)
-    /// Removes the cancellation token since the entire generation is complete
-    pub fn set_overlay_ready(&mut self, signature: &str) {
-        if let Some(overlay) = self.overlays.get_mut(signature) {
-            overlay.token = None;
-            overlay.status = OverlayStatus::Ready;
+    /// Check if overlays are ready for formatting:
+    /// - At least one overlay is in Formatting
+    /// - No overlays are still Generating
+    fn should_format(&self) -> bool {
+        let mut has_formatting = false;
+        for overlay in self.overlays.values() {
+            match overlay.status {
+                OverlayStatus::Generating => return false,
+                OverlayStatus::Formatting => has_formatting = true,
+                OverlayStatus::Ready => {}
+            }
+        }
+        has_formatting
+    }
+
+    /// Try to start formatting. Returns true if formatting should proceed.
+    /// This atomically checks `should_format` and sets `formatting_in_progress`.
+    pub fn try_start_formatting(&mut self) -> bool {
+        if self.should_format() && !self.formatting_in_progress {
+            self.formatting_in_progress = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Finalize formatting: set all Formatting overlays to Ready
+    pub fn finalize_formatting(&mut self) {
+        self.formatting_in_progress = false;
+        for overlay in self.overlays.values_mut() {
+            if overlay.status == OverlayStatus::Formatting {
+                overlay.status = OverlayStatus::Ready;
+                overlay.token = None;
+            }
         }
     }
 
@@ -305,9 +336,7 @@ impl CrdtEditor {
 
     /// Get cancellation token for a signature (cloned for use during async operations)
     pub fn get_cancellation_token(&self, signature: &str) -> Option<CancellationToken> {
-        self.overlays
-            .get(signature)
-            .and_then(|o| o.token.clone())
+        self.overlays.get(signature).and_then(|o| o.token.clone())
     }
 
     /// Remove overlays whose checksums now exist in the base text
@@ -364,7 +393,8 @@ impl CrdtEditor {
             .iter()
             .filter(|(sig, overlay)| {
                 current_checksums
-                    .get(sig.as_str()).is_none_or(|&current| overlay.checksum != current)
+                    .get(sig.as_str())
+                    .is_none_or(|&current| overlay.checksum != current)
             })
             .map(|(sig, _)| sig.clone())
             .collect();
